@@ -33,7 +33,7 @@ describe("RemoteBackend", () => {
     mockMkdir.mockReset().mockResolvedValue(undefined);
     mockWriteFile.mockReset().mockResolvedValue(undefined);
     backend = new RemoteBackend({
-      baseUrl: "http://100.114.103.111:7700",
+      baseUrl: "http://198.51.100.111:7700",
       nodeId: "sia-desktop-01",
     });
   });
@@ -330,7 +330,7 @@ describe("RemoteBackend", () => {
 
     beforeEach(() => {
       syncBackend = new RemoteBackend({
-        baseUrl: "http://100.114.103.111:7700",
+        baseUrl: "http://198.51.100.111:7700",
         nodeId: "sia-desktop-01",
         leaderSync: { projectRoot: "/home/leader/project" },
       });
@@ -495,7 +495,7 @@ describe("RemoteBackend", () => {
 
     beforeEach(() => {
       cachedBackend = new RemoteBackend({
-        baseUrl: "http://100.114.103.111:7700",
+        baseUrl: "http://198.51.100.111:7700",
         nodeId: "sia-desktop-01",
         cache: { ttlMs: 30_000 },
       });
@@ -666,7 +666,7 @@ describe("RemoteBackend", () => {
 
     it("cache: false disables all caching", async () => {
       const noCacheBackend = new RemoteBackend({
-        baseUrl: "http://100.114.103.111:7700",
+        baseUrl: "http://198.51.100.111:7700",
         nodeId: "sia-desktop-01",
         cache: false,
       });
@@ -692,7 +692,7 @@ describe("RemoteBackend", () => {
       jest.useFakeTimers();
 
       const shortTtlBackend = new RemoteBackend({
-        baseUrl: "http://100.114.103.111:7700",
+        baseUrl: "http://198.51.100.111:7700",
         nodeId: "sia-desktop-01",
         cache: { ttlMs: 5_000 },
       });
