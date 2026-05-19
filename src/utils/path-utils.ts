@@ -5,14 +5,18 @@
  * execution contexts (tests, source code, CLI, server). Uses a hybrid strategy
  * to find the project root with multiple fallbacks.
  *
- * Strategy Priority:
- * 1. Monorepo detection: package.json with workspaces field (Yarn)
- * 2. Git repository root: .git directory
- * 3. Project markers: langgraph.json or CLAUDE.md
- * 4. Directory name: self-improving-agent directory
- * 5. Fall back to process.cwd()
+ * Strategy priority (see `getProjectRoot` for the canonical list):
+ *   0. `SIA_PROJECT_ROOT` env var — host override (e.g. self-improve mode)
+ *   1. Module location — walk up from this file via the strategies below
+ *   2. Yarn workspaces marker — package.json with a `workspaces` field
+ *   3. Git repository root — `.git` directory
+ *   4. Project markers — `langgraph.json` or `CLAUDE.md` at the root
+ *   5. Legacy directory name — kept for back-compat with the monorepo lift;
+ *      no-op in this standalone repo
+ *   6. Fall back to `process.cwd()`
  *
- * Result is cached for performance.
+ * In the standalone @sia-web/agent repo, detection resolves at strategy 1 via
+ * the `.git` directory and is then cached for the lifetime of the process.
  */
 
 import * as fs from "fs";
@@ -191,13 +195,14 @@ export function findProjectRootFromModule(): string | null {
  * Get the project root using multiple strategies in priority order.
  *
  * Strategies (in order):
- * 0. SIA_PROJECT_ROOT environment variable (set by CLI in self-improve mode)
- * 1. Try to find from module location (import.meta.url)
- * 2. Try to find monorepo root (package.json with workspaces)
- * 3. Try to find git root (.git directory)
- * 4. Try to find by marker files (langgraph.json, CLAUDE.md)
- * 5. Try to find by directory name (self-improving-agent)
- * 6. Fall back to process.cwd()
+ *   0. `SIA_PROJECT_ROOT` env var — host override (e.g. self-improve mode)
+ *   1. Module location — walk up from this file via the strategies below
+ *   2. Yarn workspaces marker — package.json with a `workspaces` field
+ *   3. Git repository root — `.git` directory
+ *   4. Project markers — `langgraph.json` or `CLAUDE.md`
+ *   5. Legacy directory name — back-compat with the monorepo lift; no-op in
+ *      the standalone repo (`findProjectRootByName` returns null)
+ *   6. Fall back to `process.cwd()`
  *
  * Result is cached to avoid repeated filesystem lookups.
  *
@@ -265,7 +270,7 @@ export function getProjectRoot(): string {
  * @returns Absolute path to the file
  *
  * @example
- * resolveProjectPath("src/index.ts") // => "/path/to/self-improving-agent/src/index.ts"
+ * resolveProjectPath("src/index.ts") // => "/path/to/sia-web-agent/src/index.ts"
  * resolveProjectPath("/absolute/path") // => "/absolute/path"
  */
 export function resolveProjectPath(filePath: string): string {
@@ -292,7 +297,7 @@ export function getAgentPackageRoot(): string {
  * @returns Relative path from project root
  *
  * @example
- * getRelativeProjectPath("/path/to/self-improving-agent/src/index.ts")
+ * getRelativeProjectPath("/path/to/sia-web-agent/src/index.ts")
  * // => "src/index.ts"
  */
 export function getRelativeProjectPath(filePath: string): string {
