@@ -185,8 +185,8 @@ function getBackend(
 
 // System prompts
 const FILESYSTEM_SYSTEM_PROMPT = `You have access to the real filesystem and can make actual code changes. Use absolute paths like
-/Users/gmacmillan/projects/self-improving-agent/packages/agent/src/file.ts or relative paths like
-packages/agent/src/file.ts from the project root.
+/absolute/path/to/project/src/file.ts or relative paths like
+src/file.ts from the project root.
 
 - ls: list files in a directory
 - read_file: read a file from the filesystem
