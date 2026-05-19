@@ -1,0 +1,8 @@
+{
+  "graphs": {
+    "agent": "src/graph.ts:graph"
+  },
+  "env": ".env",
+  "dependencies": ["."],
+  "publish": []
+}

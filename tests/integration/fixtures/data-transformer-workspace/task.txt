@@ -1,0 +1,15 @@
+Add a new YAML transformer module to the data transformer library.
+
+The transformer should:
+1. Follow the same Transformer<T> interface pattern as existing transformers (JSON and CSV)
+2. Convert objects to/from YAML format
+3. Implement methods: to(), from(), and validate()
+4. Include proper error handling and validation
+
+Steps:
+1. Search the codebase to understand the Transformer interface and existing implementations
+2. Read the types.ts file to see the Transformer interface
+3. Read json-transformer.ts and csv-transformer.ts to understand the implementation pattern
+4. Create a new src/transformers/yaml-transformer.ts file following the pattern
+5. Update src/transformers/index.ts to export the new yaml transformer
+6. Add test cases to __tests__/transformers.test.ts following the existing test patterns

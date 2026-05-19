@@ -1,0 +1,42 @@
+**Summary of Changes**
+
+1. **Original Request**: Add a new YAML transformer module to the data transformer library, following the existing Transformer<T> interface pattern, with to(), from(), and validate() methods, proper error handling, and tests.
+
+2. **Affected Files**:
+   - `src/types.ts` (referenced for interface definition)
+   - `src/transformers/json-transformer.ts` (reference implementation)
+   - `src/transformers/csv-transformer.ts` (reference implementation)
+   - **New file**: `src/transformers/yaml-transformer.ts`
+   - Updated file: `src/transformers/index.ts`
+   - Updated test file: `__tests__/transformers.test.ts`
+
+3. **Implementation Details**:
+   - Created `YamlTransformer` class implementing `Transformer<any>`.
+   - Used the `yaml` npm package (`import * as YAML from 'yaml'`).
+   - Implemented:
+     - `to(data: any): string` – converts JavaScript objects to YAML string, throws `Error('Unable to convert object to YAML')` on failure.
+     - `from(yamlStr: string): any` – parses YAML string to object, throws `Error('Invalid YAML format')` on parse errors.
+     - `validate(data: any): void` – checks that data is a plain object (not null, not array) and throws `Error('Data must be a non‑array object')` if validation fails.
+   - Added comprehensive try/catch blocks with clear error messages.
+   - Updated `src/transformers/index.ts` to export `YamlTransformer` alongside existing transformers.
+   - Added Jest test cases in `__tests__/transformers.test.ts`:
+     * Successful conversion of object → YAML → object.
+     * Validation error when non‑object data is provided.
+     * Parsing error when malformed YAML is supplied.
+   - Ran the full test suite (`npm test`) – all existing tests plus new YAML tests passed.
+
+4. **Error Handling & Validation**:
+   - `to()` validates input before conversion and catches serialization errors.
+   - `from()` validates input string and catches parsing exceptions.
+   - `validate()` ensures the data is a plain object, mirroring validation logic used in JSON and CSV transformers.
+
+5. **Documentation**:
+   - Added JSDoc comments to `YamlTransformer` methods describing behavior, parameters, return values, and thrown errors.
+   - Updated module export comment in `index.ts`.
+   - Added test descriptions for clarity.
+
+6. **Result**:
+   - The library now supports YAML transformation with full parity to JSON and CSV transformers.
+   - All tests pass, confirming correct functionality and robust error handling.
+
+*Commit completed and summary recorded.*
