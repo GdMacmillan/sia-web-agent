@@ -20,7 +20,7 @@ import { LRUCache, type CacheStats } from "../utils/lru-cache.js";
 const REMOTE_TIMEOUT_MS = 30_000;
 
 export interface RemoteBackendConfig {
-  /** Base URL of the remote siad daemon, e.g. "http://100.114.103.111:7700" */
+  /** Base URL of the remote siad daemon, e.g. "http://198.51.100.111:7700" */
   baseUrl: string;
   /** Node ID for error messages */
   nodeId: string;

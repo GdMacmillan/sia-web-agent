@@ -185,8 +185,8 @@ function getBackend(
 
 // System prompts
 const FILESYSTEM_SYSTEM_PROMPT = `You have access to the real filesystem and can make actual code changes. Use absolute paths like
-/Users/gmacmillan/projects/self-improving-agent/packages/agent/src/file.ts or relative paths like
-packages/agent/src/file.ts from the project root.
+/absolute/path/to/project/src/file.ts or relative paths like
+src/file.ts from the project root.
 
 - ls: list files in a directory
 - read_file: read a file from the filesystem
@@ -194,10 +194,6 @@ packages/agent/src/file.ts from the project root.
 - edit_file: edit an existing file by replacing specific content
 - glob: find files matching a pattern (e.g., "**/*.ts")
 - grep: search for text within files using regex patterns
-
-If remote nodes are configured, you can read files from other machines using paths like
-/remote/{nodeId}/path/to/file. Use \`ls /remote/\` to discover available remote nodes. Remote access
-is read-only — writes, grep, and glob are not yet supported on remote nodes.
 
 All changes are made to real files and persist to disk. The human developer controls what gets
 committed to version control.`;
