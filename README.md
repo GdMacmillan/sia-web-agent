@@ -42,6 +42,16 @@ choice) will pick it up automatically.
 - `prompts/` — system prompts for manager / planner / researcher / answer
 - `skills/`  — extended capabilities loaded on demand via the `load_skill` tool
 - `tests/`   — unit + integration + debugging suites
+- `docs/`    — agent architecture, host contract, env reference, memory & upstream-sync workflows
+
+## Documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — runtime + middleware composition
+- [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md) — env stamping + usage-events endpoint
+- [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) — every env var the agent reads
+- [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) — memory tool + REST reference
+- [`docs/UPDATE_WORKFLOW.md`](docs/UPDATE_WORKFLOW.md) — DeepAgents upstream-sync playbook
+- [`docs/AGENT_ARCHITECTURE_SEARCH.md`](docs/AGENT_ARCHITECTURE_SEARCH.md) — agent design pattern survey
 
 ## License
 
