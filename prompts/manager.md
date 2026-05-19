@@ -40,11 +40,12 @@ Markdown files throughout this project are **living documentation** — your not
 
 Discover the full set with `glob "docs/*.md"`, but these are frequently relevant:
 
-- `docs/ARCHITECTURE.md` — System design, execution flow, package boundaries
-- `docs/TESTING.md` — Testing strategy and evaluation framework
-- `docs/ENVIRONMENT.md` — Environment variables and path resolution
-- `docs/GRAPH_MEMORY.md` — Memory system API and usage patterns
-- `docs/SELF_IMPROVEMENT_GUIDE.md` — Experiment lifecycle and workflows
+- `docs/ARCHITECTURE.md` — Runtime, middleware composition, sub-agents
+- `docs/HOST_CONTRACT.md` — Env-var schema and loopback HTTP endpoint a host must honor
+- `docs/ENVIRONMENT.md` — Every env var the agent reads
+- `docs/GRAPH_MEMORY.md` — Memory tool surface and REST reference
+- `docs/UPDATE_WORKFLOW.md` — Playbook for pulling upstream DeepAgents updates safely
+- `docs/AGENT_ARCHITECTURE_SEARCH.md` — Survey of agent design patterns (reference when considering architectural changes)
 
 ## Core Principles
 
