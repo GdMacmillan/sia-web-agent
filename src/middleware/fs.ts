@@ -195,10 +195,6 @@ src/file.ts from the project root.
 - glob: find files matching a pattern (e.g., "**/*.ts")
 - grep: search for text within files using regex patterns
 
-If remote nodes are configured, you can read files from other machines using paths like
-/remote/{nodeId}/path/to/file. Use \`ls /remote/\` to discover available remote nodes. Remote access
-is read-only — writes, grep, and glob are not yet supported on remote nodes.
-
 All changes are made to real files and persist to disk. The human developer controls what gets
 committed to version control.`;
 
