@@ -1,26 +1,21 @@
 /**
- * AGI-228 — per-tool handlers shared by MCP + agent-native surfaces.
+ * Per-tool handlers for the graph-memory tool surface. Each handler
+ * is a pure function of `(adapter, input) → result`: no I/O outside
+ * the adapter, no logging, no rendering. Callers wrap each handler
+ * in their own surface-specific shell.
  *
- * Each handler is a pure function of `(adapter, input) → JSON result`.
- * No I/O outside the adapter; no logging; no rendering. Both vendors
- * import these handlers and wrap them in their own
- * surface-specific shell (MCP `TextContent`, agent
- * `DynamicStructuredTool.func`).
- *
- * The handlers carry the logic that used to live in two places and
- * drift independently:
+ * Behaviors that live in the handlers (rather than the shells):
  *
  *   - `storeEntity` pre-searches for similar entities, creates edges,
- *     surfaces edge_errors + suggestions.
- *   - `searchEntities` / `listEntities` decode the wire response, run
- *     in-process filters, and return a uniform `entities[]` shape.
- *   - `updateEntity` / `updateEntityStatus` thread version +
- *     changed_fields through the response envelope.
- *   - `promoteEntities` mirrors the agent-native promote tool's
- *     response shape so the MCP surface lands at parity by construction.
+ *     surfaces `edge_errors` + suggestions.
+ *   - `searchEntities` / `listEntities` decode wire responses and
+ *     apply uniform in-process filters.
+ *   - `updateEntity` / `updateEntityStatus` thread `version` +
+ *     `changed_fields` through the response.
+ *   - `promoteEntities` formats source-entity + dry-run reporting.
  *
- * HyDE, query decomposition, and reranking remain in each surface —
- * they wrap the handler call, they don't replace it.
+ * Enrichments like HyDE, query decomposition, and reranking belong
+ * in the caller — they wrap the handler call, they don't replace it.
  */
 import type { IGraphMemoryAdapter } from "./adapter-interface.js";
 import {

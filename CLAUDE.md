@@ -133,12 +133,11 @@ the orchestrator:
   `list_entities`, `update_entity_status`, `update_entity`,
   `promote_entities`, `traverse_graph`); see
   [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) for the full picture
-  and known gaps. **Wire transport (AGI-228):** every tool routes
-  through `SiadGraphMemoryAdapter` (`tools/siad-graph-memory-adapter.ts`)
-  → siad's `POST /rpc/call` → NATS svc-rpc → graph-memory responder.
-  The agent process never holds a NATS connection. Workspace binding
-  comes from `getConfig().runtime.workspaceId` (`SIA_WORKSPACE_ID` stamped
-  by `install_node_daemon`); the LLM never sees `workspace_id`.
+  and known gaps. Calls dispatch through `SiadGraphMemoryAdapter`
+  (`tools/siad-graph-memory-adapter.ts`) to the host process at
+  `SIA_DAEMON_URL`; workspace binding comes from
+  `getConfig().runtime.workspaceId` (sourced from `SIA_WORKSPACE_ID`),
+  the LLM never sees it as a parameter.
 
 ## Middleware
 
@@ -315,47 +314,30 @@ for the upstream-sync playbook.
   by path. Don't include AI co-author trailers (we don't credit the
   tool in this repo).
 
-## Vendored code from the SIA monorepo (AGI-228)
+## Graph-memory service spec stubs (`src/vendor/svc-rpc/graph-memory/`)
 
-`src/vendor/svc-rpc/graph-memory/` ships byte-identical copies of
-five files from the monorepo's `packages/svc-rpc/src/services/graph-memory/`
-tree:
+The graph-memory tools target a service that the host process owns.
+The files under `src/vendor/svc-rpc/graph-memory/` are the spec
+stubs — pure types, codec, and handlers — that the agent compiles
+against:
 
-- `adapter-interface.ts` — `IGraphMemoryAdapter` typescript interface
-- `entity-shape.ts` — LLM-friendly ↔ wire codec
+- `adapter-interface.ts` — `IGraphMemoryAdapter`: verb-level contract
+- `entity-shape.ts` — LLM-facing ↔ service-wire codec
 - `tool-handlers.ts` — per-tool logic (pre-search, edge wiring, response shaping)
-- `ir-types.ts` — IDL request/response TypeScript types (self-contained)
-- `schema-hash.ts` — pinned `GRAPH_MEMORY_SCHEMA_HASH` from the codegen
+- `ir-types.ts` — request/response TypeScript types
+- `schema-hash.ts` — pinned schema identifier the host validates
 
-The MCP memory server in the monorepo (`mcp/servers/memory/`) imports
-the canonical originals; this agent vendors them. The two surfaces
-therefore call the same handlers — drift is structurally impossible.
+These are generated artifacts owned by the platform — treat them as
+read-only. `src/vendor/svc-rpc/VENDOR_SHA` records the upstream
+revision they were sourced from. When the platform publishes an
+updated spec, refresh all files in lockstep (do NOT edit one in
+isolation) and bump `VENDOR_SHA`.
 
-**Vendor SHA pin.** `src/vendor/svc-rpc/VENDOR_SHA` records the
-monorepo commit the current vendored files came from. Refresh the
-vendor by:
-
-1. Pulling the latest canonical files from `packages/svc-rpc/src/services/graph-memory/`
-   at the target monorepo SHA.
-2. Copying each manifest entry into the matching `src/vendor/svc-rpc/graph-memory/`
-   path (byte-identical — do NOT rewrite imports).
-3. Bumping `VENDOR_SHA`.
-
-**Parity guard.** The monorepo runs a parity test (`packages/svc-rpc/
-tests/unit/services/graph-memory/vendor-parity.test.ts`) that
-sha256-compares the canonical files to the vendored copies whenever
-`SIA_WEB_AGENT_PATH` points at a local checkout of this repo. CI in
-the monorepo runs it; locally, set `SIA_WEB_AGENT_PATH=$HOME/projects/sia-web-agent`
-when running `yarn workspace @self-improving-agent/svc-rpc test:unit`
-to activate the cross-repo check.
-
-**Wire transport.** The agent does NOT vendor the concrete
-`GraphMemoryAdapter` class — that would drag `createSvcClient` and
-the whole svc-rpc framework runtime into this repo. Instead,
-`src/tools/siad-graph-memory-adapter.ts` implements
-`IGraphMemoryAdapter` over siad's loopback `POST /rpc/call` endpoint
-(AGI-294 path). siad's NATS client owns breaker / retry / budget on
-the data plane.
+The agent ships its own concrete adapter
+(`src/tools/siad-graph-memory-adapter.ts`) that satisfies
+`IGraphMemoryAdapter` by calling the host at `SIA_DAEMON_URL`. Any
+host that accepts the documented contract works; standalone hosts
+can plug in their own adapter implementation.
 
 ## Reference documentation
 

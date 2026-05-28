@@ -1,19 +1,12 @@
 /**
- * Entity-shape codec (AGI-228).
- *
- * Two memory-tool surfaces — MCP (`mcp/servers/memory/src/index.ts`)
- * and agent-native (`sia-web-agent/src/tools/memory-tools.ts`) — both
- * expose an LLM-friendly entity shape:
+ * Codec between the LLM-facing entity shape:
  *
  *   { entity_type, title, content, context?, tags?, priority?,
  *     status?, abstraction_level?, metadata?, related_entity_ids?,
  *     relationship_types? }
  *
- * The graph-memory wire shapes (AGI-225 IDL) are different. Each tool
- * surface previously translated the two shapes independently; that's
- * where they drifted. This module is the single canonical translation.
- *
- * Pure functions only — no I/O. Both vendor sides import it.
+ * and the graph-memory service's wire shape. Pure functions only —
+ * no I/O.
  */
 import type {
   EntitiesStoreRequest,
@@ -28,11 +21,7 @@ import type {
 
 export type Priority = "low" | "medium" | "high";
 
-/**
- * Input shape accepted by `store_entity` on both tool surfaces.
- * Mirrors `EntityCreateRequest` from the old MCP types + the agent's
- * superset (`abstraction_level`).
- */
+/** Input shape accepted by the `store_entity` tool. */
 export interface EntityStoreInput {
   entity_type: string;
   title: string;
@@ -64,10 +53,9 @@ export interface StoredEntityShape {
 }
 
 /**
- * `user_input` field carries the encoded "[entity_type] title" prefix
- * we agreed on as the storage convention. Decoder mirrors the Go
- * pattern in `consolidation/discovery.go:172-183` — the same string
- * was duplicated in both tool surfaces.
+ * The `user_input` wire field carries the encoded
+ * `"[entity_type] title"` prefix the service uses as a storage
+ * convention. This decoder is the inverse.
  */
 export function parseUserInput(userInput: string | undefined): {
   entity_type?: string;
@@ -247,9 +235,8 @@ export interface EntityUpdateModes {
 
 /**
  * Build the `entities.update` properties + modes payload. Only fields
- * the caller actually wants to update are passed through; modes are
- * tracked alongside so the wire request mirrors what both surfaces
- * sent under the old HTTP client.
+ * the caller explicitly sets are passed through; modes are tracked
+ * alongside.
  */
 export function buildUpdatePayload(
   updates: EntityUpdateFields,

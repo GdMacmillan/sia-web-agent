@@ -1,30 +1,12 @@
 /**
- * Curated TypeScript type declarations for the `svc.graph-memory.v1`
- * IDL request / response shapes referenced by {@link IGraphMemoryAdapter}
- * and `tool-handlers.ts` (AGI-228 Phase 1 follow-on).
- *
- * Inlined (NOT re-exported from `../../generated/graph-memory/types.js`)
- * so this file is fully self-contained. Vendored byte-identical by
- * sia-web-agent under `src/vendor/svc-rpc/graph-memory/`. The agent
- * ships its own `SiadGraphMemoryAdapter` implementation that builds
- * wire envelopes against these types — it does NOT vendor the
- * generated `client.ts` (which would drag `createSvcClient` + the
- * whole svc-rpc framework along).
- *
- * **Drift protection.** The canonical `GraphMemoryAdapter` class
- * declares `implements IGraphMemoryAdapter`. Its method bodies thread
- * the Zod-inferred types from `../../generated/graph-memory/types.ts`
- * straight through. If the IDL changes the wire shape and the
- * codegen-emitted types diverge from these hand-maintained types, the
- * `implements` declaration fails to typecheck — that's the structural
- * lockstep guard between the IDL and the vendored handler surface.
- *
- * Pure type module — no runtime imports, no Zod schemas.
+ * Request / response TypeScript shapes for the graph-memory service.
+ * Self-contained — pure type declarations, no runtime imports, no Zod
+ * schemas. Every method on `IGraphMemoryAdapter` and every wire shape
+ * referenced by `tool-handlers.ts` resolves through this module.
  */
 
 // ---------------------------------------------------------------------------
-// Shared entity shapes — mirror `NodeSchema`, `EdgeSchema`,
-// `ConversationResponseSchema` from `graph-memory.idl.ts`.
+// Shared entity shapes — Node / Edge / Conversation envelopes.
 // ---------------------------------------------------------------------------
 
 export interface Node {
@@ -52,7 +34,7 @@ export interface ConversationResponse {
 }
 
 // ---------------------------------------------------------------------------
-// entities.* — product-surface verbs.
+// entities.* verbs.
 // ---------------------------------------------------------------------------
 
 export interface EntitiesStoreRequest {
@@ -127,7 +109,7 @@ export interface EntitiesPromoteResponse {
 }
 
 // ---------------------------------------------------------------------------
-// graph.* — product-surface verbs.
+// graph.* verbs.
 // ---------------------------------------------------------------------------
 
 export interface GraphTraverseRequest {
@@ -175,7 +157,7 @@ export interface GraphQueryResponse {
 }
 
 // ---------------------------------------------------------------------------
-// admin.http — tunnel-style escape hatch.
+// admin.http — service-side escape hatch.
 // ---------------------------------------------------------------------------
 
 export interface AdminHttpRequest {

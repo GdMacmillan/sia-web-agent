@@ -1,24 +1,15 @@
 /**
- * Memory Tools for Agent Entity Management (AGI-228).
+ * Memory tools for agent entity management.
  *
- * Every tool delegates to the vendored `tool-handlers` module from
- * `packages/svc-rpc/src/services/graph-memory/` (this repo:
- * `src/vendor/svc-rpc/graph-memory/`). The MCP server in the monorepo
- * vendors the same handlers — both surfaces are structurally identical
- * by construction (parity test on the monorepo side enforces this).
+ * Each tool is a thin `DynamicStructuredTool` shell around a handler
+ * from `src/vendor/svc-rpc/graph-memory/tool-handlers.ts`. Calls go
+ * through a workspace-bound {@link SiadGraphMemoryAdapter} that
+ * delegates each verb to the host process; the LLM never sees
+ * `workspace_id`.
  *
- * Each `DynamicStructuredTool.func` is a thin shell around the
- * corresponding handler:
- *
- *     handler(adapter, input) → JSON string
- *
- * `adapter` is a workspace-bound {@link SiadGraphMemoryAdapter} that
- * tunnels every verb through siad's `/rpc/call` endpoint. The LLM
- * never sees `workspace_id` as a tool parameter.
- *
- * Agent-only enrichments (HyDE / query-decomposition / reranking) stay
- * here as wrappers around the vendored `searchEntities` handler — they
- * don't replace it.
+ * Agent-only enrichments (HyDE / query decomposition / reranking) live
+ * here as wrappers around the `searchEntities` handler — they don't
+ * replace it.
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
@@ -82,14 +73,13 @@ function getAdapter(): IGraphMemoryAdapter {
     if (process.env.SIA_LEGACY_UNSCOPED === "1") {
       throw new Error(
         "memory-tools: SIA_WORKSPACE_ID is unset AND SIA_LEGACY_UNSCOPED=1 — " +
-          "there is no legacy unscoped path for svc.graph-memory.v1; remove " +
-          "SIA_LEGACY_UNSCOPED or stamp SIA_WORKSPACE_ID via install_node_daemon.",
+          "graph-memory has no unscoped path; remove SIA_LEGACY_UNSCOPED or " +
+          "set SIA_WORKSPACE_ID.",
       );
     }
     throw new Error(
-      "memory-tools: SIA_WORKSPACE_ID is required. Set it via " +
-        "install_node_daemon (the launchd plist / systemd unit stamps it on " +
-        "the agent process). See AGI-202 + feedback_workspace_id_transparent.md.",
+      "memory-tools: SIA_WORKSPACE_ID is required. The host process must " +
+        "stamp it on the agent at spawn time.",
     );
   }
 

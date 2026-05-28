@@ -1,40 +1,16 @@
 /**
- * SiadGraphMemoryAdapter — agent-side `IGraphMemoryAdapter` implementation
- * that tunnels every `svc.graph-memory.v1` verb through siad's loopback
- * `POST /rpc/call` endpoint (AGI-228 Phase 2).
+ * Implements {@link IGraphMemoryAdapter} by calling the local host
+ * process configured via `SIA_DAEMON_URL` + `SIA_DAEMON_TOKEN`. The
+ * host is whatever process spawned the agent; it accepts the call and
+ * dispatches to its graph-memory backend.
  *
- * The chain at runtime:
+ * The agent process holds no NATS connection and no workspace
+ * authority. The workspace id is bound at construction from runtime
+ * config and threaded into every call — the LLM never supplies it.
  *
- *     memory tool (LLM)
- *       └─ vendored tool-handlers.ts function (IGraphMemoryAdapter)
- *            └─ SiadGraphMemoryAdapter (this file)
- *                 └─ POST /rpc/call → siad
- *                      └─ siad publishes on w.{wsId}.svc.graph-memory.v1.<verb>
- *                           └─ graph-memory responder
- *
- * Why this exists. The canonical `GraphMemoryAdapter` in the monorepo
- * wraps `createSvcClient` (breaker / retry / hooks / catalog / NATS
- * transport). Pulling that runtime into sia-web-agent would drag the
- * whole svc-rpc framework along — ~6.8 kloc the agent doesn't need.
- * Instead, this adapter mirrors the host-side `NatsRpcStorageBackend`
- * → `SiadRpcTransport` → `SiadHttpClient` chain from the monorepo
- * (`packages/sia/src/storage/`) inline, against just the interface the
- * vendored handlers depend on. The agent process therefore never imports
- * `nats`, never opens a NATS connection, and never holds a workspace
- * authority — siad is the authoritative tenant proxy on every call.
- *
- * Resilience. None on the agent side. siad's NATS client owns breaker
- * / retry / budget on the data plane; the upstream svc-rpc client
- * runtime (which we don't ship) is what would normally hydrate
- * `RpcError`. Here we throw plain `Error` on failure — the LLM-facing
- * tool-handlers don't differentiate retryability anyway.
- *
- * Envelope wire shape. Mirrors `RpcRequestEnvelope` from
- * `packages/svc-rpc/src/envelope.ts` — see that file for the canonical
- * Zod schema. `replyTo` is a placeholder ("_INBOX.agent") because siad
- * rewrites it to a fresh local inbox per request (the agent has no NATS
- * subscription after AGI-210). `deadlineUnixMs` is hard-coded to 30s
- * out, matching the default tool call timeout on the agent side.
+ * Failure handling is intentionally thin: this adapter surfaces a
+ * plain `Error` on any non-success, leaving retry / breaker policy
+ * to the host implementation.
  */
 import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
 import { GRAPH_MEMORY_SCHEMA_HASH } from "../vendor/svc-rpc/graph-memory/schema-hash.js";
@@ -71,7 +47,7 @@ const SERVICE_VERSION = "v1";
 const DEFAULT_DEADLINE_MS = 30_000;
 const DEFAULT_BASE_URL = "http://127.0.0.1:7700";
 
-/** Wire envelope subset siad accepts (mirrors `RpcRequestEnvelope`). */
+/** Wire envelope the host accepts on the service-call endpoint. */
 interface RpcRequestEnvelope<TPayload> {
   version: 1;
   id: string;
@@ -85,7 +61,7 @@ interface RpcRequestEnvelope<TPayload> {
   payload: TPayload;
 }
 
-/** Wire envelope siad returns on `200 OK` (success branch). */
+/** Wire envelope the host returns on `200 OK` (success branch). */
 interface RpcResponseEnvelopeOk<TPayload> {
   version: 1;
   id: string;
@@ -93,7 +69,7 @@ interface RpcResponseEnvelopeOk<TPayload> {
   payload: TPayload;
 }
 
-/** Wire envelope siad returns on `200 OK` (error branch). */
+/** Wire envelope the host returns on `200 OK` (error branch). */
 interface RpcResponseEnvelopeErr {
   version: 1;
   id: string;
@@ -107,13 +83,12 @@ export interface SiadGraphMemoryAdapterOptions {
   /** Workspace this adapter is bound to. Required. */
   workspaceId: string;
   /**
-   * Base URL of the loopback siad daemon. Defaults to
+   * Base URL of the host process. Defaults to
    * `process.env.SIA_DAEMON_URL` or `http://127.0.0.1:7700`.
    */
   siadUrl?: string;
   /**
-   * Bearer token for the loopback bridge. Defaults to
-   * `process.env.SIA_DAEMON_TOKEN`.
+   * Bearer token. Defaults to `process.env.SIA_DAEMON_TOKEN`.
    */
   siadToken?: string;
   /** Per-call deadline in ms. Defaults to 30000. */
@@ -137,7 +112,7 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
       throw new Error(
         "SiadGraphMemoryAdapter requires a non-empty workspaceId. " +
           "It MUST come from runtime context (getConfig().runtime.workspaceId, " +
-          "set from SIA_WORKSPACE_ID by siad's install_node_daemon).",
+          "sourced from SIA_WORKSPACE_ID).",
       );
     }
     this.workspaceId = opts.workspaceId;
@@ -160,8 +135,7 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
 
     if (!this.siadToken) {
       logger.warn(
-        "[SiadGraphMemoryAdapter] SIA_DAEMON_TOKEN is empty — siad will reject every /rpc/call with 401. " +
-          "This usually means the agent was spawned outside of `apply_agent`.",
+        "[SiadGraphMemoryAdapter] SIA_DAEMON_TOKEN is empty — graph-memory calls will be rejected by the host.",
       );
     }
   }
@@ -255,7 +229,7 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
   private async call<TReq, TResp>(verb: string, payload: TReq): Promise<TResp> {
     if (!this.siadToken) {
       throw new Error(
-        "SiadGraphMemoryAdapter: SIA_DAEMON_TOKEN is empty — cannot authenticate /rpc/call",
+        "SiadGraphMemoryAdapter: SIA_DAEMON_TOKEN is empty — cannot authenticate to the host",
       );
     }
 
@@ -284,7 +258,7 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
       });
     } catch (err) {
       throw new Error(
-        `SiadGraphMemoryAdapter: /rpc/call network error for ${verb}: ${
+        `SiadGraphMemoryAdapter: host network error for ${verb}: ${
           err instanceof Error ? err.message : String(err)
         }`,
         { cause: err },
@@ -298,7 +272,7 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
         // ignore
       }
       throw new Error(
-        `SiadGraphMemoryAdapter: /rpc/call returned ${res.status} for ${verb}`,
+        `SiadGraphMemoryAdapter: host returned ${res.status} for ${verb}`,
       );
     }
 
@@ -307,7 +281,7 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
       body = (await res.json()) as RpcResponseEnvelope<TResp>;
     } catch (err) {
       throw new Error(
-        `SiadGraphMemoryAdapter: /rpc/call returned 200 with non-JSON body for ${verb}: ${
+        `SiadGraphMemoryAdapter: host returned 200 with non-JSON body for ${verb}: ${
           err instanceof Error ? err.message : String(err)
         }`,
         { cause: err },
