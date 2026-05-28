@@ -19,5 +19,7 @@ export {
   listEntitiesTool,
   updateEntityStatusTool,
   updateEntityTool,
+  promoteEntitiesTool,
+  traverseGraphTool,
 } from "./memory-tools.js";
 export { createChecklistTools } from "./checklist-tools.js";

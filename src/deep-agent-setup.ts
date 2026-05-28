@@ -27,6 +27,9 @@ import {
   searchEntitiesTool,
   listEntitiesTool,
   updateEntityStatusTool,
+  updateEntityTool,
+  promoteEntitiesTool,
+  traverseGraphTool,
   createChecklistTools,
 } from "./tools/index.js";
 import { getProjectRoot } from "./backend-config.js";
@@ -94,6 +97,9 @@ export function createStandardTools(projectRoot: string): StructuredTool[] {
     searchEntitiesTool,
     listEntitiesTool,
     updateEntityStatusTool,
+    updateEntityTool,
+    promoteEntitiesTool,
+    traverseGraphTool,
     // Dependency-aware checklist tools for workflow coordination
     ...createChecklistTools(),
   ];

@@ -128,11 +128,17 @@ the orchestrator:
 - **Code Execution** (`code-execution.ts`): `execute_code` —
   TypeScript/JavaScript via `tsx`
 - **Memory** (`tools/memory-tools.ts`): graph-memory entity storage,
-  search, retrieval, traversal. Five tools wired in the default surface
-  (`store_entity`, `retrieve_entity`, `search_entities`,
-  `list_entities`, `update_entity_status`); see
+  search, retrieval, traversal, promotion. Eight tools wired in the
+  default surface (`store_entity`, `retrieve_entity`, `search_entities`,
+  `list_entities`, `update_entity_status`, `update_entity`,
+  `promote_entities`, `traverse_graph`); see
   [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) for the full picture
-  and known gaps.
+  and known gaps. **Wire transport (AGI-228):** every tool routes
+  through `SiadGraphMemoryAdapter` (`tools/siad-graph-memory-adapter.ts`)
+  → siad's `POST /rpc/call` → NATS svc-rpc → graph-memory responder.
+  The agent process never holds a NATS connection. Workspace binding
+  comes from `getConfig().runtime.workspaceId` (`SIA_WORKSPACE_ID` stamped
+  by `install_node_daemon`); the LLM never sees `workspace_id`.
 
 ## Middleware
 
@@ -308,6 +314,48 @@ for the upstream-sync playbook.
 - Commit messages: imperative, lowercase first word, reference files
   by path. Don't include AI co-author trailers (we don't credit the
   tool in this repo).
+
+## Vendored code from the SIA monorepo (AGI-228)
+
+`src/vendor/svc-rpc/graph-memory/` ships byte-identical copies of
+five files from the monorepo's `packages/svc-rpc/src/services/graph-memory/`
+tree:
+
+- `adapter-interface.ts` — `IGraphMemoryAdapter` typescript interface
+- `entity-shape.ts` — LLM-friendly ↔ wire codec
+- `tool-handlers.ts` — per-tool logic (pre-search, edge wiring, response shaping)
+- `ir-types.ts` — IDL request/response TypeScript types (self-contained)
+- `schema-hash.ts` — pinned `GRAPH_MEMORY_SCHEMA_HASH` from the codegen
+
+The MCP memory server in the monorepo (`mcp/servers/memory/`) imports
+the canonical originals; this agent vendors them. The two surfaces
+therefore call the same handlers — drift is structurally impossible.
+
+**Vendor SHA pin.** `src/vendor/svc-rpc/VENDOR_SHA` records the
+monorepo commit the current vendored files came from. Refresh the
+vendor by:
+
+1. Pulling the latest canonical files from `packages/svc-rpc/src/services/graph-memory/`
+   at the target monorepo SHA.
+2. Copying each manifest entry into the matching `src/vendor/svc-rpc/graph-memory/`
+   path (byte-identical — do NOT rewrite imports).
+3. Bumping `VENDOR_SHA`.
+
+**Parity guard.** The monorepo runs a parity test (`packages/svc-rpc/
+tests/unit/services/graph-memory/vendor-parity.test.ts`) that
+sha256-compares the canonical files to the vendored copies whenever
+`SIA_WEB_AGENT_PATH` points at a local checkout of this repo. CI in
+the monorepo runs it; locally, set `SIA_WEB_AGENT_PATH=$HOME/projects/sia-web-agent`
+when running `yarn workspace @self-improving-agent/svc-rpc test:unit`
+to activate the cross-repo check.
+
+**Wire transport.** The agent does NOT vendor the concrete
+`GraphMemoryAdapter` class — that would drag `createSvcClient` and
+the whole svc-rpc framework runtime into this repo. Instead,
+`src/tools/siad-graph-memory-adapter.ts` implements
+`IGraphMemoryAdapter` over siad's loopback `POST /rpc/call` endpoint
+(AGI-294 path). siad's NATS client owns breaker / retry / budget on
+the data plane.
 
 ## Reference documentation
 

@@ -228,4 +228,15 @@ export interface RuntimeConfig {
   agentId: string;
   /** Human-friendly agent name (default: "Self-Improving Agent") */
   agentName: string;
+  /**
+   * Workspace this agent is bound to (AGI-228).
+   *
+   * Source: `SIA_WORKSPACE_ID` stamped by `install_node_daemon` (AGI-202).
+   * Every workspace-scoped tool (graph-memory + future svc-rpc surfaces)
+   * binds this once at construction; the LLM never sees it.
+   *
+   * Undefined in standalone OSS / pre-tenancy modes — callers that
+   * require it (e.g. `SiadGraphMemoryAdapter`) must fail fast.
+   */
+  workspaceId: string | undefined;
 }
