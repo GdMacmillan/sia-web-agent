@@ -128,11 +128,16 @@ the orchestrator:
 - **Code Execution** (`code-execution.ts`): `execute_code` —
   TypeScript/JavaScript via `tsx`
 - **Memory** (`tools/memory-tools.ts`): graph-memory entity storage,
-  search, retrieval, traversal. Five tools wired in the default surface
-  (`store_entity`, `retrieve_entity`, `search_entities`,
-  `list_entities`, `update_entity_status`); see
+  search, retrieval, traversal, promotion. Eight tools wired in the
+  default surface (`store_entity`, `retrieve_entity`, `search_entities`,
+  `list_entities`, `update_entity_status`, `update_entity`,
+  `promote_entities`, `traverse_graph`); see
   [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) for the full picture
-  and known gaps.
+  and known gaps. Calls dispatch through `SiadGraphMemoryAdapter`
+  (`tools/siad-graph-memory-adapter.ts`) to the host process at
+  `SIA_DAEMON_URL`; workspace binding comes from
+  `getConfig().runtime.workspaceId` (sourced from `SIA_WORKSPACE_ID`),
+  the LLM never sees it as a parameter.
 
 ## Middleware
 
@@ -308,6 +313,31 @@ for the upstream-sync playbook.
 - Commit messages: imperative, lowercase first word, reference files
   by path. Don't include AI co-author trailers (we don't credit the
   tool in this repo).
+
+## Graph-memory service spec stubs (`src/vendor/svc-rpc/graph-memory/`)
+
+The graph-memory tools target a service that the host process owns.
+The files under `src/vendor/svc-rpc/graph-memory/` are the spec
+stubs — pure types, codec, and handlers — that the agent compiles
+against:
+
+- `adapter-interface.ts` — `IGraphMemoryAdapter`: verb-level contract
+- `entity-shape.ts` — LLM-facing ↔ service-wire codec
+- `tool-handlers.ts` — per-tool logic (pre-search, edge wiring, response shaping)
+- `ir-types.ts` — request/response TypeScript types
+- `schema-hash.ts` — pinned schema identifier the host validates
+
+These are generated artifacts owned by the platform — treat them as
+read-only. `src/vendor/svc-rpc/VENDOR_SHA` records the upstream
+revision they were sourced from. When the platform publishes an
+updated spec, refresh all files in lockstep (do NOT edit one in
+isolation) and bump `VENDOR_SHA`.
+
+The agent ships its own concrete adapter
+(`src/tools/siad-graph-memory-adapter.ts`) that satisfies
+`IGraphMemoryAdapter` by calling the host at `SIA_DAEMON_URL`. Any
+host that accepts the documented contract works; standalone hosts
+can plug in their own adapter implementation.
 
 ## Reference documentation
 

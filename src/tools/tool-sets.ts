@@ -27,6 +27,7 @@ const MEMORY_TOOLS = [
   "update_entity_status",
   "update_entity",
   "traverse_graph",
+  "promote_entities",
 ];
 const CHECKLIST_TOOLS = [
   "create_checklist",
