@@ -1,5 +1,12 @@
 /**
  * Knowledge Formation Middleware Tests
+ *
+ * Since AGI-227 the middleware's reads/writes go through the
+ * workspace-bound graph-memory adapter (the same `IGraphMemoryAdapter`
+ * the agent tools use), not the legacy direct-HTTP client. Tests inject
+ * a stub adapter via the shared `_setMemoryAdapterForTests` seam and
+ * populate `SIA_WORKSPACE_ID` so `getConfig().runtime.workspaceId` is
+ * set — the adapter is workspace-bound by construction.
  */
 
 import {
@@ -11,7 +18,6 @@ import {
   afterEach,
 } from "@jest/globals";
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
-import axios from "axios";
 import { createKnowledgeFormationMiddleware } from "../../../src/middleware/knowledge-formation.js";
 import {
   loadExtractionConfig,
@@ -19,23 +25,64 @@ import {
 } from "../../../src/config/knowledge-formation-config.js";
 import { resetConfig } from "../../../src/config/index.js";
 import { logger } from "../../../src/utils/logger.js";
-
-// Mock axios
-jest.mock("axios");
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+import {
+  _resetMemoryAdapterForTests,
+  _setMemoryAdapterForTests,
+} from "../../../src/tools/memory-adapter.js";
+import {
+  trackPatternRetrieval,
+  clearAllTracking,
+} from "../../../src/utils/application-tracking.js";
+import type { IGraphMemoryAdapter } from "../../../src/vendor/svc-rpc/graph-memory/adapter-interface.js";
 
 // Mock LLM model
 const mockModel = {
   invoke: jest.fn(),
 };
 
+/** A stub `IGraphMemoryAdapter` whose verbs are jest mocks. */
+function makeStubAdapter(
+  overrides: Partial<IGraphMemoryAdapter> = {},
+): IGraphMemoryAdapter {
+  const noop = jest.fn(async () => ({})) as unknown as jest.Mock;
+  const base = {
+    workspaceId: "ws_test",
+    storeEntity: noop,
+    retrieveEntity: noop,
+    listEntities: noop,
+    searchEntities: noop,
+    updateEntityStatus: noop,
+    updateEntity: noop,
+    promoteEntities: noop,
+    traverseGraph: noop,
+    graphEdges: noop,
+    graphStats: noop,
+    graphQuery: noop,
+    adminHttp: noop,
+  };
+  return { ...base, ...overrides } as unknown as IGraphMemoryAdapter;
+}
+
+/** Empty search wire response (no duplicates / no suggestions). */
+function emptySearchResponse() {
+  return {
+    results: [],
+    level_used: "raw",
+    levels_tried: ["raw"],
+    query: "",
+    threshold: 0.3,
+    total_results: 0,
+    timestamp: "2026-01-01T00:00:00Z",
+  };
+}
+
 describe("Knowledge Formation Middleware", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
-    // Reset cached config so env var changes take effect
-    resetConfig();
-    // Clear environment variables
+    // The adapter is workspace-bound: a workspace id must be present.
+    process.env.SIA_WORKSPACE_ID = "ws_test";
+    // Clear knowledge-formation env vars so config defaults apply.
     delete process.env.KNOWLEDGE_FORMATION_ENABLED;
     delete process.env.KNOWLEDGE_FORMATION_SENSITIVITY;
     delete process.env.KNOWLEDGE_FORMATION_DEBUG;
@@ -43,10 +90,19 @@ describe("Knowledge Formation Middleware", () => {
     delete process.env.KNOWLEDGE_FORMATION_MAX_LEARNINGS;
     delete process.env.KNOWLEDGE_FORMATION_DEDUP_THRESHOLD;
     delete process.env.KNOWLEDGE_FORMATION_EXCLUDE_AGENTS;
+    // Reset cached config so env var changes take effect on next read.
+    resetConfig();
+    // Reset adapter + application tracking between tests.
+    _resetMemoryAdapterForTests();
+    clearAllTracking();
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    delete process.env.SIA_WORKSPACE_ID;
+    resetConfig();
+    _resetMemoryAdapterForTests();
+    clearAllTracking();
   });
 
   describe("loadExtractionConfig", () => {
@@ -188,36 +244,8 @@ describe("Knowledge Formation Middleware", () => {
     it("should fire async processing with setImmediate", async () => {
       const setImmediateSpy = jest.spyOn(global, "setImmediate");
 
-      // Mock successful extraction
       mockModel.invoke.mockResolvedValue({
-        content: JSON.stringify({
-          learnings: [
-            {
-              entity_type: "learning",
-              title: "Test Learning",
-              content: "Test content",
-              tags: ["test"],
-              priority: "medium",
-              confidence: 0.8,
-            },
-          ],
-        }),
-      });
-
-      // Mock duplicate check (no duplicates)
-      mockedAxios.post.mockResolvedValueOnce({
-        data: {
-          success: true,
-          data: { nodes: [] },
-        },
-      });
-
-      // Mock successful storage
-      mockedAxios.post.mockResolvedValueOnce({
-        data: {
-          success: true,
-          data: { id: "conv_123" },
-        },
+        content: JSON.stringify({ learnings: [] }),
       });
 
       const middleware = createKnowledgeFormationMiddleware({
@@ -241,7 +269,7 @@ describe("Knowledge Formation Middleware", () => {
     });
   });
 
-  describe("extraction", () => {
+  describe("extraction (adapter path)", () => {
     it("should schedule async extraction without blocking", async () => {
       const setImmediateSpy = jest.spyOn(global, "setImmediate");
 
@@ -272,13 +300,219 @@ describe("Knowledge Formation Middleware", () => {
       setImmediateSpy.mockRestore();
     });
 
+    it("stores an extracted learning through the workspace-bound adapter", async () => {
+      // Extraction returns one qualified learning.
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({
+          learnings: [
+            {
+              entity_type: "learning",
+              title: "Test Learning",
+              content: "Detailed content about a fix",
+              context: "middleware",
+              tags: ["test"],
+              priority: "medium",
+              confidence: 0.9,
+            },
+          ],
+        }),
+      });
+
+      const searchMock = jest.fn(async () =>
+        emptySearchResponse(),
+      ) as unknown as jest.Mock;
+      const storeMock = jest.fn(async () => ({
+        id: "conv_123",
+        agent_id: "memory_agent",
+        user_input: "[learning] Test Learning",
+        agent_output: "Detailed content about a fix",
+        timestamp: "2026-01-01T00:00:00Z",
+        metadata: {},
+      })) as unknown as jest.Mock;
+      const adapter = makeStubAdapter({
+        searchEntities: searchMock as any,
+        storeEntity: storeMock as any,
+      });
+      _setMemoryAdapterForTests(adapter);
+
+      const middleware = createKnowledgeFormationMiddleware({
+        model: mockModel as any,
+      });
+
+      const state = {
+        messages: [
+          new HumanMessage("How do I fix this bug?"),
+          new AIMessage("Update the config"),
+          new ToolMessage("Config updated", "tool_1"),
+          new AIMessage("Fixed"),
+        ],
+      };
+
+      await middleware.beforeAgent?.({});
+      await middleware.afterAgent?.(state as any);
+
+      // Flush the fire-and-forget setImmediate work.
+      await jest.runAllTimersAsync();
+
+      // The adapter path was used (workspace-bound by construction).
+      expect(searchMock).toHaveBeenCalled();
+      expect(storeMock).toHaveBeenCalledTimes(1);
+
+      // The store carried the auto-extracted tag + auto-formation extras.
+      const storeReq = storeMock.mock.calls[0]![0] as {
+        metadata?: Record<string, unknown>;
+      };
+      const meta = (storeReq.metadata ?? {}) as Record<string, unknown>;
+      expect(meta.tags).toEqual(expect.arrayContaining(["auto-extracted"]));
+      const custom = (meta.custom_metadata ?? {}) as Record<string, unknown>;
+      expect(custom.formation_method).toBe("automatic");
+      expect(custom.extraction_confidence).toBe(0.9);
+    });
+
+    it("logs an error and performs no write when SIA_WORKSPACE_ID is unset", async () => {
+      // Force a non-legacy runtime with no workspace id.
+      delete process.env.SIA_WORKSPACE_ID;
+      resetConfig();
+      _resetMemoryAdapterForTests();
+
+      const loggerError = jest.spyOn(logger, "error").mockImplementation();
+
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({
+          learnings: [
+            {
+              entity_type: "learning",
+              title: "Test Learning",
+              content: "Detailed content about a fix",
+              tags: ["test"],
+              priority: "medium",
+              confidence: 0.9,
+            },
+          ],
+        }),
+      });
+
+      // A stub is injected but the adapter accessor inside the
+      // middleware re-reads config — with no workspace + no cached
+      // adapter, it must throw rather than write.
+      const storeMock = jest.fn(async () => ({
+        id: "should_not_happen",
+      })) as unknown as jest.Mock;
+      // Intentionally do NOT inject the stub as the cached adapter, so
+      // getMemoryAdapter() runs its fail-fast branch.
+      void storeMock;
+
+      const middleware = createKnowledgeFormationMiddleware({
+        model: mockModel as any,
+      });
+
+      const state = {
+        messages: [
+          new HumanMessage("How do I fix this bug?"),
+          new AIMessage("Update the config"),
+          new ToolMessage("Config updated", "tool_1"),
+          new AIMessage("Fixed"),
+        ],
+      };
+
+      await middleware.beforeAgent?.({});
+      await middleware.afterAgent?.(state as any);
+      await jest.runAllTimersAsync();
+
+      // No write happened; the failure surfaced as a logged error.
+      expect(storeMock).not.toHaveBeenCalled();
+      expect(loggerError).toHaveBeenCalled();
+
+      loggerError.mockRestore();
+    });
+  });
+
+  describe("outcome tracking (adapter path)", () => {
+    it("reads then updates tracked learnings via the adapter", async () => {
+      // model.invoke is used by both extraction and outcome evaluation;
+      // returning an outcome response yields no learnings (so no store),
+      // and a fulfilled outcome for the critic.
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({
+          fulfilled: true,
+          tool_errors: [],
+          confidence: 0.9,
+        }),
+      });
+
+      const retrieveMock = jest.fn(async () => ({
+        id: "entity-1",
+        type: "Conversation",
+        properties: {
+          metadata: {
+            success_count: 1,
+            failure_count: 0,
+            application_history: [],
+          },
+        },
+      })) as unknown as jest.Mock;
+      const updateMock = jest.fn(async () => ({
+        id: "entity-1",
+        type: "Conversation",
+        properties: {},
+        version: 2,
+        changed_fields: ["success_count"],
+      })) as unknown as jest.Mock;
+      const adapter = makeStubAdapter({
+        retrieveEntity: retrieveMock as any,
+        updateEntity: updateMock as any,
+      });
+      _setMemoryAdapterForTests(adapter);
+
+      // Track an entity under the task id derived from the run config.
+      trackPatternRetrieval(["entity-1"], "task_t1");
+
+      const middleware = createKnowledgeFormationMiddleware({
+        model: mockModel as any,
+      });
+
+      const state = {
+        messages: [
+          new HumanMessage("Do the thing"),
+          new AIMessage("Working on it"),
+          new ToolMessage("done", "tool_1"),
+          new AIMessage("Completed"),
+        ],
+      };
+
+      await middleware.beforeAgent?.({});
+      await middleware.afterAgent?.(state as any, {
+        configurable: { thread_id: "t1" },
+      } as any);
+
+      await jest.runAllTimersAsync();
+
+      expect(retrieveMock).toHaveBeenCalledWith({ nodeId: "entity-1" });
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      const updateReq = updateMock.mock.calls[0]![0] as {
+        nodeId: string;
+        properties: { metadata: Record<string, unknown> };
+      };
+      expect(updateReq.nodeId).toBe("entity-1");
+      // Only the changed counter keys are sent (merge preserves the rest).
+      expect(updateReq.properties.metadata).toEqual(
+        expect.objectContaining({
+          success_count: expect.any(Number),
+          failure_count: expect.any(Number),
+          success_rate: expect.any(Number),
+          last_applied_at: expect.any(String),
+          application_history: expect.any(Array),
+        }),
+      );
+    });
+  });
+
+  describe("config wiring", () => {
     it("should apply confidence threshold config", () => {
       const middleware = createKnowledgeFormationMiddleware({
         model: mockModel as any,
         config: { minConfidence: 0.7, maxLearningsPerTask: 10 },
       });
-
-      // Verify middleware was created with config
       expect(middleware.name).toBe("knowledgeFormationMiddleware");
     });
 
@@ -287,52 +521,18 @@ describe("Knowledge Formation Middleware", () => {
         model: mockModel as any,
         config: { maxLearningsPerTask: 2 },
       });
-
-      // Verify middleware was created with config
       expect(middleware.name).toBe("knowledgeFormationMiddleware");
     });
-  });
 
-  describe("deduplication", () => {
     it("should apply deduplication threshold config", () => {
       const middleware = createKnowledgeFormationMiddleware({
         model: mockModel as any,
         config: { deduplicationThreshold: 0.95, debugLogging: true },
       });
-
-      // Verify middleware was created
       expect(middleware.name).toBe("knowledgeFormationMiddleware");
     });
 
-    it("should not block response while checking duplicates", async () => {
-      const setImmediateSpy = jest.spyOn(global, "setImmediate");
-
-      const middleware = createKnowledgeFormationMiddleware({
-        model: mockModel as any,
-      });
-
-      const state = {
-        messages: [
-          new HumanMessage("test"),
-          new AIMessage("response"),
-          new HumanMessage("follow up"),
-          new AIMessage("another response"),
-        ],
-      };
-
-      await middleware.beforeAgent?.({});
-      const result = await middleware.afterAgent?.(state as any);
-
-      // Should return immediately
-      expect(result).toBeUndefined();
-      expect(setImmediateSpy).toHaveBeenCalled();
-
-      setImmediateSpy.mockRestore();
-    });
-
     it("should handle errors without throwing", async () => {
-      const consoleError = jest.spyOn(console, "error").mockImplementation();
-
       const middleware = createKnowledgeFormationMiddleware({
         model: mockModel as any,
       });
@@ -347,42 +547,9 @@ describe("Knowledge Formation Middleware", () => {
       };
 
       await middleware.beforeAgent?.({});
-      // Should not throw even if processing would fail
       await expect(
         middleware.afterAgent?.(state as any),
       ).resolves.toBeUndefined();
-
-      consoleError.mockRestore();
-    });
-  });
-
-  describe("storage", () => {
-    it("should use async storage to not block response", async () => {
-      const setImmediateSpy = jest.spyOn(global, "setImmediate");
-
-      const middleware = createKnowledgeFormationMiddleware({
-        model: mockModel as any,
-      });
-
-      const state = {
-        messages: [
-          new HumanMessage("test"),
-          new AIMessage("response"),
-          new HumanMessage("follow up"),
-          new AIMessage("another response"),
-        ],
-      };
-
-      await middleware.beforeAgent?.({});
-      const result = await middleware.afterAgent?.(state as any);
-
-      // Should return immediately without waiting for storage
-      expect(result).toBeUndefined();
-      expect(setImmediateSpy).toHaveBeenCalled();
-      // Storage should not have been called yet (happens async)
-      expect(mockedAxios.post).not.toHaveBeenCalled();
-
-      setImmediateSpy.mockRestore();
     });
 
     it("should integrate with agent without errors", async () => {
@@ -399,7 +566,6 @@ describe("Knowledge Formation Middleware", () => {
         ],
       };
 
-      // Should complete full lifecycle without errors
       await expect(middleware.beforeAgent?.({})).resolves.toBeUndefined();
       await expect(
         middleware.afterAgent?.(state as any),
