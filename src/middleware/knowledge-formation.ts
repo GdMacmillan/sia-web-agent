@@ -27,7 +27,12 @@ import {
   clearTracking,
   getOrCreateTaskId,
 } from "../utils/application-tracking.js";
-import { createGraphMemoryClient } from "../clients/graph-memory-client.js";
+import {
+  searchEntities,
+  storeEntity as storeEntityHandler,
+  type StoreEntityHandlerInput,
+} from "../vendor/svc-rpc/graph-memory/tool-handlers.js";
+import { getMemoryAdapter } from "../tools/memory-adapter.js";
 import { getConfig } from "../config/index.js";
 
 // Types
@@ -98,32 +103,28 @@ Tool Calls Made: {tool_count}
 Extract valuable learnings from this task completion. Be selective - only extract genuinely reusable
 knowledge.`;
 
-// Graph Memory client with shorter timeout for duplicate checks
-const graphMemoryClient = createGraphMemoryClient({ timeout: 10000 });
-const duplicateCheckClient = createGraphMemoryClient({ timeout: 5000 });
-
 async function searchForDuplicates(
   content: string,
   threshold: number,
 ): Promise<{ isDuplicate: boolean; similarId?: string }> {
   try {
-    const sanitizedQuery = content.substring(0, 500).replace(/"/g, '\\"');
-    const query = `MATCH CONVERSATIONS SEMANTIC "${sanitizedQuery}" THRESHOLD ${threshold} LIMIT 1`;
+    const result = await searchEntities(getMemoryAdapter(), {
+      query: content.substring(0, 500),
+      threshold,
+      limit: 1,
+    });
 
-    const response = (await duplicateCheckClient.query(query)) as {
-      success: boolean;
-      data?: { nodes?: Array<{ id: string }> };
-    };
-
-    if (response.success && response.data?.nodes?.length) {
+    if (result.count > 0) {
       return {
         isDuplicate: true,
-        similarId: response.data.nodes[0].id,
+        similarId: result.entities[0]?.id,
       };
     }
     return { isDuplicate: false };
   } catch (_error) {
-    // On error, assume not duplicate to avoid losing knowledge
+    // On error, assume not duplicate to avoid losing knowledge.
+    // The workspace-bound adapter throws when SIA_WORKSPACE_ID is
+    // unset, so this path also covers the fail-fast — no unscoped read.
     return { isDuplicate: false };
   }
 }
@@ -132,39 +133,25 @@ async function storeEntity(
   learning: ExtractedLearning,
 ): Promise<string | null> {
   try {
-    const entityData = {
+    const input: StoreEntityHandlerInput = {
+      entity_type: learning.entity_type,
+      title: learning.title,
+      content: learning.content,
+      context: learning.context,
+      tags: [...(learning.tags || []), "auto-extracted"],
+      priority: learning.priority || "medium",
+      status: "active",
+      abstraction_level: "raw",
       agent_id: getConfig().runtime.agentId,
-      user_input: `[${learning.entity_type}] ${learning.title}`,
-      agent_output: learning.content,
-      context: learning.context || "general",
+      // Auto-formation extras are stored as custom metadata on the entity.
       metadata: {
-        entity_type: learning.entity_type,
-        title: learning.title,
-        content: learning.content,
-        context: learning.context,
-        tags: [...(learning.tags || []), "auto-extracted"],
-        priority: learning.priority || "medium",
-        status: "active",
-        abstraction_level: "raw",
-        created_at: new Date().toISOString(),
         formation_method: "automatic",
         extraction_confidence: learning.confidence,
       },
     };
 
-    const response = (await graphMemoryClient.post(
-      "/conversations",
-      entityData,
-    )) as {
-      success: boolean;
-      data?: { id?: string };
-      id?: string;
-    };
-
-    if (response.success) {
-      return response.data?.id || response.id || null;
-    }
-    return null;
+    const result = await storeEntityHandler(getMemoryAdapter(), input);
+    return result.id;
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     logger.error(
@@ -297,22 +284,16 @@ async function updateAppliedLearningsOutcome(
     return;
   }
 
-  // Use client with shorter timeout for outcome tracking
-  const outcomeClient = createGraphMemoryClient({ timeout: 5000 });
+  const adapter = getMemoryAdapter();
   const timestamp = new Date().toISOString();
   const outcomeValue = outcome.fulfilled ? "success" : "failure";
 
   for (const entityId of entityIds) {
     try {
-      // Fetch current entity to get existing metadata
-      const fetchResponse = (await outcomeClient.get(
-        `/graph/nodes/${entityId}`,
-      )) as {
-        success: boolean;
-        data?: { properties?: { metadata?: Record<string, unknown> } };
-      };
+      // Fetch current entity to read its existing outcome counters.
+      const node = await adapter.retrieveEntity({ nodeId: entityId });
 
-      if (!fetchResponse.success) {
+      if (!node) {
         logger.warn(
           { entityId },
           "[OutcomeTracking] Failed to fetch entity for update",
@@ -320,8 +301,8 @@ async function updateAppliedLearningsOutcome(
         continue;
       }
 
-      const entity = fetchResponse.data;
-      const metadata = entity?.properties?.metadata || {};
+      const metadata =
+        (node.properties?.metadata as Record<string, unknown>) || {};
 
       // Update counters
       const successCount =
@@ -346,11 +327,13 @@ async function updateAppliedLearningsOutcome(
         (metadata.application_history as ApplicationEvent[]) || [];
       const updatedHistory = [...history, newEvent].slice(-10); // Keep last 10
 
-      // Prepare update
-      const updateData = {
+      // Write only the changed counter keys; the update merges them
+      // into the entity's existing metadata field-by-field, so other
+      // fields (title, content, etc.) are preserved.
+      await adapter.updateEntity({
+        nodeId: entityId,
         properties: {
           metadata: {
-            ...metadata,
             success_count: successCount,
             failure_count: failureCount,
             success_rate: successRate,
@@ -358,13 +341,8 @@ async function updateAppliedLearningsOutcome(
             application_history: updatedHistory,
           },
         },
-      };
-
-      await outcomeClient.request(
-        "PATCH",
-        `/graph/nodes/${entityId}`,
-        updateData,
-      );
+        modes: {},
+      });
 
       logger.debug(
         { entityId, outcome: outcomeValue, successRate },

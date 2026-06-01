@@ -6,6 +6,12 @@
  *
  * Follows Single Responsibility Principle: handles only API communication.
  * Dependency Inversion: consumers depend on this abstraction, not axios directly.
+ *
+ * DEPRECATED (AGI-227): this legacy direct-HTTP path is no longer wired
+ * into any runtime caller. `knowledge-formation.ts` migrated to the
+ * workspace-bound graph-memory adapter. The module is kept (valid +
+ * still unit-tested) but MUST NOT be expanded — it has no workspace
+ * scoping. Reach graph memory via `getMemoryAdapter()` instead.
  */
 
 import axios from "axios";

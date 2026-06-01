@@ -33,8 +33,11 @@ import {
   type UpdateEntityStatusInput,
 } from "../vendor/svc-rpc/graph-memory/tool-handlers.js";
 import type { StoredEntityShape } from "../vendor/svc-rpc/graph-memory/entity-shape.js";
-import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
-import { SiadGraphMemoryAdapter } from "./siad-graph-memory-adapter.js";
+import {
+  getMemoryAdapter as getAdapter,
+  _resetMemoryAdapterForTests,
+  _setMemoryAdapterForTests,
+} from "./memory-adapter.js";
 import {
   rerankEntities,
   rerankEntitiesWithScores,
@@ -44,6 +47,10 @@ import {
 import { processQueryWithHyDE } from "../utils/hyde.js";
 import { processQueryWithDecomposition } from "../utils/query-decomposition.js";
 import { getConfig } from "../config/index.js";
+
+// Re-exported for back-compat: existing memory-tools tests import these
+// seams from this module. The implementation now lives in `memory-adapter`.
+export { _resetMemoryAdapterForTests, _setMemoryAdapterForTests };
 
 /**
  * Search-result entity as carried inside `searchEntitiesTool`. Decomposition
@@ -58,46 +65,6 @@ type SearchResultEntity = RetrievedEntity & {
   matchedSubQueries?: string[];
   boostScore?: number;
 };
-
-/* ------------------------------------------------------------------------- */
-/* Adapter lifecycle                                                         */
-/* ------------------------------------------------------------------------- */
-
-let cachedAdapter: IGraphMemoryAdapter | null = null;
-
-function getAdapter(): IGraphMemoryAdapter {
-  if (cachedAdapter) return cachedAdapter;
-
-  const workspaceId = getConfig().runtime.workspaceId;
-  if (!workspaceId) {
-    if (process.env.SIA_LEGACY_UNSCOPED === "1") {
-      throw new Error(
-        "memory-tools: SIA_WORKSPACE_ID is unset AND SIA_LEGACY_UNSCOPED=1 — " +
-          "graph-memory has no unscoped path; remove SIA_LEGACY_UNSCOPED or " +
-          "set SIA_WORKSPACE_ID.",
-      );
-    }
-    throw new Error(
-      "memory-tools: SIA_WORKSPACE_ID is required. The host process must " +
-        "stamp it on the agent at spawn time.",
-    );
-  }
-
-  cachedAdapter = new SiadGraphMemoryAdapter({ workspaceId });
-  return cachedAdapter;
-}
-
-/** Test seam. Reset the cached adapter so the next call re-reads config. */
-export function _resetMemoryAdapterForTests(): void {
-  cachedAdapter = null;
-}
-
-/** Test seam. Inject a stub adapter (e.g. mock IGraphMemoryAdapter). */
-export function _setMemoryAdapterForTests(
-  adapter: IGraphMemoryAdapter | null,
-): void {
-  cachedAdapter = adapter;
-}
 
 /* ------------------------------------------------------------------------- */
 /* store_entity                                                              */
