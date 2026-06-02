@@ -75,14 +75,11 @@ silently — the agent runs normally without telemetry. Full contract:
 
 ### Graph memory
 
-If unset, defaults to `http://localhost:8080`. Tool calls fail at call
-time when the backend is unreachable; no boot-time validation.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `GRAPH_MEMORY_API` | unset | Full URL override (takes precedence over host + port). |
-| `GRAPH_MEMORY_HOST` | `localhost` | Backend host. |
-| `GRAPH_MEMORY_PORT` | `8080` | Backend port. |
+Graph memory is reached through the host daemon adapter
+(`SiadGraphMemoryAdapter`), which carries its own endpoint and the agent's
+workspace scope. There are no graph-memory env vars to set — the legacy
+`GRAPH_MEMORY_API`/`GRAPH_MEMORY_HOST`/`GRAPH_MEMORY_PORT` contract was retired
+in AGI-232.
 
 ### Web search
 

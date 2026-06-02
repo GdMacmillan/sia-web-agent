@@ -39,25 +39,28 @@ backend supplied by the host:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The agent points at the backend via env (see [Configuration](#configuration)).
-The reference backend implementation lives in the sia-web monorepo
-(`packages/graph-memory`, a Go service on port 8080 backed by BadgerDB
-LSM-tree storage with ZSTD compression and a write-ahead log). Any
-service that honors the REST surface described in
-[REST API reference](#rest-api-reference) is sufficient.
+The agent reaches the backend through the host daemon adapter (see
+[Configuration](#configuration)). The reference backend implementation lives in
+the sia-web monorepo (`packages/graph-memory`, a Go service on port 8080 backed
+by BadgerDB LSM-tree storage with ZSTD compression and a write-ahead log), run
+as a centrally-hosted, internal-only service. The REST surface described in
+[REST API reference](#rest-api-reference) documents that backend's HTTP API.
 
 ## Configuration
 
-The agent reads these env vars at boot:
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `GRAPH_MEMORY_HOST` | Backend host. | `localhost` |
-| `GRAPH_MEMORY_PORT` | Backend port. | `8080` |
-| `GRAPH_MEMORY_API` | Full URL override (takes precedence over host+port). | unset |
+The agent does not read any graph-memory env vars. It reaches graph memory via
+`SiadGraphMemoryAdapter` (`src/tools/siad-graph-memory-adapter.ts`), which routes
+through the host daemon with the agent's workspace scope already bound. The
+legacy `GRAPH_MEMORY_API`/`GRAPH_MEMORY_HOST`/`GRAPH_MEMORY_PORT` contract was
+retired in AGI-232.
 
 If the backend is unreachable, memory tool calls fail at call time with
-an HTTP error. The agent does not pre-validate connectivity at boot.
+an error. The agent does not pre-validate connectivity at boot.
+
+> The `${GRAPH_MEMORY_HOST}:${GRAPH_MEMORY_PORT}` placeholders in the curl
+> examples below are just shell stand-ins for wherever a graph-memory binary is
+> listening when you exercise the HTTP API directly in local dev — they are not
+> read by the agent.
 
 ## Data model
 

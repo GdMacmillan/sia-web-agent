@@ -21,8 +21,11 @@ const shouldRunIntegration = process.env.RUN_INTEGRATION === "true";
 const describeIntegration = shouldRunIntegration ? describe : describe.skip;
 
 describeIntegration("Memory Abstraction Layers Integration", () => {
+  // Direct-HTTP integration probe against a locally-running graph-memory
+  // binary. Uses a test-only var (the GRAPH_MEMORY_* runtime contract was
+  // retired in AGI-232 — the agent reaches graph memory via the siad adapter).
   const GRAPH_MEMORY_API =
-    process.env.GRAPH_MEMORY_API || "http://localhost:8080";
+    process.env.TEST_GRAPH_MEMORY_URL || "http://localhost:8080";
   const TEST_CONTEXT = "integration-test-abstraction";
 
   // Store created entity IDs for cleanup
@@ -80,7 +83,7 @@ describeIntegration("Memory Abstraction Layers Integration", () => {
     if (!health.success) {
       throw new Error(
         `Graph-memory server not accessible at ${GRAPH_MEMORY_API}. ` +
-          `Start with: yarn graph-db:start`,
+          `Run a local graph-memory binary and set TEST_GRAPH_MEMORY_URL.`,
       );
     }
   });

@@ -10,7 +10,7 @@
 
 export default async function globalTeardown() {
   const GRAPH_MEMORY_API =
-    process.env.GRAPH_MEMORY_API || "http://localhost:8080";
+    process.env.TEST_GRAPH_MEMORY_URL || "http://localhost:8080";
 
   try {
     const response = await fetch(`${GRAPH_MEMORY_API}/admin/bulk-delete`, {
