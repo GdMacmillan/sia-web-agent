@@ -148,12 +148,15 @@ Highest to lowest:
 
 ### Services
 
-| Variable            | Default     | Description               |
-| ------------------- | ----------- | ------------------------- |
-| `TAVILY_API_KEY`    | (empty)     | Tavily web search API key |
-| `GRAPH_MEMORY_API`  | (empty)     | Full memory API URL       |
-| `GRAPH_MEMORY_HOST` | `localhost` | Memory server hostname    |
-| `GRAPH_MEMORY_PORT` | `8080`      | Memory server port        |
+| Variable         | Default | Description               |
+| ---------------- | ------- | ------------------------- |
+| `TAVILY_API_KEY` | (empty) | Tavily web search API key |
+
+> Graph memory is reached through the host daemon adapter
+> (`SiadGraphMemoryAdapter`), not a direct HTTP URL — the adapter carries the
+> endpoint and the agent's workspace scope. The legacy
+> `GRAPH_MEMORY_API`/`GRAPH_MEMORY_HOST`/`GRAPH_MEMORY_PORT` contract was retired
+> in AGI-232.
 
 ### Runtime
 

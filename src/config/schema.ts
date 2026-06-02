@@ -199,16 +199,6 @@ export interface ServicesConfig {
     /** Tavily API key for web search */
     apiKey: string;
   };
-  graphMemory: {
-    /** Full API URL (overrides host/port if set) */
-    apiUrl: string;
-    /** Hostname (default: localhost) */
-    host: string;
-    /** Port (default: 8080) */
-    port: string;
-    /** Resolved base URL */
-    baseUrl: string;
-  };
 }
 
 // ============================================================================

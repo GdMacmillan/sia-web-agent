@@ -309,20 +309,9 @@ function loadMiddlewareConfig(): MiddlewareConfig {
 // ============================================================================
 
 function loadServicesConfig(): ServicesConfig {
-  const apiUrl = env("GRAPH_MEMORY_API") || "";
-  const host = env("GRAPH_MEMORY_HOST") || "localhost";
-  const port = env("GRAPH_MEMORY_PORT") || "8080";
-  const baseUrl = apiUrl || `http://${host}:${port}`;
-
   return {
     tavily: {
       apiKey: env("TAVILY_API_KEY") || "",
-    },
-    graphMemory: {
-      apiUrl,
-      host,
-      port,
-      baseUrl,
     },
   };
 }

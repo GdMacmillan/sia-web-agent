@@ -74,9 +74,6 @@ beforeEach(() => {
 
   // Clear services env vars
   delete process.env.TAVILY_API_KEY;
-  delete process.env.GRAPH_MEMORY_API;
-  delete process.env.GRAPH_MEMORY_HOST;
-  delete process.env.GRAPH_MEMORY_PORT;
 
   // Clear runtime env vars
   delete process.env.LOG_LEVEL;
@@ -541,44 +538,6 @@ describe("loadConfig", () => {
       const config = loadConfig();
 
       expect(config.services.tavily.apiKey).toBe("");
-    });
-
-    it("builds graph memory URL from host and port defaults", () => {
-      process.env.OPENROUTER_API_KEY = "sk-key";
-
-      const config = loadConfig();
-
-      expect(config.services.graphMemory.host).toBe("localhost");
-      expect(config.services.graphMemory.port).toBe("8080");
-      expect(config.services.graphMemory.baseUrl).toBe("http://localhost:8080");
-    });
-
-    it("uses GRAPH_MEMORY_API when set (overrides host/port)", () => {
-      process.env.OPENROUTER_API_KEY = "sk-key";
-      process.env.GRAPH_MEMORY_API = "https://memory.example.com";
-
-      const config = loadConfig();
-
-      expect(config.services.graphMemory.apiUrl).toBe(
-        "https://memory.example.com",
-      );
-      expect(config.services.graphMemory.baseUrl).toBe(
-        "https://memory.example.com",
-      );
-    });
-
-    it("allows custom host and port", () => {
-      process.env.OPENROUTER_API_KEY = "sk-key";
-      process.env.GRAPH_MEMORY_HOST = "memory-server";
-      process.env.GRAPH_MEMORY_PORT = "9090";
-
-      const config = loadConfig();
-
-      expect(config.services.graphMemory.host).toBe("memory-server");
-      expect(config.services.graphMemory.port).toBe("9090");
-      expect(config.services.graphMemory.baseUrl).toBe(
-        "http://memory-server:9090",
-      );
     });
   });
 
