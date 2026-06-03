@@ -1,0 +1,36 @@
+version: 2
+updates:
+  # JS/TS dependencies (Yarn, single package)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      langchain:
+        patterns:
+          - "@langchain/*"
+          - "langchain"
+          - "langsmith"
+      testing:
+        patterns:
+          - "jest"
+          - "babel-jest"
+          - "ts-jest"
+          - "@jest/*"
+          - "@types/jest"
+      eslint:
+        patterns:
+          - "eslint"
+          - "@eslint/*"
+          - "eslint-plugin-*"
+          - "typescript-eslint"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions used by the release workflow
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
