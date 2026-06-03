@@ -29,7 +29,7 @@
     "@langchain/openai": "1.4.5",
     "@langchain/openrouter": "0.2.4",
     "@tavily/core": "0.7.2",
-    "@vscode/ripgrep": "1.17.1",
+    "@vscode/ripgrep": "1.18.0",
     "axios": "1.13.5",
     "dotenv": "17.4.1",
     "fast-glob": "3.3.1",
