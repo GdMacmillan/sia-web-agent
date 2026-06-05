@@ -185,6 +185,15 @@ describe("HyDE", () => {
       expect(result.document).toBeDefined();
       expect(result.document).toContain("Hypothetical document");
       expect(result.cached).toBe(false);
+
+      // AGI-312: the usage-envelope callback handler is attached so this
+      // side-channel call emits a raw usage row.
+      const config0 = mockInvoke.mock.calls[0]?.[1] as
+        | { callbacks?: Array<{ name?: string }> }
+        | undefined;
+      expect(config0?.callbacks?.[0]?.name).toBe(
+        "usageEnvelopeCallbackHandler",
+      );
     });
 
     it("should cache the generated document", async () => {
