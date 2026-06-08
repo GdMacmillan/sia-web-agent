@@ -11,6 +11,7 @@ import { LRUCache } from "./lru-cache.js";
 import { logger } from "./logger.js";
 import { createMemoryModel } from "../config/model-config.js";
 import { processQueryWithHyDE, type HyDEResult } from "./hyde.js";
+import { createUsageEnvelopeCallbackHandler } from "../middleware/usage-callback-handler.js";
 
 // ============================================================================
 // Configuration
@@ -383,7 +384,10 @@ export async function decomposeQuery(
     const model = await createMemoryModel();
     const prompt = config.promptTemplate.replace("{query}", query);
 
-    const response = await model.invoke(prompt);
+    // Emit raw token usage for this side-channel LLM call (AGI-312).
+    const response = await model.invoke(prompt, {
+      callbacks: [createUsageEnvelopeCallbackHandler()],
+    });
     const responseText = response.content.toString();
 
     // Parse JSON response
