@@ -1,6 +1,6 @@
 {
   "name": "@sia-web/agent",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "SIA agent runtime — a LangGraph deep-agent with prompts, skills, and tool middleware. Extracted from sia-web.",
   "license": "MIT",
   "type": "module",
