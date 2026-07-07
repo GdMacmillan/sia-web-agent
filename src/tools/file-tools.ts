@@ -8,30 +8,38 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import * as fs from "fs/promises";
-import { existsSync } from "fs";
 import * as path from "path";
 import { spawn } from "child_process";
-// eslint-disable-next-line import/no-extraneous-dependencies
-import { rgPath } from "@vscode/ripgrep";
+import { detectEol, toLf, toEol } from "../utils/eol.js";
+import { resolveRipgrep } from "../utils/fs-compat.js";
 
 /**
- * Validate that file path is within project root (prevent directory traversal)
+ * Validate that a file path is within the project root (prevent traversal).
+ *
+ * Uses the same cross-platform containment algorithm as
+ * `validatePathInProject` (path.relative + `..`), which is correct across
+ * drive-letter case, sibling-prefix paths, and separator differences — unlike
+ * the previous `startsWith(projectRoot)` test.
+ *
+ * Exported for unit testing of the containment behavior.
  */
-function validatePath(filePath: string, projectRoot: string): string {
-  // Convert to absolute path
+export function validatePath(filePath: string, projectRoot: string): string {
+  // Convert to an absolute, normalized path.
   const absolute = path.isAbsolute(filePath)
     ? filePath
-    : path.join(projectRoot, filePath);
+    : // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- containment enforced by the path.relative check below.
+      path.join(projectRoot, filePath);
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- containment enforced by the path.relative check below.
+  const resolved = path.resolve(absolute);
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- resolving the trusted root for the containment comparison.
+  const resolvedRoot = path.resolve(projectRoot);
 
-  // Normalize to resolve .. and . segments
-  const normalized = path.normalize(absolute);
-
-  // Ensure path is within project root
-  if (!normalized.startsWith(projectRoot)) {
+  const rel = path.relative(resolvedRoot, resolved);
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
     throw new Error(`Path outside project root not allowed: ${filePath}`);
   }
 
-  return normalized;
+  return resolved;
 }
 
 /**
@@ -97,18 +105,7 @@ function runRipgrep(
     let output = "";
     let errorOutput = "";
 
-    // Try bundled ripgrep first, fallback to system 'rg' if bundled fails
-    let rgCommand = rgPath;
-    try {
-      // Check if bundled rgPath exists
-      if (!existsSync(rgPath)) {
-        rgCommand = "rg"; // Use system ripgrep
-      }
-    } catch {
-      rgCommand = "rg"; // Use system ripgrep on any error
-    }
-
-    const child = spawn(rgCommand, args);
+    const child = spawn(resolveRipgrep(), args);
 
     child.stdout?.on("data", (data) => {
       output += data.toString();
@@ -144,8 +141,9 @@ function generateUnifiedDiff(
   newContent: string,
   filePath: string,
 ): string {
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
+  // Normalize EOL for a clean, line-ending-agnostic diff view.
+  const oldLines = toLf(oldContent).split("\n");
+  const newLines = toLf(newContent).split("\n");
 
   const diff: string[] = [];
   diff.push(`--- a/${filePath}`);
@@ -324,7 +322,11 @@ Working directory: ${projectRoot}`,
         ),
       replacedSnippet: z.string().describe("New text to replace with"),
     }),
-    func: async ({ filePath, originalSnippet, replacedSnippet }) => {
+    func: async ({
+      filePath,
+      originalSnippet: originalSnippetRaw,
+      replacedSnippet: replacedSnippetRaw,
+    }) => {
       try {
         const absolutePath = validatePath(filePath, projectRoot);
 
@@ -345,8 +347,14 @@ Use file_create to create a new file, or check the file path.`;
           return `Error: You must read the file before editing it. Use file_read first to see the exact content and formatting.`;
         }
 
-        // Read current content
-        const content = await fs.readFile(absolutePath, "utf-8");
+        // Read current content. Match/replace on an LF-normalized copy so a
+        // CRLF checkout still matches an LF snippet; the file's original EOL is
+        // restored on write so its line-ending style is preserved.
+        const rawContent = await fs.readFile(absolutePath, "utf-8");
+        const fileEol = detectEol(rawContent);
+        const content = toLf(rawContent);
+        const originalSnippet = toLf(originalSnippetRaw);
+        const replacedSnippet = toLf(replacedSnippetRaw);
 
         // Verify snippet exists
         if (!content.includes(originalSnippet)) {
@@ -377,13 +385,14 @@ File preview: ${clipOutput(preview, 300)}`;
           return `Error: Found ${occurrences} occurrences in ${filePath}. Provide larger snippet with surrounding context to match uniquely.`;
         }
 
-        // Replace (only first occurrence)
-        const newContent = content.replace(originalSnippet, replacedSnippet);
+        // Replace (only first occurrence) on the normalized content.
+        const newContentLf = content.replace(originalSnippet, replacedSnippet);
 
-        // Generate unified diff
-        const diff = generateUnifiedDiff(content, newContent, filePath);
+        // Generate unified diff from the normalized (LF) forms.
+        const diff = generateUnifiedDiff(content, newContentLf, filePath);
 
-        // Write new content
+        // Restore the file's original EOL style before writing back.
+        const newContent = toEol(newContentLf, fileEol);
         await fs.writeFile(absolutePath, newContent, "utf-8");
 
         // Clip output

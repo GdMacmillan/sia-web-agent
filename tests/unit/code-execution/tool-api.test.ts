@@ -284,8 +284,9 @@ describe("IPC Bridge", () => {
   describe("generateSocketPath", () => {
     it("should generate valid socket path", () => {
       const path = generateSocketPath(tmpDir, "thread-123");
-      // Socket paths are now in /tmp to avoid length issues
-      expect(path).toContain("/tmp/code-exec-");
+      // Sockets live under the OS temp dir (platform-dependent, not always /tmp).
+      expect(path.startsWith(tmpdir())).toBe(true);
+      expect(path).toContain("code-exec-");
       expect(path).toContain("thread-123");
       expect(path).toContain(".sock");
     });

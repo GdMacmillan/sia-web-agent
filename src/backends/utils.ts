@@ -6,10 +6,10 @@
  * enable composition without fragile string parsing.
  */
 
-// eslint-disable-next-line import/no-extraneous-dependencies
 import micromatch from "micromatch";
 import { basename } from "path";
 import type { FileData, GrepMatch } from "./protocol.js";
+import { detectEol, toLf, toEol } from "../utils/eol.js";
 
 // Constants
 export const EMPTY_CONTENT_WARNING =
@@ -44,12 +44,16 @@ export function formatContentWithLineNumbers(
 ): string {
   let lines: string[];
   if (typeof content === "string") {
-    lines = content.split("\n");
+    // Normalize CRLF so display/line-numbering doesn't carry a trailing \r.
+    lines = toLf(content).split("\n");
     if (lines.length > 0 && lines[lines.length - 1] === "") {
       lines = lines.slice(0, -1);
     }
   } else {
-    lines = content;
+    // Array inputs may originate from a raw `split("\n")` on CRLF content.
+    lines = content.map((line) =>
+      line.endsWith("\r") ? line.slice(0, -1) : line,
+    );
   }
 
   const resultLines: string[] = [];
@@ -192,8 +196,16 @@ export function performStringReplacement(
   newString: string,
   replaceAll: boolean,
 ): [string, number] | string {
+  // Match/replace on an LF-normalized copy so a CRLF file still matches an LF
+  // oldString; detect the file's dominant EOL and restore it on the result so
+  // line-ending style is preserved (no silent LF/CRLF mixing).
+  const eol = detectEol(content);
+  const normContent = toLf(content);
+  const normOld = toLf(oldString);
+  const normNew = toLf(newString);
+
   // Use split to count occurrences (simpler than regex)
-  const occurrences = content.split(oldString).length - 1;
+  const occurrences = normContent.split(normOld).length - 1;
 
   if (occurrences === 0) {
     return `Error: String not found in file: '${oldString}'`;
@@ -205,7 +217,7 @@ export function performStringReplacement(
 
   // Python's str.replace() replaces ALL occurrences
   // Use split/join for consistent behavior
-  const newContent = content.split(oldString).join(newString);
+  const newContent = toEol(normContent.split(normOld).join(normNew), eol);
 
   return [newContent, occurrences];
 }
@@ -239,6 +251,10 @@ export function truncateIfTooLong(
 
 /**
  * Validate and normalize a path.
+ *
+ * Invariant: this operates on virtual, `/`-rooted keys of the in-memory file
+ * map — NOT real filesystem paths — so POSIX `/` separators are correct by
+ * design here and must not be "fixed" to platform separators.
  *
  * @param path - Path to validate
  * @returns Normalized path starting with / and ending with /
@@ -382,6 +398,7 @@ export function grepSearchFiles(
 ): string {
   let regex: RegExp;
   try {
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- user-supplied grep pattern is the intended search API surface.
     regex = new RegExp(pattern);
   } catch (e: any) {
     return `Invalid regex pattern: ${e.message}`;
@@ -409,7 +426,8 @@ export function grepSearchFiles(
   const results: Record<string, Array<[number, string]>> = {};
   for (const [filePath, fileData] of Object.entries(filtered)) {
     for (let i = 0; i < fileData.content.length; i++) {
-      const line = fileData.content[i];
+      // Strip a trailing \r so $-anchored patterns and previews behave on CRLF.
+      const line = fileData.content[i].replace(/\r$/, "");
       const lineNum = i + 1;
       if (regex.test(line)) {
         if (!results[filePath]) {
@@ -443,6 +461,7 @@ export function grepMatchesFromFiles(
 ): GrepMatch[] | string {
   let regex: RegExp;
   try {
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- user-supplied grep pattern is the intended search API surface.
     regex = new RegExp(pattern);
   } catch (e: any) {
     return `Invalid regex pattern: ${e.message}`;
@@ -470,7 +489,8 @@ export function grepMatchesFromFiles(
   const matches: GrepMatch[] = [];
   for (const [filePath, fileData] of Object.entries(filtered)) {
     for (let i = 0; i < fileData.content.length; i++) {
-      const line = fileData.content[i];
+      // Strip a trailing \r so $-anchored patterns and previews behave on CRLF.
+      const line = fileData.content[i].replace(/\r$/, "");
       const lineNum = i + 1;
       if (regex.test(line)) {
         matches.push({ path: filePath, line: lineNum, text: line });

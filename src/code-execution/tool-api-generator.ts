@@ -22,7 +22,7 @@
  */
 
 import { mkdirSync, writeFileSync, existsSync } from "fs";
-import { join, resolve } from "path";
+import { join, resolve, relative, isAbsolute, sep } from "path";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { ZodObject, ZodTypeAny } from "zod";
 import { logger } from "../utils/logger.js";
@@ -640,6 +640,7 @@ export async function generateToolAPIs(
   const { tools, outputDir, ipcSocketPath } = options;
 
   // Resolve outputDir to an absolute path for containment checks
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- outputDir is a host-derived workspace path; every derived path is checked by assertPathContained.
   const resolvedOutputDir = resolve(outputDir);
 
   /**
@@ -647,11 +648,13 @@ export async function generateToolAPIs(
    * Throws if the path escapes the output directory boundary.
    */
   function assertPathContained(filePath: string): void {
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- this IS the containment guard; the relative check below rejects escapes.
     const resolvedPath = resolve(filePath);
-    if (
-      !resolvedPath.startsWith(resolvedOutputDir + "/") &&
-      resolvedPath !== resolvedOutputDir
-    ) {
+    // Cross-platform containment via path.relative: the previous
+    // `startsWith(resolvedOutputDir + "/")` rejected every Windows path (which
+    // uses `\`) and mishandled sibling-prefix directories.
+    const rel = relative(resolvedOutputDir, resolvedPath);
+    if (rel !== "" && (rel.startsWith(".." + sep) || rel === ".." || isAbsolute(rel))) {
       throw new Error(
         `Path traversal detected: ${filePath} resolves outside ${resolvedOutputDir}`,
       );
@@ -682,6 +685,7 @@ export async function generateToolAPIs(
   }
 
   // Generate runtime module
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- validated by assertPathContained immediately below.
   const runtimePath = join(resolvedOutputDir, "_runtime.ts");
   assertPathContained(runtimePath);
   const runtimeContent = generateRuntimeModule(ipcSocketPath);
@@ -689,6 +693,7 @@ export async function generateToolAPIs(
 
   // Generate category directories and tool modules
   for (const [category, categoryTools] of categories) {
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- validated by assertPathContained immediately below.
     const categoryDir = join(resolvedOutputDir, category);
     assertPathContained(categoryDir);
     if (!existsSync(categoryDir)) {
@@ -710,6 +715,7 @@ export async function generateToolAPIs(
           tool.description || "",
           schema as ZodObject<any>,
         );
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- validated by assertPathContained immediately below.
         const modulePath = join(categoryDir, `${name}.ts`);
         assertPathContained(modulePath);
         writeFileSync(modulePath, moduleContent);
@@ -726,6 +732,7 @@ export async function generateToolAPIs(
         functionName: t.functionName,
       })),
     );
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- validated by assertPathContained immediately below.
     const categoryIndexPath = join(categoryDir, "index.ts");
     assertPathContained(categoryIndexPath);
     writeFileSync(categoryIndexPath, categoryIndex);
@@ -740,6 +747,7 @@ export async function generateToolAPIs(
       ]),
     ),
   );
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- validated by assertPathContained immediately below.
   const mainIndexPath = join(resolvedOutputDir, "index.ts");
   assertPathContained(mainIndexPath);
   writeFileSync(mainIndexPath, mainIndex);

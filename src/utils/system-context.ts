@@ -9,6 +9,7 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { release } from "node:os";
 import { getProjectRoot } from "./path-utils.js";
 
 /**
@@ -60,6 +61,9 @@ function getPlatformInfo(): { platform: string; version: string } {
         encoding: "utf-8",
       }).trim();
       version = `${productName} Version ${productVersion}`;
+    } else if (process.platform === "win32") {
+      // `uname` isn't available on Windows; use the kernel release directly.
+      version = `Windows ${release()}`;
     } else {
       version = execSync("uname -r", { encoding: "utf-8" }).trim();
     }
