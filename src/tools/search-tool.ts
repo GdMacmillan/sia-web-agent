@@ -11,10 +11,8 @@
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { existsSync } from "fs";
 import { spawn } from "child_process";
-// eslint-disable-next-line import/no-extraneous-dependencies
-import { rgPath } from "@vscode/ripgrep";
+import { resolveRipgrep } from "../utils/fs-compat.js";
 
 /**
  * Clip long strings to prevent token overflow
@@ -65,18 +63,7 @@ function runRipgrep(
     let output = "";
     let errorOutput = "";
 
-    // Try bundled ripgrep first, fallback to system 'rg' if bundled fails
-    let rgCommand = rgPath;
-    try {
-      // Check if bundled rgPath exists
-      if (!existsSync(rgPath)) {
-        rgCommand = "rg"; // Use system ripgrep
-      }
-    } catch {
-      rgCommand = "rg"; // Use system ripgrep on any error
-    }
-
-    const child = spawn(rgCommand, args);
+    const child = spawn(resolveRipgrep(), args);
 
     child.stdout?.on("data", (data) => {
       output += data.toString();

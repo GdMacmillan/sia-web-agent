@@ -21,6 +21,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
 /**
  * Cached project root to avoid repeated lookups
@@ -54,6 +55,7 @@ function findMonorepoRoot(startDir: string): string | null {
   let current = startDir;
 
   while (current !== path.dirname(current)) {
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- internal upward directory walk from a known dir; not attacker-controlled input.
     const packageJsonPath = path.join(current, "package.json");
     try {
       if (
@@ -82,6 +84,7 @@ function findGitRoot(startDir: string): string | null {
   let current = startDir;
 
   while (current !== path.dirname(current)) {
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- internal upward directory walk from a known dir; not attacker-controlled input.
     const gitPath = path.join(current, ".git");
     try {
       if (fs.existsSync(gitPath)) {
@@ -110,6 +113,7 @@ export function findProjectRootByMarker(startDir: string): string | null {
   while (current !== path.dirname(current)) {
     // Check for marker files in priority order
     for (const marker of MARKER_FILES) {
+      // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- internal upward directory walk over a fixed marker list; not attacker-controlled input.
       const markerPath = path.join(current, marker);
       try {
         if (fs.existsSync(markerPath)) {
@@ -165,8 +169,11 @@ export function findProjectRootFromModule(): string | null {
       return null;
     }
 
+    // Use fileURLToPath so Windows file URLs (file:///C:/…) resolve to a valid
+    // native path; naive "file://" stripping leaves a leading-slash artifact
+    // (/C:/…) that breaks the module-location strategy on Windows.
     const currentFilePath = currentFileUrl.startsWith("file://")
-      ? currentFileUrl.slice("file://".length)
+      ? fileURLToPath(currentFileUrl)
       : currentFileUrl;
 
     const moduleDir = path.dirname(currentFilePath);
@@ -277,6 +284,7 @@ export function resolveProjectPath(filePath: string): string {
   if (path.isAbsolute(filePath)) {
     return filePath;
   }
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- resolves a project-relative path against the resolved project root; callers validate containment via validatePathInProject.
   return path.join(getProjectRoot(), filePath);
 }
 
@@ -337,7 +345,7 @@ export function getPathDiagnostics(): {
     const url = getImportMetaUrl();
     if (url) {
       moduleDir = path.dirname(
-        url.startsWith("file://") ? url.slice("file://".length) : url,
+        url.startsWith("file://") ? fileURLToPath(url) : url,
       );
     }
   } catch {
@@ -398,6 +406,7 @@ export function validatePathInProject(targetPath: string): void {
   const projectRoot = getProjectRoot();
 
   // Resolve the path to an absolute path
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- this function resolves then enforces project containment below (throws if outside root).
   const resolved = path.resolve(targetPath);
 
   // Check if resolved path is within project root
@@ -457,10 +466,12 @@ export function isPathInProject(targetPath: string): boolean {
 export function resolveAndValidate(inputPath: string): string {
   const projectRoot = getProjectRoot();
 
-  // Resolve path (absolute paths stay absolute, relative resolve from project root)
+  // Resolve path (absolute paths stay absolute, relative resolve from project root).
+  // Validated by validatePathInProject immediately below (throws if outside root).
   const resolved = path.isAbsolute(inputPath)
     ? inputPath
-    : path.join(projectRoot, inputPath);
+    : // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- resolved value validated below.
+      path.join(projectRoot, inputPath);
 
   // Validate the resolved path is within project
   validatePathInProject(resolved);

@@ -15,6 +15,8 @@
 import { spawn, type ChildProcess } from "child_process";
 import { mkdirSync, existsSync, rmSync } from "fs";
 import { join } from "path";
+import { pathToFileURL } from "url";
+import { sanitizePathSegment } from "../utils/fs-compat.js";
 
 /** Maximum output size in characters before truncation */
 const MAX_OUTPUT_CHARS = 30000;
@@ -41,6 +43,34 @@ export function clipOutput(
 ): string {
   if (content.length <= maxChars) return content;
   return content.slice(0, maxChars) + "\n\n...[output truncated at 30KB]...";
+}
+
+/**
+ * Resolve how to invoke tsx on this machine.
+ *
+ * Prefers running tsx's CLI entry directly with the current Node binary. This
+ * avoids the `.bin/tsx` shim (a `.cmd` batch file on Windows that cannot be
+ * spawned without a shell — and routing `--eval` code through a shell would
+ * corrupt it) and any reliance on `npx`/PATH. tsx is a direct dependency, so
+ * its CLI is present once dependencies are installed on-device.
+ *
+ * @param projectRoot - The project root whose node_modules to resolve from
+ * @returns The command + fixed leading args to spawn, or null if tsx is absent
+ */
+function resolveTsxCommand(
+  projectRoot: string,
+): { command: string; args: string[] } | null {
+  // Fall back to cwd when no project root is given (mirrors the old spawn
+  // cwd-default). Both are trusted host paths.
+  const roots = [projectRoot, process.cwd()].filter(Boolean);
+  for (const root of roots) {
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- root is trusted host config, joined with a fixed literal path.
+    const cliEntry = join(root, "node_modules", "tsx", "dist", "cli.mjs");
+    if (existsSync(cliEntry)) {
+      return { command: process.execPath, args: [cliEntry] };
+    }
+  }
+  return null;
 }
 
 /**
@@ -72,8 +102,11 @@ export class CodeExecutionSession {
   private isExecuting = false;
 
   constructor(threadId: string, baseWorkspaceDir: string, projectRoot: string) {
+    // Sanitize the thread id into a safe path segment: a LangGraph thread id
+    // can contain characters that are invalid in a Windows directory name
+    // (e.g. `:` from ISO timestamps) or traversal sequences (`..`).
     // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
-    this.workspaceDir = join(baseWorkspaceDir, threadId);
+    this.workspaceDir = join(baseWorkspaceDir, sanitizePathSegment(threadId));
     this.projectRoot = projectRoot;
     this.ensureWorkspaceDir();
   }
@@ -141,16 +174,22 @@ export class CodeExecutionSession {
    */
   private rewriteToolsApiImports(code: string): string {
     const absoluteToolsApiPath = join(this.workspaceDir, "tools-api");
+    // ESM import specifiers must be a file URL (or forward-slash path) — a raw
+    // absolute Windows path (C:\...) is an invalid specifier and its
+    // backslashes are string-escape sequences. A file:// URL is valid on every
+    // platform; `require` accepts forward-slash paths.
+    const toolsApiImportBase = pathToFileURL(absoluteToolsApiPath).href;
+    const toolsApiRequireBase = absoluteToolsApiPath.replace(/\\/g, "/");
     // Rewrite various import patterns:
     // - from './tools-api/...'
     // - from "./tools-api/..."
     // - require('./tools-api/...')
     // - require("./tools-api/...")
     return code
-      .replace(/from\s+['"]\.\/tools-api\//g, `from '${absoluteToolsApiPath}/`)
+      .replace(/from\s+['"]\.\/tools-api\//g, `from '${toolsApiImportBase}/`)
       .replace(
         /require\s*\(\s*['"]\.\/tools-api\//g,
-        `require('${absoluteToolsApiPath}/`,
+        `require('${toolsApiRequireBase}/`,
       );
   }
 
@@ -167,12 +206,24 @@ export class CodeExecutionSession {
       // Rewrite ./tools-api/ imports to absolute paths so they work from projectRoot
       const processedCode = this.rewriteToolsApiImports(code);
 
-      // Spawn tsx with --eval to execute code directly
-      // Use npx to ensure tsx is found from node_modules
-      // cwd is projectRoot so relative file paths (like ./data.csv) work naturally
+      // Resolve tsx on-device (cross-platform, no npx/PATH/.cmd-shim reliance).
+      const tsx = resolveTsxCommand(this.projectRoot);
+      if (!tsx) {
+        resolve({
+          output:
+            "Error: tsx runtime not found under node_modules. Install dependencies on this machine before using execute_code.",
+          exitCode: 1,
+          timedOut: false,
+          error: "tsx not found",
+        });
+        return;
+      }
+
+      // Spawn tsx with --eval to execute code directly.
+      // cwd is projectRoot so relative file paths (like ./data.csv) work naturally.
       const tsxProcess: ChildProcess = spawn(
-        "npx",
-        ["tsx", "--eval", processedCode],
+        tsx.command,
+        [...tsx.args, "--eval", processedCode],
         {
           cwd: this.projectRoot,
           env: {

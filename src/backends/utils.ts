@@ -6,10 +6,48 @@
  * enable composition without fragile string parsing.
  */
 
-// eslint-disable-next-line import/no-extraneous-dependencies
 import micromatch from "micromatch";
+import safeRegex from "safe-regex";
 import { basename } from "path";
 import type { FileData, GrepMatch } from "./protocol.js";
+import { detectEol, toLf, toEol } from "../utils/eol.js";
+
+/** Max accepted length of a caller-supplied grep/search regex pattern. */
+const MAX_REGEX_PATTERN_LENGTH = 1000;
+
+/**
+ * Compile a caller-supplied regex pattern with ReDoS guards.
+ *
+ * Grep/search patterns come from the calling agent, so a pathological pattern
+ * (catastrophic backtracking) could otherwise pin the single-threaded event
+ * loop. This rejects over-long patterns and patterns that static analysis flags
+ * as unsafe before compiling. `limit: 1000` keeps normal bounded repetitions
+ * (e.g. `\d{1,100}`) usable while still catching nested unbounded quantifiers
+ * like `(a+)+`.
+ *
+ * @param pattern - The regex source to compile
+ * @returns a compiled RegExp, or `{ error }` describing why it was rejected
+ */
+export function compileUserRegex(pattern: string): RegExp | { error: string } {
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+    return {
+      error: `Invalid regex pattern: too long (max ${MAX_REGEX_PATTERN_LENGTH} characters)`,
+    };
+  }
+  try {
+    // safeRegex can throw on a malformed pattern; treat that as an invalid regex.
+    if (!safeRegex(pattern, { limit: 1000 })) {
+      return {
+        error:
+          "Invalid regex pattern: rejected as potentially catastrophic (ReDoS). Simplify nested quantifiers.",
+      };
+    }
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- pattern is length-capped and ReDoS-screened by safe-regex above.
+    return new RegExp(pattern);
+  } catch (e: any) {
+    return { error: `Invalid regex pattern: ${e.message}` };
+  }
+}
 
 // Constants
 export const EMPTY_CONTENT_WARNING =
@@ -44,12 +82,16 @@ export function formatContentWithLineNumbers(
 ): string {
   let lines: string[];
   if (typeof content === "string") {
-    lines = content.split("\n");
+    // Normalize CRLF so display/line-numbering doesn't carry a trailing \r.
+    lines = toLf(content).split("\n");
     if (lines.length > 0 && lines[lines.length - 1] === "") {
       lines = lines.slice(0, -1);
     }
   } else {
-    lines = content;
+    // Array inputs may originate from a raw `split("\n")` on CRLF content.
+    lines = content.map((line) =>
+      line.endsWith("\r") ? line.slice(0, -1) : line,
+    );
   }
 
   const resultLines: string[] = [];
@@ -192,8 +234,16 @@ export function performStringReplacement(
   newString: string,
   replaceAll: boolean,
 ): [string, number] | string {
+  // Match/replace on an LF-normalized copy so a CRLF file still matches an LF
+  // oldString; detect the file's dominant EOL and restore it on the result so
+  // line-ending style is preserved (no silent LF/CRLF mixing).
+  const eol = detectEol(content);
+  const normContent = toLf(content);
+  const normOld = toLf(oldString);
+  const normNew = toLf(newString);
+
   // Use split to count occurrences (simpler than regex)
-  const occurrences = content.split(oldString).length - 1;
+  const occurrences = normContent.split(normOld).length - 1;
 
   if (occurrences === 0) {
     return `Error: String not found in file: '${oldString}'`;
@@ -205,7 +255,7 @@ export function performStringReplacement(
 
   // Python's str.replace() replaces ALL occurrences
   // Use split/join for consistent behavior
-  const newContent = content.split(oldString).join(newString);
+  const newContent = toEol(normContent.split(normOld).join(normNew), eol);
 
   return [newContent, occurrences];
 }
@@ -239,6 +289,10 @@ export function truncateIfTooLong(
 
 /**
  * Validate and normalize a path.
+ *
+ * Invariant: this operates on virtual, `/`-rooted keys of the in-memory file
+ * map — NOT real filesystem paths — so POSIX `/` separators are correct by
+ * design here and must not be "fixed" to platform separators.
  *
  * @param path - Path to validate
  * @returns Normalized path starting with / and ending with /
@@ -380,12 +434,11 @@ export function grepSearchFiles(
   glob: string | null = null,
   outputMode: "files_with_matches" | "content" | "count" = "files_with_matches",
 ): string {
-  let regex: RegExp;
-  try {
-    regex = new RegExp(pattern);
-  } catch (e: any) {
-    return `Invalid regex pattern: ${e.message}`;
+  const compiled = compileUserRegex(pattern);
+  if (!(compiled instanceof RegExp)) {
+    return compiled.error;
   }
+  const regex = compiled;
 
   let normalizedPath: string;
   try {
@@ -409,7 +462,8 @@ export function grepSearchFiles(
   const results: Record<string, Array<[number, string]>> = {};
   for (const [filePath, fileData] of Object.entries(filtered)) {
     for (let i = 0; i < fileData.content.length; i++) {
-      const line = fileData.content[i];
+      // Strip a trailing \r so $-anchored patterns and previews behave on CRLF.
+      const line = fileData.content[i].replace(/\r$/, "");
       const lineNum = i + 1;
       if (regex.test(line)) {
         if (!results[filePath]) {
@@ -441,12 +495,11 @@ export function grepMatchesFromFiles(
   path: string | null = null,
   glob: string | null = null,
 ): GrepMatch[] | string {
-  let regex: RegExp;
-  try {
-    regex = new RegExp(pattern);
-  } catch (e: any) {
-    return `Invalid regex pattern: ${e.message}`;
+  const compiled = compileUserRegex(pattern);
+  if (!(compiled instanceof RegExp)) {
+    return compiled.error;
   }
+  const regex = compiled;
 
   let normalizedPath: string;
   try {
@@ -470,7 +523,8 @@ export function grepMatchesFromFiles(
   const matches: GrepMatch[] = [];
   for (const [filePath, fileData] of Object.entries(filtered)) {
     for (let i = 0; i < fileData.content.length; i++) {
-      const line = fileData.content[i];
+      // Strip a trailing \r so $-anchored patterns and previews behave on CRLF.
+      const line = fileData.content[i].replace(/\r$/, "");
       const lineNum = i + 1;
       if (regex.test(line)) {
         matches.push({ path: filePath, line: lineNum, text: line });

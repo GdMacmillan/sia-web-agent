@@ -14,9 +14,7 @@ import * as fsSync from "fs";
 import * as path from "path";
 import { validatePathInProject } from "../utils/path-utils.js";
 import { spawn } from "child_process";
-// eslint-disable-next-line import/no-extraneous-dependencies
 import fg from "fast-glob";
-// eslint-disable-next-line import/no-extraneous-dependencies
 import micromatch from "micromatch";
 import type {
   BackendProtocol,
@@ -28,9 +26,12 @@ import type {
 } from "./protocol.js";
 import {
   checkEmptyContent,
+  compileUserRegex,
   formatContentWithLineNumbers,
   performStringReplacement,
 } from "./utils.js";
+import { toLf } from "../utils/eol.js";
+import { resolveRipgrep } from "../utils/fs-compat.js";
 
 const SUPPORTS_NOFOLLOW = fsSync.constants.O_NOFOLLOW !== undefined;
 
@@ -54,6 +55,7 @@ export class FilesystemBackend implements BackendProtocol {
     } = {},
   ) {
     const { rootDir, virtualMode = false, maxFileSizeMb = 10 } = options;
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- sandbox root from trusted backend config, not per-request input.
     this.cwd = rootDir ? path.resolve(rootDir) : process.cwd();
     this.virtualMode = virtualMode;
     this.maxFileSizeBytes = maxFileSizeMb * 1024 * 1024;
@@ -77,6 +79,7 @@ export class FilesystemBackend implements BackendProtocol {
       if (vpath.includes("..") || vpath.startsWith("~")) {
         throw new Error("Path traversal not allowed");
       }
+      // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- virtual key resolved under the sandbox root and containment-checked by the caller.
       const full = path.resolve(this.cwd, vpath.substring(1));
       const relative = path.relative(this.cwd, full);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -86,6 +89,7 @@ export class FilesystemBackend implements BackendProtocol {
     }
 
     // Non-virtual mode: resolve path and validate against project boundary
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- resolved path is validated against the project boundary immediately below.
     const resolved = path.isAbsolute(key) ? key : path.resolve(this.cwd, key);
 
     // Validate that resolved path is within project
@@ -119,6 +123,7 @@ export class FilesystemBackend implements BackendProtocol {
         : this.cwd + path.sep;
 
       for (const entry of entries) {
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- joins an already-resolved sandbox dir with a directory-listing entry name.
         const fullPath = path.join(resolvedPath, entry.name);
 
         try {
@@ -284,7 +289,9 @@ export class FilesystemBackend implements BackendProtocol {
     }
 
     return {
-      content: content.split("\n"),
+      // Normalize CRLF on read so display/line-numbering is clean; the edit
+      // path re-reads raw bytes and preserves EOL on write-back separately.
+      content: toLf(content).split("\n"),
       created_at: stat.ctime.toISOString(),
       modified_at: stat.mtime.toISOString(),
     };
@@ -422,11 +429,10 @@ export class FilesystemBackend implements BackendProtocol {
     dirPath: string = "/",
     glob: string | null = null,
   ): Promise<GrepMatch[] | string> {
-    // Validate regex
-    try {
-      new RegExp(pattern);
-    } catch (e: any) {
-      return `Invalid regex pattern: ${e.message}`;
+    // Validate + ReDoS-screen the regex up front.
+    const patternCheck = compileUserRegex(pattern);
+    if (!(patternCheck instanceof RegExp)) {
+      return patternCheck.error;
     }
 
     // Resolve base path
@@ -474,7 +480,7 @@ export class FilesystemBackend implements BackendProtocol {
       }
       args.push("--", pattern, baseFull);
 
-      const proc = spawn("rg", args, { timeout: 30000 });
+      const proc = spawn(resolveRipgrep(), args, { timeout: 30000 });
       const results: Record<string, Array<[number, string]>> = {};
       let output = "";
 
@@ -502,6 +508,7 @@ export class FilesystemBackend implements BackendProtocol {
             let virtPath: string;
             if (this.virtualMode) {
               try {
+                // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- resolves a ripgrep result path for containment checking against the sandbox root.
                 const resolved = path.resolve(ftext);
                 const relative = path.relative(this.cwd, resolved);
                 if (relative.startsWith("..")) continue;
@@ -515,7 +522,8 @@ export class FilesystemBackend implements BackendProtocol {
             }
 
             const ln = pdata.line_number;
-            const lt = pdata.lines?.text?.replace(/\n$/, "") || "";
+            // Strip trailing CR/LF (CRLF files leave a \r after \n removal).
+            const lt = pdata.lines?.text?.replace(/\r?\n$/, "") || "";
             if (ln === undefined) continue;
 
             if (!results[virtPath]) {
@@ -545,12 +553,12 @@ export class FilesystemBackend implements BackendProtocol {
     baseFull: string,
     includeGlob: string | null,
   ): Promise<Record<string, Array<[number, string]>>> {
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern);
-    } catch {
+    // Defensive: grepRaw already ReDoS-screens the pattern before we get here.
+    const compiled = compileUserRegex(pattern);
+    if (!(compiled instanceof RegExp)) {
       return {};
     }
+    const regex = compiled;
 
     const results: Record<string, Array<[number, string]>> = {};
     const stat = await fs.stat(baseFull);
@@ -580,9 +588,10 @@ export class FilesystemBackend implements BackendProtocol {
           continue;
         }
 
-        // Read and search
+        // Read and search. Normalize CRLF so $-anchored patterns match and
+        // matched line text has no trailing \r.
         const content = await fs.readFile(fp, "utf-8");
-        const lines = content.split("\n");
+        const lines = toLf(content).split("\n");
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];

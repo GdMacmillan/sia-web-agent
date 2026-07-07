@@ -12,7 +12,20 @@
 import { createServer, type Server, type Socket } from "net";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
+import { tmpdir } from "os";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { sanitizePathSegment } from "../utils/fs-compat.js";
+
+/**
+ * Whether an IPC address is a Windows named pipe (`\\.\pipe\…`).
+ *
+ * Named pipes live in a kernel namespace, not the filesystem, so the
+ * directory-create / unlink management used for Unix domain sockets must be
+ * skipped for them.
+ */
+function isNamedPipe(address: string): boolean {
+  return address.startsWith("\\\\.\\pipe\\") || address.startsWith("\\\\?\\pipe\\");
+}
 
 /**
  * IPC Request structure (JSON-RPC 2.0 inspired)
@@ -131,15 +144,16 @@ export class IPCBridge {
       return;
     }
 
-    // Ensure socket directory exists
-    const socketDir = dirname(this.socketPath);
-    if (!existsSync(socketDir)) {
-      mkdirSync(socketDir, { recursive: true });
-    }
-
-    // Remove existing socket file if present
-    if (existsSync(this.socketPath)) {
-      unlinkSync(this.socketPath);
+    // Unix domain sockets are filesystem entries: ensure the directory exists
+    // and remove any stale socket file. Named pipes are not files, so skip.
+    if (!isNamedPipe(this.socketPath)) {
+      const socketDir = dirname(this.socketPath);
+      if (!existsSync(socketDir)) {
+        mkdirSync(socketDir, { recursive: true });
+      }
+      if (existsSync(this.socketPath)) {
+        unlinkSync(this.socketPath);
+      }
     }
 
     return new Promise((resolve, reject) => {
@@ -314,8 +328,8 @@ export class IPCBridge {
         this.server = null;
         this.isShuttingDown = false;
 
-        // Clean up socket file
-        if (existsSync(this.socketPath)) {
+        // Clean up socket file (named pipes have no filesystem entry to unlink)
+        if (!isNamedPipe(this.socketPath) && existsSync(this.socketPath)) {
           try {
             unlinkSync(this.socketPath);
           } catch {
@@ -345,14 +359,16 @@ export class IPCBridge {
 }
 
 /**
- * Generate a unique socket path for a session
+ * Generate a unique IPC address for a session.
  *
- * Note: Unix domain sockets have a path length limit (~104 chars on macOS).
- * We use a short hash to keep paths within limits.
+ * On Windows returns a named pipe (`\\.\pipe\…`); elsewhere returns a Unix
+ * domain socket path under the OS temp dir. Unix domain sockets have a path
+ * length limit (~104 chars on macOS), so a short hash of the base dir keeps the
+ * path within limits.
  */
 export function generateSocketPath(baseDir: string, threadId: string): string {
-  // Sanitize thread ID for use in filename
-  const sanitizedId = threadId.replace(/[^a-zA-Z0-9-_]/g, "_");
+  // Sanitize thread ID for use in the address
+  const sanitizedId = sanitizePathSegment(threadId);
 
   // Create a short hash from the base dir to keep path short
   let hash = 0;
@@ -362,8 +378,15 @@ export function generateSocketPath(baseDir: string, threadId: string): string {
   }
   const shortHash = Math.abs(hash).toString(36).slice(0, 6);
 
-  // Use /tmp for sockets to avoid long path issues
-  const tmpDir = join("/tmp", `code-exec-${shortHash}`);
+  if (process.platform === "win32") {
+    // Named pipes are a flat kernel namespace (no directories to create).
+    return `\\\\.\\pipe\\code-exec-${shortHash}-${sanitizedId}`;
+  }
+
+  // Use the OS temp dir for sockets to avoid long path issues.
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- OS temp dir joined with a derived short hash; not user input.
+  const tmpDir = join(tmpdir(), `code-exec-${shortHash}`);
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- filename segment is sanitized via sanitizePathSegment above.
   return join(tmpDir, `${sanitizedId}.sock`);
 }
 
