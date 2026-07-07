@@ -26,6 +26,7 @@ import type {
 } from "./protocol.js";
 import {
   checkEmptyContent,
+  compileUserRegex,
   formatContentWithLineNumbers,
   performStringReplacement,
 } from "./utils.js";
@@ -428,12 +429,10 @@ export class FilesystemBackend implements BackendProtocol {
     dirPath: string = "/",
     glob: string | null = null,
   ): Promise<GrepMatch[] | string> {
-    // Validate regex
-    try {
-      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- user-supplied grep pattern is the intended search API surface.
-      new RegExp(pattern);
-    } catch (e: any) {
-      return `Invalid regex pattern: ${e.message}`;
+    // Validate + ReDoS-screen the regex up front.
+    const patternCheck = compileUserRegex(pattern);
+    if (!(patternCheck instanceof RegExp)) {
+      return patternCheck.error;
     }
 
     // Resolve base path
@@ -554,13 +553,12 @@ export class FilesystemBackend implements BackendProtocol {
     baseFull: string,
     includeGlob: string | null,
   ): Promise<Record<string, Array<[number, string]>>> {
-    let regex: RegExp;
-    try {
-      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- user-supplied grep pattern is the intended search API surface.
-      regex = new RegExp(pattern);
-    } catch {
+    // Defensive: grepRaw already ReDoS-screens the pattern before we get here.
+    const compiled = compileUserRegex(pattern);
+    if (!(compiled instanceof RegExp)) {
       return {};
     }
+    const regex = compiled;
 
     const results: Record<string, Array<[number, string]>> = {};
     const stat = await fs.stat(baseFull);

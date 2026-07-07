@@ -7,9 +7,47 @@
  */
 
 import micromatch from "micromatch";
+import safeRegex from "safe-regex";
 import { basename } from "path";
 import type { FileData, GrepMatch } from "./protocol.js";
 import { detectEol, toLf, toEol } from "../utils/eol.js";
+
+/** Max accepted length of a caller-supplied grep/search regex pattern. */
+const MAX_REGEX_PATTERN_LENGTH = 1000;
+
+/**
+ * Compile a caller-supplied regex pattern with ReDoS guards.
+ *
+ * Grep/search patterns come from the calling agent, so a pathological pattern
+ * (catastrophic backtracking) could otherwise pin the single-threaded event
+ * loop. This rejects over-long patterns and patterns that static analysis flags
+ * as unsafe before compiling. `limit: 1000` keeps normal bounded repetitions
+ * (e.g. `\d{1,100}`) usable while still catching nested unbounded quantifiers
+ * like `(a+)+`.
+ *
+ * @param pattern - The regex source to compile
+ * @returns a compiled RegExp, or `{ error }` describing why it was rejected
+ */
+export function compileUserRegex(pattern: string): RegExp | { error: string } {
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+    return {
+      error: `Invalid regex pattern: too long (max ${MAX_REGEX_PATTERN_LENGTH} characters)`,
+    };
+  }
+  try {
+    // safeRegex can throw on a malformed pattern; treat that as an invalid regex.
+    if (!safeRegex(pattern, { limit: 1000 })) {
+      return {
+        error:
+          "Invalid regex pattern: rejected as potentially catastrophic (ReDoS). Simplify nested quantifiers.",
+      };
+    }
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- pattern is length-capped and ReDoS-screened by safe-regex above.
+    return new RegExp(pattern);
+  } catch (e: any) {
+    return { error: `Invalid regex pattern: ${e.message}` };
+  }
+}
 
 // Constants
 export const EMPTY_CONTENT_WARNING =
@@ -396,13 +434,11 @@ export function grepSearchFiles(
   glob: string | null = null,
   outputMode: "files_with_matches" | "content" | "count" = "files_with_matches",
 ): string {
-  let regex: RegExp;
-  try {
-    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- user-supplied grep pattern is the intended search API surface.
-    regex = new RegExp(pattern);
-  } catch (e: any) {
-    return `Invalid regex pattern: ${e.message}`;
+  const compiled = compileUserRegex(pattern);
+  if (!(compiled instanceof RegExp)) {
+    return compiled.error;
   }
+  const regex = compiled;
 
   let normalizedPath: string;
   try {
@@ -459,13 +495,11 @@ export function grepMatchesFromFiles(
   path: string | null = null,
   glob: string | null = null,
 ): GrepMatch[] | string {
-  let regex: RegExp;
-  try {
-    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- user-supplied grep pattern is the intended search API surface.
-    regex = new RegExp(pattern);
-  } catch (e: any) {
-    return `Invalid regex pattern: ${e.message}`;
+  const compiled = compileUserRegex(pattern);
+  if (!(compiled instanceof RegExp)) {
+    return compiled.error;
   }
+  const regex = compiled;
 
   let normalizedPath: string;
   try {
