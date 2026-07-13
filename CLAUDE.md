@@ -78,6 +78,7 @@ docs/                    # reference documentation
 | [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) | Memory tool surface + REST reference |
 | [`docs/UPDATE_WORKFLOW.md`](docs/UPDATE_WORKFLOW.md) | Playbook for pulling DeepAgents upstream updates |
 | [`docs/AGENT_ARCHITECTURE_SEARCH.md`](docs/AGENT_ARCHITECTURE_SEARCH.md) | Survey of agent design patterns — reference when considering architectural changes |
+| [`docs/DEPENDENCY_UPDATES.md`](docs/DEPENDENCY_UPDATES.md) | Dependabot merge policy — what auto-merges vs what needs manual review |
 
 ## Agent runtime
 

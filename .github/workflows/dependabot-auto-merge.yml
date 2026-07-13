@@ -1,0 +1,56 @@
+name: Dependabot Auto-Merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide eligibility
+        id: gate
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEP_TYPE: ${{ steps.meta.outputs.dependency-type }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+        run: |
+          set -euo pipefail
+          case "$UPDATE_TYPE" in
+            version-update:semver-patch|version-update:semver-minor) ;;
+            *) echo "eligible=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+
+          case "$ECOSYSTEM" in
+            npm_and_yarn)
+              if [ "$DEP_TYPE" = "direct:development" ]; then
+                echo "eligible=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "eligible=false" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            github_actions)
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Enable auto-merge
+        if: steps.gate.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
