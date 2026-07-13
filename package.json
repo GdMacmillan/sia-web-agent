@@ -32,7 +32,7 @@
     "@vscode/ripgrep": "1.17.1",
     "axios": "1.13.5",
     "dotenv": "17.4.1",
-    "fast-glob": "3.3.1",
+    "fast-glob": "3.3.3",
     "langchain": "1.4.0",
     "langsmith": "0.7.1",
     "micromatch": "4.0.8",
