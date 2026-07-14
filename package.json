@@ -31,7 +31,7 @@
     "@tavily/core": "0.7.2",
     "@vscode/ripgrep": "1.17.1",
     "axios": "1.18.1",
-    "dotenv": "17.4.1",
+    "dotenv": "17.4.2",
     "fast-glob": "3.3.3",
     "langchain": "1.4.0",
     "langsmith": "0.7.1",
