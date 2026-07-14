@@ -21,10 +21,19 @@ Two workflows implement the policy:
 
 ### Auto-merges (patch/minor only)
 
-- Any `devDependencies` bump (`dependency-type: direct:development`) —
-  eslint, jest/ts-jest, typescript, `@types/*`, etc. Covers the `testing`
-  and `eslint` dependabot groups.
+- Any package that patch/minor-bumps and actually lives in
+  `devDependencies` in `package.json` on the PR branch — eslint,
+  jest/ts-jest, typescript, `@types/*`, etc. Covers the `testing` and
+  `eslint` dependabot groups.
 - Any `github-actions` ecosystem bump.
+
+**Eligibility is checked against the live `package.json`, not
+Dependabot's own `dependency-type` metadata.** On 2026-07-13, `tsx`
+auto-merged (PR #16) despite being a production dependency: Dependabot's
+commit trailer still reported `dependency-type: direct:development`,
+stale from before `tsx` was moved into `dependencies`, and `@dependabot
+recreate` didn't refresh it. The gate now runs `jq` against `package.json`
+directly in `dependabot-auto-merge.yml` instead of trusting that field.
 
 ### Always manual review
 

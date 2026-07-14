@@ -19,12 +19,14 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/checkout@v4
+
       - name: Decide eligibility
         id: gate
         env:
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
-          DEP_TYPE: ${{ steps.meta.outputs.dependency-type }}
           ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
         run: |
           set -euo pipefail
           case "$UPDATE_TYPE" in
@@ -33,20 +35,32 @@ jobs:
           esac
 
           case "$ECOSYSTEM" in
-            npm_and_yarn)
-              if [ "$DEP_TYPE" = "direct:development" ]; then
-                echo "eligible=true" >> "$GITHUB_OUTPUT"
-              else
-                echo "eligible=false" >> "$GITHUB_OUTPUT"
-              fi
-              ;;
             github_actions)
               echo "eligible=true" >> "$GITHUB_OUTPUT"
+              exit 0
               ;;
-            *)
-              echo "eligible=false" >> "$GITHUB_OUTPUT"
-              ;;
+            npm_and_yarn) ;;
+            *) echo "eligible=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
+
+          # Verify every changed dependency actually lives in devDependencies
+          # in package.json on this PR's branch, rather than trusting
+          # Dependabot's own dependency-type metadata: that field can go
+          # stale after a manifest reorganization and doesn't get
+          # recomputed by "@dependabot recreate" (observed on the `tsx`
+          # dependency, 2026-07-13 — it moved to `dependencies` but
+          # Dependabot kept reporting direct:development).
+          eligible=true
+          IFS=',' read -ra deps <<< "$DEP_NAMES"
+          for raw in "${deps[@]}"; do
+            dep="$(echo "$raw" | xargs)"
+            if ! jq -e --arg d "$dep" '.devDependencies | has($d)' package.json > /dev/null; then
+              echo "Not a devDependency (or not found in package.json): $dep"
+              eligible=false
+              break
+            fi
+          done
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
 
       - name: Enable auto-merge
         if: steps.gate.outputs.eligible == 'true'
