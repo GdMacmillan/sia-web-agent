@@ -81,6 +81,7 @@ the source of truth; the order matters.
 | 5 | `createFilesystemMiddleware` | Provides `ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep` tools backed by the configured `BackendProtocol`. |
 | 6 | `createSkillsMiddleware` *(if projectRoot set)* | Indexes `/skills/SKILL.md` files, injects their summaries into the system prompt, exposes `load_skill` for on-demand expansion. |
 | 7 | `createCodeExecutionMiddleware` *(if projectRoot set)* | Provides `execute_code` for TypeScript/JavaScript execution via tsx. Max execution time: 120s. |
+| 7a | `createCodeInterpreterMiddleware` *(opt-in, `ENABLE_CODE_INTERPRETER=true`)* | Provides the sandboxed QuickJS `eval` tool with in-REPL `task()` subagent fan-out. Lazily loaded. See [Code interpreter (QuickJS)](#code-interpreter-quickjs). |
 | 8 | `createSubAgentMiddleware` | Provides the `task` tool. Delegates work to sub-agents (see [Sub-agents](#sub-agents)). |
 | 9 | `summarizationMiddleware` | LangChain built-in. Compresses conversation history when token usage approaches a configured threshold. |
 | 10 | `anthropicPromptCachingMiddleware` | LangChain built-in. Enables Anthropic prompt caching. `unsupportedModelBehavior: "ignore"` so non-Anthropic providers don't error. |
@@ -106,6 +107,62 @@ pipeline with two key differences:
   `resolveModelEndpoint(config.llm, "memory")` rather than the main
   orchestrator model. Summarization is a lightweight compression task
   that doesn't need top-tier reasoning.
+
+## Code interpreter (QuickJS)
+
+An **opt-in** second code-execution surface, vendored from upstream
+`@langchain/quickjs` into `src/code-interpreter/`. Enabled with
+`ENABLE_CODE_INTERPRETER=true`; disabled by default, in which case it is
+never even imported (the module is loaded via dynamic `import()` in
+`src/agent.ts` only when the flag is set, keeping its heavy WASM/ESM deps
+out of the default module graph). The tsx-based `execute_code` tool
+remains the default surface regardless — this adds a separate `eval`
+tool, it does not replace anything.
+
+The `eval` tool runs JavaScript/TypeScript in a fully isolated QuickJS
+WASM sandbox (no network, no filesystem, no stdlib clock). State
+persists across `eval` calls within a turn (a real REPL). Its headline
+capability is **programmatic subagent orchestration**: an in-REPL
+`task({ description, subagentType, responseSchema? })` global lets the
+model fan work out to configured subagents in plain JavaScript
+(`Promise.all`, filtering, multi-stage flows), bounded by a hard
+per-eval concurrency cap of 32. Optional programmatic tool calling
+(PTC) can also expose selected agent tools under a `tools.*` namespace.
+
+The bridge from the REPL `task()` global to the fork's real `task` tool
+(`src/middleware/subagents.ts`) lives in
+`src/code-interpreter/middleware.ts`; it translates the REPL's
+`subagentType` to the fork's snake_case `subagent_type` schema and
+unwraps the returned LangGraph `Command` envelope to the subagent's
+content.
+
+**Three things to know:**
+
+- **HITL bypass.** Tools and subagents invoked *inside* an `eval` do
+  not route through the parent agent's `ToolNode`, so per-call
+  `interruptOn` / human-in-the-loop approval does **not** fire for them.
+  Gate the `eval` tool itself (or use the normal `task` tool outside
+  JavaScript) if you need approval before a subagent launches.
+- **Shared task id in events.** Every `task()` call within a single
+  `eval` shares that eval's tool-call id in streamed SSE events; they
+  are not individually attributable at the event layer.
+- **`responseSchema` is validated but currently a no-op.** The schema is
+  size/depth/property-checked and threaded through `config.configurable`
+  under `SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY`
+  (`src/code-interpreter/constants.ts`), but the fork's task tool does
+  not yet consume that key to recompile a structured-output subagent
+  (upstream's does). Until it does, a `responseSchema` passed to
+  `task()` shapes nothing.
+
+Vendored files under `src/code-interpreter/` are kept byte-identical to
+upstream except `middleware.ts` (adapted to the fork's `systemPrompt`
+string-append pattern and a local `constants.ts` instead of importing
+`deepagents`). Tests live in `tests/unit/code-interpreter/` and run via
+`yarn test:interpreter` (a separate jest config that sets
+`--experimental-vm-modules` for the WASM/prettier dynamic imports);
+`yarn test` runs them after the main suite. See
+[`docs/UPDATE_WORKFLOW.md`](./UPDATE_WORKFLOW.md) for the re-sync
+discipline.
 
 ## Sub-agents
 

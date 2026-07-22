@@ -15,6 +15,11 @@ export default {
   extensionsToTreatAsEsm: [".ts"],
   moduleNameMapper: {
     "^(\\.{1,2}/.*)\\.js$": "$1",
+    // estree-walker@3 (a vendored code-interpreter dep) exposes only an
+    // "import" export condition — no "default"/"require" — so jest's node
+    // resolver can't find it. Point straight at its ESM entry; it's
+    // allowlisted in transformIgnorePatterns so babel-jest transpiles it.
+    "^estree-walker$": "<rootDir>/node_modules/estree-walker/src/index.js",
   },
   transform: {
     "^.+\\.tsx?$": [
@@ -39,9 +44,17 @@ export default {
     "^.+\\.m?js$": "babel-jest",
   },
   testMatch: ["**/tests/**/*.test.ts", "**/*.test.ts"],
-  testPathIgnorePatterns: ["/node_modules/"],
+  // Code-interpreter tests live in their own flagged run (jest.config.interpreter.js,
+  // via `yarn test:interpreter`) because the QuickJS WASM + prettier deps need
+  // NODE_OPTIONS=--experimental-vm-modules, which breaks other suites' dynamic
+  // imports. Keep them out of the default run.
+  testPathIgnorePatterns: ["/node_modules/", "tests/unit/code-interpreter/"],
   transformIgnorePatterns: [
-    "node_modules/(?!.pnpm|@langchain|langchain|p-retry|is-network-error|decamelize|camelcase)",
+    // ESM-only packages that must be transformed rather than ignored.
+    // The trailing group covers the vendored QuickJS code interpreter's
+    // pure-ESM deps (src/code-interpreter/): the acorn TS plugin, the
+    // p-queue concurrency chain, and the AST/string transform libs.
+    "node_modules/(?!.pnpm|@langchain|langchain|p-retry|is-network-error|decamelize|camelcase|@sveltejs|p-queue|p-timeout|eventemitter3|estree-walker|magic-string|dedent)",
   ],
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts", "!src/**/*.test.ts"],
   coverageDirectory: "coverage",

@@ -59,4 +59,17 @@ export default tseslint.config(
       "no-shadow": 0,
     },
   },
+  {
+    // Vendored QuickJS code interpreter (src/code-interpreter/) is kept
+    // byte-identical to upstream @langchain/quickjs to keep future
+    // re-syncs mechanical (see docs/UPDATE_WORKFLOW.md). Its intentional
+    // fire-and-forget promise scheduling (promise.settled.then(...),
+    // async IIFEs driving the QuickJS event loop) trips no-floating-promises,
+    // which upstream's config does not enforce. Relax it here rather than
+    // diverge the source.
+    files: ["src/code-interpreter/**/*.ts"],
+    rules: {
+      "@typescript-eslint/no-floating-promises": 0,
+    },
+  },
 );

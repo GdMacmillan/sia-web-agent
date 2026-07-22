@@ -131,6 +131,12 @@ Outcome tracking ranks memory results by historical success rate.
 | `OUTCOME_TRACKING_MAX_HISTORY` | module default | Max past applications to consider when scoring. |
 | `OUTCOME_TRACKING_MIN_APPLICATIONS` | module default | Minimum past applications before success-rate weighting kicks in. |
 
+### Code interpreter
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ENABLE_CODE_INTERPRETER` | `false` | Set to `true` to enable the opt-in QuickJS-sandboxed `eval` tool (parallel subagent fan-out + programmatic tool calling). The default tsx `execute_code` tool is unaffected. See [`ARCHITECTURE.md`](./ARCHITECTURE.md#code-interpreter-quickjs). |
+
 ## Runtime
 
 | Variable | Default | Purpose |

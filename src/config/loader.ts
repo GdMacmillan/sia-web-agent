@@ -224,6 +224,15 @@ function loadFeaturesConfig(): FeaturesConfig {
   return {
     knowledgeFormation: loadKnowledgeFormationConfig(),
     outcomeTracking: loadOutcomeTrackingConfig(),
+    codeInterpreter: loadCodeInterpreterConfig(),
+  };
+}
+
+function loadCodeInterpreterConfig(): FeaturesConfig["codeInterpreter"] {
+  return {
+    // Opt-in: only the QuickJS interpreter is gated here. The default
+    // tsx `execute_code` tool stays on regardless.
+    enabled: env("ENABLE_CODE_INTERPRETER") === "true",
   };
 }
 

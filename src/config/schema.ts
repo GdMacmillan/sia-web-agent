@@ -134,6 +134,17 @@ export const AGENT_TIER_DEFAULTS: Record<string, ModelTier> = {
 export interface FeaturesConfig {
   knowledgeFormation: KnowledgeFormationConfig;
   outcomeTracking: OutcomeTrackingConfig;
+  codeInterpreter: CodeInterpreterConfig;
+}
+
+export interface CodeInterpreterConfig {
+  /**
+   * Enable the QuickJS-sandboxed `eval` code interpreter middleware
+   * (default: false). Opt-in — the tsx-based `execute_code` tool remains
+   * the default code-execution surface. See
+   * `src/code-interpreter/` and `docs/ARCHITECTURE.md`.
+   */
+  enabled: boolean;
 }
 
 export interface KnowledgeFormationConfig {
