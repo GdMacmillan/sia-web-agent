@@ -164,6 +164,34 @@ state-backed backend; production uses the real filesystem backend; a
 host that needs custom file semantics (sandboxed write, S3-backed,
 etc.) supplies its own.
 
+### Filesystem permissions
+
+`createFilesystemMiddleware` / `createFilesystemTools` accept an optional
+`permissions: FilesystemPermission[]` — a first-match-wins policy layer
+(`src/permissions/`, ported from upstream deepagents). Each rule names
+`operations` (`"read"` / `"write"`), absolute glob `paths` (micromatch,
+`{dot:true}`), and a `mode` (`"allow"` default, or `"deny"`). Evaluation
+is first-match-wins with a **permissive default**: no rule matches ⇒
+allowed, and an empty/omitted ruleset is a no-op (zero behavior change).
+
+The gate runs **inside the tool handlers**: `read_file` / `write_file` /
+`edit_file` check the target path *before* any state or backend access
+(a denied path never reaches the filesystem); `ls` / `glob` / `grep`
+filter denied entries out of their results. Rule paths are validated at
+setup (`validatePermissionPaths`) — absolute only, no `..` or `~`.
+
+Permissions match the **pre-backend path namespace** — the virtual
+absolute path the model passes, before the backend resolves it (virtual
+paths under virtualMode). This is a *policy* layer that sits **above**
+the backend's hard `validatePathInProject` project-root boundary
+(`src/utils/path-utils.ts`), never in place of it: the boundary still
+rejects any escape regardless of permission rules.
+
+A separate `enabledTools?: FsToolName[]` allowlist selects which of the
+six built-in filesystem tools to expose (`read_file` is always included).
+It is distinct from `createFilesystemMiddleware`'s `tools` option, which
+injects pre-created tool instances.
+
 ## System prompts
 
 `src/system-prompts.ts` loads prompts from `prompts/*.md` at runtime:

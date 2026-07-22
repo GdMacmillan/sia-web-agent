@@ -21,6 +21,13 @@ import {
   sanitizeToolCallId,
   formatContentWithLineNumbers,
 } from "../backends/utils.js";
+import {
+  type FilesystemPermission,
+  type FilesystemOperation,
+  decidePathAccess,
+  validatePath,
+  validatePermissionPaths,
+} from "../permissions/index.js";
 
 /**
  * Tools that should be excluded from the large result eviction logic.
@@ -53,6 +60,99 @@ export const TOOLS_EXCLUDED_FROM_EVICTION = [
   "edit_file",
   "write_file",
 ] as const;
+
+/**
+ * The built-in filesystem tool names, in canonical (prompt/creation) order.
+ * (The fork has no `execute` tool, unlike upstream.)
+ */
+export const FILESYSTEM_TOOL_NAMES = [
+  "ls",
+  "read_file",
+  "write_file",
+  "edit_file",
+  "glob",
+  "grep",
+] as const;
+
+/**
+ * Built-in filesystem tool name accepted by `createFilesystemTools`'s
+ * `enabledTools` allowlist.
+ */
+export type FsToolName = (typeof FILESYSTEM_TOOL_NAMES)[number];
+
+/**
+ * Check whether `path` is permitted under `rules` for `operation`, returning
+ * an error string to surface to the model (or `undefined` when allowed).
+ *
+ * Never throws: an invalid path (non-absolute, or containing `..`/`~`) or a
+ * denied path is a recoverable tool error, not a fatal one. Such paths are
+ * rejected, never normalized, so they cannot bypass a deny rule or reach the
+ * backend. Returns `undefined` immediately when there are no rules, so the
+ * default (no permissions) is allow-all with zero behavior change.
+ *
+ * Ported near-verbatim from upstream deepagents
+ * (libs/deepagents/src/middleware/fs.ts). Permission globs match the
+ * pre-backend path namespace — i.e. the virtual absolute path the model
+ * passes, before the backend resolves it (virtual paths under virtualMode).
+ * This layer sits ABOVE `validatePathInProject` (the hard project-root
+ * boundary in the backend), not in place of it.
+ *
+ * @internal
+ */
+function checkPermission(
+  rules: readonly FilesystemPermission[],
+  operation: FilesystemOperation,
+  path: string,
+): string | undefined {
+  if (rules.length === 0) {
+    return undefined;
+  }
+
+  let canonical: string;
+  try {
+    canonical = validatePath(path);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `Error: ${message}`;
+  }
+
+  if (decidePathAccess(rules, operation, canonical) === "deny") {
+    return `Error: permission denied for ${operation} on ${canonical}`;
+  }
+
+  return undefined;
+}
+
+/**
+ * Filter a list of filesystem entries to those the rules permit.
+ *
+ * `getPath` extracts the absolute path from each entry. Entries with
+ * unparsable paths are kept (not silently dropped). Returns the original
+ * array unchanged when `rules` is empty.
+ *
+ * Ported near-verbatim from upstream deepagents.
+ *
+ * @internal
+ */
+function filterByPermissions<T>(
+  entries: T[],
+  rules: readonly FilesystemPermission[],
+  operation: FilesystemOperation,
+  getPath: (entry: T) => string,
+): T[] {
+  if (rules.length === 0) {
+    return entries;
+  }
+
+  return entries.filter((entry) => {
+    try {
+      const canonical = validatePath(getPath(entry));
+      return decidePathAccess(rules, operation, canonical) !== "deny";
+    } catch {
+      return true;
+    }
+  });
+}
 
 /**
  * Approximate number of characters per token for truncation calculations.
@@ -217,9 +317,10 @@ function createLsTool(
   backend: BackendProtocol | BackendFactory,
   options: {
     customDescription: string | undefined;
+    permissions?: readonly FilesystemPermission[];
   },
 ) {
-  const { customDescription } = options;
+  const { customDescription, permissions = [] } = options;
   return tool(
     async (input, config) => {
       try {
@@ -229,7 +330,13 @@ function createLsTool(
         };
         const resolvedBackend = getBackend(backend, stateAndStore);
         const path = input.path || "";
-        const infos = await resolvedBackend.lsInfo(path);
+        const allInfos = await resolvedBackend.lsInfo(path);
+        const infos = filterByPermissions(
+          allInfos,
+          permissions,
+          "read",
+          (info) => info.path,
+        );
 
         if (infos.length === 0) {
           return `No files found in ${path}`;
@@ -269,18 +376,25 @@ function createReadFileTool(
   backend: BackendProtocol | BackendFactory,
   options: {
     customDescription: string | undefined;
+    permissions?: readonly FilesystemPermission[];
   },
 ) {
-  const { customDescription } = options;
+  const { customDescription, permissions = [] } = options;
   return tool(
     async (input, config) => {
       try {
+        const { file_path, offset = 0, limit = 2000 } = input;
+        // Deny before touching state/backend so a rejected path never reaches
+        // the filesystem (matches upstream ordering).
+        const permissionError = checkPermission(permissions, "read", file_path);
+        if (permissionError) {
+          return permissionError;
+        }
         const stateAndStore: StateAndStore = {
           state: getCurrentTaskInput(config),
           store: (config as any).store,
         };
         const resolvedBackend = getBackend(backend, stateAndStore);
-        const { file_path, offset = 0, limit = 2000 } = input;
         return await resolvedBackend.read(file_path, offset, limit);
       } catch (error) {
         // Return errors as messages so the agent can recover
@@ -313,18 +427,28 @@ function createWriteFileTool(
   backend: BackendProtocol | BackendFactory,
   options: {
     customDescription: string | undefined;
+    permissions?: readonly FilesystemPermission[];
   },
 ) {
-  const { customDescription } = options;
+  const { customDescription, permissions = [] } = options;
   return tool(
     async (input, config) => {
       try {
+        const { file_path, content } = input;
+        // Deny before touching state/backend (matches upstream ordering).
+        const permissionError = checkPermission(
+          permissions,
+          "write",
+          file_path,
+        );
+        if (permissionError) {
+          return permissionError;
+        }
         const stateAndStore: StateAndStore = {
           state: getCurrentTaskInput(config),
           store: (config as any).store,
         };
         const resolvedBackend = getBackend(backend, stateAndStore);
-        const { file_path, content } = input;
         const result = await resolvedBackend.write(file_path, content);
 
         if (result.error) {
@@ -370,23 +494,33 @@ function createEditFileTool(
   backend: BackendProtocol | BackendFactory,
   options: {
     customDescription: string | undefined;
+    permissions?: readonly FilesystemPermission[];
   },
 ) {
-  const { customDescription } = options;
+  const { customDescription, permissions = [] } = options;
   return tool(
     async (input, config) => {
       try {
-        const stateAndStore: StateAndStore = {
-          state: getCurrentTaskInput(config),
-          store: (config as any).store,
-        };
-        const resolvedBackend = getBackend(backend, stateAndStore);
         const {
           file_path,
           old_string,
           new_string,
           replace_all = false,
         } = input;
+        // Deny before touching state/backend (matches upstream ordering).
+        const permissionError = checkPermission(
+          permissions,
+          "write",
+          file_path,
+        );
+        if (permissionError) {
+          return permissionError;
+        }
+        const stateAndStore: StateAndStore = {
+          state: getCurrentTaskInput(config),
+          store: (config as any).store,
+        };
+        const resolvedBackend = getBackend(backend, stateAndStore);
         const result = await resolvedBackend.edit(
           file_path,
           old_string,
@@ -445,9 +579,10 @@ function createGlobTool(
   backend: BackendProtocol | BackendFactory,
   options: {
     customDescription: string | undefined;
+    permissions?: readonly FilesystemPermission[];
   },
 ) {
-  const { customDescription } = options;
+  const { customDescription, permissions = [] } = options;
 
   return tool(
     async (input, config) => {
@@ -458,7 +593,13 @@ function createGlobTool(
         };
         const resolvedBackend = getBackend(backend, stateAndStore);
         const { pattern, path } = input;
-        const infos = await resolvedBackend.globInfo(pattern, path);
+        const allInfos = await resolvedBackend.globInfo(pattern, path);
+        const infos = filterByPermissions(
+          allInfos,
+          permissions,
+          "read",
+          (info) => info.path,
+        );
 
         if (infos.length === 0) {
           return `No files found matching pattern '${pattern}'`;
@@ -496,27 +637,62 @@ function createGlobTool(
  */
 export function createFilesystemTools(
   backend: BackendProtocol | BackendFactory,
-  options?: { customToolDescriptions?: Record<string, string> | null },
+  options?: {
+    customToolDescriptions?: Record<string, string> | null;
+    /**
+     * First-match-wins permission rules applied inside each tool handler.
+     * Empty/omitted ⇒ allow-all (no behavior change). Rules sit above the
+     * backend's hard `validatePathInProject` boundary, not in place of it.
+     */
+    permissions?: readonly FilesystemPermission[];
+    /**
+     * Allowlist of built-in filesystem tools to expose. Omitted ⇒ all six.
+     * `read_file` is always included regardless (the agent must be able to
+     * read before it edits). Named separately from `createFilesystemMiddleware`'s
+     * `tools` option, which injects pre-created tool instances.
+     */
+    enabledTools?: readonly FsToolName[];
+  },
 ) {
   const customToolDescriptions = options?.customToolDescriptions ?? null;
-  return [
-    createLsTool(backend, { customDescription: customToolDescriptions?.ls }),
-    createReadFileTool(backend, {
+  const permissions = options?.permissions ?? [];
+
+  const byName: Record<FsToolName, ReturnType<typeof tool>> = {
+    ls: createLsTool(backend, {
+      customDescription: customToolDescriptions?.ls,
+      permissions,
+    }),
+    read_file: createReadFileTool(backend, {
       customDescription: customToolDescriptions?.read_file,
+      permissions,
     }),
-    createWriteFileTool(backend, {
+    write_file: createWriteFileTool(backend, {
       customDescription: customToolDescriptions?.write_file,
+      permissions,
     }),
-    createEditFileTool(backend, {
+    edit_file: createEditFileTool(backend, {
       customDescription: customToolDescriptions?.edit_file,
+      permissions,
     }),
-    createGlobTool(backend, {
+    glob: createGlobTool(backend, {
       customDescription: customToolDescriptions?.glob,
+      permissions,
     }),
-    createGrepTool(backend, {
+    grep: createGrepTool(backend, {
       customDescription: customToolDescriptions?.grep,
+      permissions,
     }),
-  ];
+  };
+
+  // No allowlist ⇒ all six, in canonical order. With an allowlist, keep
+  // canonical order but force-include read_file (mandatory capability).
+  const enabled = options?.enabledTools
+    ? new Set<FsToolName>([...options.enabledTools, "read_file"])
+    : new Set<FsToolName>(FILESYSTEM_TOOL_NAMES);
+
+  return FILESYSTEM_TOOL_NAMES.filter((name) => enabled.has(name)).map(
+    (name) => byName[name],
+  );
 }
 
 /**
@@ -526,9 +702,10 @@ function createGrepTool(
   backend: BackendProtocol | BackendFactory,
   options: {
     customDescription: string | undefined;
+    permissions?: readonly FilesystemPermission[];
   },
 ) {
-  const { customDescription } = options;
+  const { customDescription, permissions = [] } = options;
 
   return tool(
     async (input, config) => {
@@ -541,12 +718,23 @@ function createGrepTool(
         const { pattern, path, glob } = input;
         // Treat "*" as no filter (backward compatible with optional glob)
         const globFilter = glob === "*" ? null : glob;
-        const result = await resolvedBackend.grepRaw(pattern, path, globFilter);
+        const rawResult = await resolvedBackend.grepRaw(
+          pattern,
+          path,
+          globFilter,
+        );
 
         // If string, it's an error
-        if (typeof result === "string") {
-          return result;
+        if (typeof rawResult === "string") {
+          return rawResult;
         }
+
+        const result = filterByPermissions(
+          rawResult,
+          permissions,
+          "read",
+          (match) => match.path,
+        );
 
         if (result.length === 0) {
           return `No matches found for pattern '${pattern}'`;
@@ -602,6 +790,19 @@ export interface FilesystemMiddlewareOptions {
   toolTokenLimitBeforeEvict?: number | null;
   /** Pre-created tools (if provided, skips internal tool creation) */
   tools?: ReturnType<typeof createFilesystemTools>;
+  /**
+   * First-match-wins filesystem permission rules. Empty/omitted ⇒ allow-all.
+   * Validated at setup (paths must be absolute, no `..`/`~`). Enforced inside
+   * the tool handlers, above the backend's `validatePathInProject` boundary.
+   * Ignored when `tools` (pre-created instances) is supplied — bind permissions
+   * when you create those tools instead.
+   */
+  permissions?: readonly FilesystemPermission[];
+  /**
+   * Allowlist of built-in filesystem tools to expose (`read_file` always
+   * included). Omitted ⇒ all six. Ignored when `tools` is supplied.
+   */
+  enabledTools?: readonly FsToolName[];
 }
 
 /**
@@ -616,14 +817,23 @@ export function createFilesystemMiddleware(
     customToolDescriptions = null,
     toolTokenLimitBeforeEvict = 20000,
     tools: preCreatedTools,
+    permissions = [],
+    enabledTools,
   } = options;
+
+  // Fail fast on malformed rules (relative paths, `..`, `~`) before any tool runs.
+  validatePermissionPaths([...permissions]);
 
   const systemPrompt = customSystemPrompt || FILESYSTEM_SYSTEM_PROMPT;
 
   // Use pre-created tools or create new ones
   const tools =
     preCreatedTools ??
-    createFilesystemTools(backend, { customToolDescriptions });
+    createFilesystemTools(backend, {
+      customToolDescriptions,
+      permissions,
+      enabledTools,
+    });
 
   return createMiddleware({
     name: "FilesystemMiddleware",
