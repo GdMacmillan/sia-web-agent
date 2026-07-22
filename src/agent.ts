@@ -38,6 +38,11 @@ import {
   type CompiledSubAgent,
 } from "./middleware/index.js";
 import { mergeMiddlewareStack } from "./middleware/utils.js";
+import { createToolExclusionMiddleware } from "./middleware/tool_exclusion.js";
+import {
+  resolveHarnessProfile,
+  REQUIRED_MIDDLEWARE_NAMES,
+} from "./profiles/index.js";
 import type { BackendProtocol } from "./backends/index.js";
 import { InteropZodObject } from "@langchain/core/utils/types";
 import { AnnotationRoot } from "@langchain/langgraph";
@@ -210,25 +215,45 @@ export async function createDeepAgent<
   const finalContextSchema =
     contextSchema ?? (MessagesAnnotation as unknown as ContextSchema);
 
-  // Compose the system prompt from prefix / base / suffix. A plain string
-  // stays before the base prompt (legacy behavior); a SystemPromptConfig can
-  // replace/remove the base or append a suffix.
+  // Resolve the harness profile from the orchestrator model string, honoring
+  // the HARNESS_PROFILE override (off | <name>). A profile shapes prompt suffix,
+  // tool visibility/descriptions, and middleware composition — orthogonal to
+  // model selection. Empty profile (no match / "off") is a no-op.
+  const runtimeConfig = getConfig();
+  const orchestratorModel = resolveModelEndpoint(
+    runtimeConfig.llm,
+    "orchestrator",
+  ).model;
+  const harnessProfile = resolveHarnessProfile(
+    orchestratorModel,
+    runtimeConfig.runtime.harnessProfile,
+  );
+
+  // Compose the system prompt from prefix / base / suffix, then append the
+  // profile's suffix. A plain string systemPrompt stays before the base prompt
+  // (legacy behavior); a SystemPromptConfig can replace/remove the base.
   const basePrompt = await getBasePrompt();
   const promptConfig = normalizeSystemPrompt(systemPrompt);
   const baseSection =
-    promptConfig.base === null ? "" : (promptConfig.base ?? basePrompt);
+    promptConfig.base === null
+      ? ""
+      : (promptConfig.base ?? harnessProfile.baseSystemPrompt ?? basePrompt);
   const finalSystemPrompt = assemblePromptParts([
     promptConfig.prefix,
     baseSection,
     promptConfig.suffix,
+    harnessProfile.systemPromptSuffix,
   ]);
 
   // Create backend configuration for filesystem middleware
   // If no backend is provided, use the default FilesystemBackend with project root
   const filesystemBackend = backend ?? defaultBackendFactory;
 
-  // Create filesystem tools once and share between filesystem middleware and code execution
-  const filesystemTools = createFilesystemTools(filesystemBackend);
+  // Create filesystem tools once and share between filesystem middleware and
+  // code execution. Profile tool-description overrides apply to the fs tools.
+  const filesystemTools = createFilesystemTools(filesystemBackend, {
+    customToolDescriptions: harnessProfile.toolDescriptionOverrides,
+  });
 
   // Get summarization configuration from environment
   const summarizationConfig = getSummarizationConfig();
@@ -351,6 +376,8 @@ export async function createDeepAgent<
       defaultInterruptOn: interruptOn,
       subagents,
       generalPurposeAgent: true,
+      // Profile override for the `task` tool description, when provided.
+      taskDescription: harnessProfile.toolDescriptionOverrides.task,
     }),
     // Automatically summarizes conversation history when token limits are approached
     summarizationMiddleware({
@@ -382,11 +409,30 @@ export async function createDeepAgent<
   // default/tail entry in place; novel entries insert between the core and tail
   // segments. This name-addressable stack is what the genome operators
   // (swap/toggle/add/remove) build on.
-  const mergedMiddleware = mergeMiddlewareStack(
+  let mergedMiddleware = mergeMiddlewareStack(
     middleware,
     customMiddleware,
     tailMiddleware,
   );
+
+  // Apply the harness profile's middleware exclusions, protecting required
+  // scaffolding regardless of the profile (belt-and-suspenders — the profile
+  // factory already rejects required names at construction time).
+  if (harnessProfile.excludedMiddleware.size > 0) {
+    mergedMiddleware = mergedMiddleware.filter(
+      (m) =>
+        REQUIRED_MIDDLEWARE_NAMES.has(m.name) ||
+        !harnessProfile.excludedMiddleware.has(m.name),
+    );
+  }
+
+  // Remove excluded tools after every tool-injecting middleware has run.
+  if (harnessProfile.excludedTools.size > 0) {
+    mergedMiddleware = [
+      ...mergedMiddleware,
+      createToolExclusionMiddleware(harnessProfile.excludedTools),
+    ];
+  }
 
   return createAgent({
     model,

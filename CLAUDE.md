@@ -115,7 +115,12 @@ Middleware-based architecture in `src/middleware/`. Tools surfaced to
 the orchestrator:
 
 - **Filesystem** (`fs.ts`): `ls`, `read_file`, `write_file`, `edit_file`,
-  `glob`, `grep`
+  `glob`, `grep`. `createFilesystemMiddleware`/`createFilesystemTools`
+  accept a `permissions` policy (first-match-wins `FilesystemPermission`
+  rules, allow-all default; see `src/permissions/`) and an `enabledTools`
+  allowlist (`read_file` always included). Backends implement protocol
+  **v2** — every read-style method returns a structured `{ ..., error? }`
+  Result (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#protocol-v2-structured-result-returns)).
 - **Search** (`custom-tools.ts`): `search` — ripgrep-based codebase
   search
 - **Bash** (`tools/bash-tool.ts`): `bash` — shell command execution
@@ -127,7 +132,12 @@ the orchestrator:
 - **Checklists** (`tools/checklist-tools.ts`): `create_checklist`,
   `check_item`, `get_checklist`, and others
 - **Code Execution** (`code-execution.ts`): `execute_code` —
-  TypeScript/JavaScript via `tsx`
+  TypeScript/JavaScript via `tsx` (the default surface)
+- **Code Interpreter** (`src/code-interpreter/`, opt-in via
+  `ENABLE_CODE_INTERPRETER=true`): `eval` — JavaScript in a sandboxed
+  QuickJS WASM REPL with an in-REPL `task()` for parallel subagent
+  fan-out. Vendored from `@langchain/quickjs`; see
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#code-interpreter-quickjs)
 - **Memory** (`tools/memory-tools.ts`): graph-memory entity storage,
   search, retrieval, traversal, promotion. Eight tools wired in the
   default surface (`store_entity`, `retrieve_entity`, `search_entities`,
@@ -169,6 +179,14 @@ The agent's runtime behavior is defined by:
   `src/system-prompts.ts`.
 - **Skills** (`skills/`) — extended capabilities loaded on demand by
   the agent via the `load_skill` tool.
+- **Harness profiles** (`src/profiles/`) — JSON-serializable behavior
+  configuration ("proto-genomes"): prompt suffix/base, tool
+  visibility/descriptions, middleware exclusions. Resolved from the
+  model string (override with `HARNESS_PROFILE=off|<name>`). The
+  middleware stack is name-addressable via
+  `mergeMiddlewareStack` — same-name custom middleware replaces a
+  default in place; novel names insert between the core and tail
+  segments. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#harness-profiles).
 
 Both are first-class self-modification surfaces. When the agent is
 asked to improve itself or repurpose for a new role, it modifies these
