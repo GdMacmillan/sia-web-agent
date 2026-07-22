@@ -45,16 +45,68 @@ back to parity.
 
 ## Current upstream pin
 
-At the time this repo was extracted, the agent had pulled DeepAgents
-through approximately **deepagentsjs v1.3.1** (upstream commit
+**Baseline:** deepagentsjs **v1.3.1** (upstream commit
 [`08ed740`](https://github.com/langchain-ai/deepagentsjs/commit/08ed740)),
 plus one unpinned middleware-utilities port made shortly after.
 
+**Target:** deepagentsjs **v1.11.1** (upstream commit
+[`b215e70`](https://github.com/langchain-ai/deepagentsjs/commit/b215e70))
+— 387 commits ahead. **Status: sync in progress** (see phase status
+lines below).
+
+### Monorepo restructure (read this before diffing)
+
+Between the baseline and the target, upstream migrated from a flat
+`src/` layout to a **pnpm monorepo**. Paths changed:
+
+- Core SDK: `src/...` → `libs/deepagents/src/...`
+- Providers (sandboxes, code interpreter): `libs/providers/...`
+  (e.g. QuickJS lives at `libs/providers/quickjs/src/...`).
+
+**Always read upstream via `git show origin/main:<path>`** — a local
+working tree may be stale. A v1→v2 backend compat shim, if ever needed,
+exists upstream as `adaptBackendProtocol` at
+`libs/deepagents/src/backends/utils.ts`.
+
+### Scoping large drifts
+
+A drift this large (387 commits) **must** be scoped as multiple sync
+cycles rather than one mega-PR. This sync is broken into **6 phases**,
+each a kebab-case branch + PR verified with
+`yarn typecheck && yarn test && yarn lint`:
+
+| Phase | Branch | Status |
+|---|---|---|
+| 0 — docs: record the sync plan | `docs-upstream-sync-scope` | in progress |
+| 1 — QuickJS code interpreter (vendored) | `quickjs-code-interpreter` | pending |
+| 2 — filesystem permissions + allowlist | `filesystem-permissions` | pending |
+| 3 — backend protocol v2 (in-place) | `backend-protocol-v2` | pending |
+| 4 — agent.ts prompt config + middleware merge | `agent-prompt-and-middleware-merge` | pending |
+| 5 — harness profiles (slim + serializable) | `harness-profiles-slim` | pending |
+| 6 — final docs + pin close-out | folded into each phase | pending |
+
+### Classification (what to adopt vs skip this cycle)
+
+| Theme | Decision | Rationale / vision tie-in |
+|---|---|---|
+| QuickJS code interpreter (PTC) | **Adopt — vendored** | Sandboxed programmatic tool-calling + parallel subagent fan-out; substrate for fitness-evaluation suites |
+| Backend protocol v2 + BaseSandbox | **Port — full, in-place** | Current upstream shape for future syncs; BaseSandbox anchors future remote/distributed execution |
+| Filesystem permissions + tool allowlist | **Port** | Policy layer for experiment worktree isolation + future marketplace component trust |
+| agent.ts safe wins (prompt config, middleware merge, ordering) | **Port** | Name-addressable middleware stack is a genome prerequisite (swap/toggle/add/remove operators) |
+| Harness profiles | **Adapt — slim + serialization** | Profile ≈ proto-genome; keep zod config schema (poisoned-key guard) for genome/blueprint serialization; skip global registry |
+| Async subagents (remote Agent Protocol) | **Skip** | No remote LangGraph deployment need |
+| ACP package (IDE integration) | **Skip** | Not a CLI/IDE product |
+| Daytona/Modal/LangSmith sandboxes, ContextHub, node-vfs | **Skip** | No third-party infra dependency wanted |
+| Python-side (harbor, CLI features) | **Skip** | CLI-specific per existing workflow policy |
+
 To sync forward:
 
-1. `cd` into a local checkout of `langchain-ai/deepagentsjs`.
-2. `git diff 08ed740..HEAD --stat` to scope the work.
-3. Apply per the phases below.
+1. `cd` into a local checkout of `langchain-ai/deepagentsjs`
+   (`~/projects/deepagentsjs`).
+2. `git fetch origin`, then `git show origin/main:<path>` to read
+   upstream files (do not trust the working tree).
+3. Apply per the phases below; update the phase status line in this
+   table as each PR merges.
 
 Each successful sync should update the "current upstream pin" stated
 above so the next cycle starts from a fresh baseline.
