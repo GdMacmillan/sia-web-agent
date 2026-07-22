@@ -37,6 +37,7 @@ import {
   type SubAgent,
   type CompiledSubAgent,
 } from "./middleware/index.js";
+import { mergeMiddlewareStack } from "./middleware/utils.js";
 import type { BackendProtocol } from "./backends/index.js";
 import { InteropZodObject } from "@langchain/core/utils/types";
 import { AnnotationRoot } from "@langchain/langgraph";
@@ -56,8 +57,12 @@ export interface CreateDeepAgentParams<
   model: BaseLanguageModel;
   /** Tools the agent should have access to */
   tools?: StructuredTool[];
-  /** Custom system prompt for the agent. This will be combined with the base agent prompt */
-  systemPrompt?: string;
+  /**
+   * Custom system prompt for the agent. A string is placed before the base
+   * agent prompt (legacy behavior). For more control — replacing/removing the
+   * base prompt or appending a suffix — pass a {@link SystemPromptConfig}.
+   */
+  systemPrompt?: string | SystemPromptConfig;
   /** Custom middleware to apply after standard middleware */
   middleware?: AgentMiddleware[];
   /** List of subagent specifications for task delegation */
@@ -94,6 +99,51 @@ export interface CreateDeepAgentParams<
   name?: string;
   /** Optional project root directory for skills loading */
   projectRoot?: string;
+}
+
+/**
+ * Structured system-prompt configuration.
+ *
+ * Ported (string-adapted) from upstream deepagents' `SystemPromptConfig`. Lets
+ * a caller compose the final system prompt around the built-in base prompt
+ * instead of only prepending to it. `prefix` goes before the base, `suffix`
+ * after; `base` replaces the built-in base prompt (or `null` omits it).
+ * Phase 5's harness profiles drive `base`/`suffix` through this.
+ */
+export interface SystemPromptConfig {
+  /** Content placed before the base prompt. */
+  prefix?: string | null;
+  /**
+   * Replacement for the base prompt. Omit to keep the built-in base prompt;
+   * set to `null` to omit the base prompt entirely.
+   */
+  base?: string | null;
+  /** Content placed after the base prompt. */
+  suffix?: string | null;
+}
+
+const PROMPT_SEPARATOR = "\n\n";
+
+/** Normalize a legacy string system prompt into the structured form. */
+export function normalizeSystemPrompt(
+  systemPrompt: string | SystemPromptConfig | undefined,
+): SystemPromptConfig {
+  if (systemPrompt === undefined) {
+    return {};
+  }
+  if (typeof systemPrompt === "string") {
+    return { prefix: systemPrompt };
+  }
+  return systemPrompt;
+}
+
+/** Join non-empty prompt parts with the standard separator. */
+export function assemblePromptParts(
+  parts: readonly (string | null | undefined)[],
+): string {
+  return parts.filter((p): p is string => !!p && p.length > 0).join(
+    PROMPT_SEPARATOR,
+  );
 }
 
 /**
@@ -160,11 +210,18 @@ export async function createDeepAgent<
   const finalContextSchema =
     contextSchema ?? (MessagesAnnotation as unknown as ContextSchema);
 
-  // Combine system prompt with base prompt like Python implementation
+  // Compose the system prompt from prefix / base / suffix. A plain string
+  // stays before the base prompt (legacy behavior); a SystemPromptConfig can
+  // replace/remove the base or append a suffix.
   const basePrompt = await getBasePrompt();
-  const finalSystemPrompt = systemPrompt
-    ? `${systemPrompt}\n\n${basePrompt}`
-    : basePrompt;
+  const promptConfig = normalizeSystemPrompt(systemPrompt);
+  const baseSection =
+    promptConfig.base === null ? "" : (promptConfig.base ?? basePrompt);
+  const finalSystemPrompt = assemblePromptParts([
+    promptConfig.prefix,
+    baseSection,
+    promptConfig.suffix,
+  ]);
 
   // Create backend configuration for filesystem middleware
   // If no backend is provided, use the default FilesystemBackend with project root
@@ -283,12 +340,13 @@ export async function createDeepAgent<
           trigger: { tokens: summarizationConfig.triggerTokens },
           keep: { messages: summarizationConfig.keepMessages },
         }),
-        // Subagent middleware: Anthropic prompt caching for improved performance
+        // Subagent middleware: Patches tool calls for compatibility
+        createPatchToolCallsMiddleware(),
+        // Subagent middleware: Anthropic prompt caching — kept last to mirror
+        // the main stack's caching-in-tail order (upstream PR #331).
         anthropicPromptCachingMiddleware({
           unsupportedModelBehavior: "ignore",
         }),
-        // Subagent middleware: Patches tool calls for compatibility
-        createPatchToolCallsMiddleware(),
       ],
       defaultInterruptOn: interruptOn,
       subagents,
@@ -300,32 +358,41 @@ export async function createDeepAgent<
       trigger: { tokens: summarizationConfig.triggerTokens },
       keep: { messages: summarizationConfig.keepMessages },
     }),
-    // Enables Anthropic prompt caching for improved performance and reduced costs
+    // Patches tool calls to ensure compatibility across different model providers
+    createPatchToolCallsMiddleware(),
+  ];
+  // ^ `middleware` is now the CORE segment.
+
+  // Tail segment. Order per upstream deepagents PR #331: prompt caching, then
+  // knowledge formation, then human-in-the-loop. Caching is inert under
+  // OpenRouter today (unsupportedModelBehavior: "ignore") — zero-risk
+  // future-proofing that keeps the tail deterministic.
+  const tailMiddleware: AgentMiddleware[] = [
     anthropicPromptCachingMiddleware({
       unsupportedModelBehavior: "ignore",
     }),
-    // Patches tool calls to ensure compatibility across different model providers
-    createPatchToolCallsMiddleware(),
-    // Automatically extracts and stores learnings from task completions
     createKnowledgeFormationMiddleware({
       model: model as any,
       agentType: name || "main",
     }),
+    ...(interruptOn ? [humanInTheLoopMiddleware({ interruptOn })] : []),
   ];
 
-  // Add human-in-the-loop middleware if interrupt config provided
-  if (interruptOn) {
-    middleware.push(humanInTheLoopMiddleware({ interruptOn }));
-  }
-
-  // Add custom middleware last (after all built-in middleware)
-  middleware.push(...customMiddleware);
+  // Merge custom middleware by name: same-name entries replace the matching
+  // default/tail entry in place; novel entries insert between the core and tail
+  // segments. This name-addressable stack is what the genome operators
+  // (swap/toggle/add/remove) build on.
+  const mergedMiddleware = mergeMiddlewareStack(
+    middleware,
+    customMiddleware,
+    tailMiddleware,
+  );
 
   return createAgent({
     model,
     systemPrompt: finalSystemPrompt,
     tools,
-    middleware,
+    middleware: mergedMiddleware,
     responseFormat,
     contextSchema: finalContextSchema,
     checkpointer,

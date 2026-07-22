@@ -33,7 +33,12 @@ export {
   createCodeExecutionMiddleware,
   type CodeExecutionMiddlewareOptions,
 } from "./code-execution.js";
-export { appendToSystemMessage, prependToSystemMessage } from "./utils.js";
+export {
+  appendToSystemMessage,
+  prependToSystemMessage,
+  mergeMiddleware,
+  mergeMiddlewareStack,
+} from "./utils.js";
 export {
   createAutoContinueMiddleware,
   isRetryableError,

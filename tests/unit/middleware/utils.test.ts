@@ -130,3 +130,105 @@ describe("Middleware Utils", () => {
     });
   });
 });
+
+// --- Middleware merge helpers (Phase 4) -------------------------------------
+import {
+  mergeMiddleware,
+  mergeMiddlewareStack,
+} from "../../../src/middleware/utils.js";
+import type { AgentMiddleware } from "langchain";
+
+/** Minimal named middleware stub for ordering/identity assertions. */
+function mw(name: string): AgentMiddleware {
+  return { name } as unknown as AgentMiddleware;
+}
+const names = (list: AgentMiddleware[]) => list.map((m) => m.name);
+
+describe("mergeMiddleware", () => {
+  it("keeps base order when there is no custom middleware", () => {
+    const base = [mw("a"), mw("b"), mw("c")];
+    expect(names(mergeMiddleware(base, []))).toEqual(["a", "b", "c"]);
+  });
+
+  it("replaces a same-name entry in place (identity swap, position kept)", () => {
+    const base = [mw("a"), mw("b"), mw("c")];
+    const replacement = mw("b");
+    const merged = mergeMiddleware(base, [replacement]);
+    expect(names(merged)).toEqual(["a", "b", "c"]);
+    expect(merged[1]).toBe(replacement);
+  });
+
+  it("appends novel custom middleware after the base, in order", () => {
+    const base = [mw("a")];
+    expect(names(mergeMiddleware(base, [mw("x"), mw("y")]))).toEqual([
+      "a",
+      "x",
+      "y",
+    ]);
+  });
+});
+
+describe("mergeMiddlewareStack", () => {
+  const core = [mw("head"), mw("core1"), mw("core2")];
+  const tail = [mw("tail1"), mw("tail2")];
+
+  it("assembles core then tail with no custom middleware", () => {
+    expect(names(mergeMiddlewareStack(core, [], tail))).toEqual([
+      "head",
+      "core1",
+      "core2",
+      "tail1",
+      "tail2",
+    ]);
+  });
+
+  it("inserts novel custom middleware between core and tail", () => {
+    const merged = mergeMiddlewareStack(core, [mw("novel")], tail);
+    expect(names(merged)).toEqual([
+      "head",
+      "core1",
+      "core2",
+      "novel",
+      "tail1",
+      "tail2",
+    ]);
+  });
+
+  it("replaces a same-name core entry in place rather than appending", () => {
+    const replacement = mw("core2");
+    const merged = mergeMiddlewareStack(core, [replacement], tail);
+    expect(names(merged)).toEqual([
+      "head",
+      "core1",
+      "core2",
+      "tail1",
+      "tail2",
+    ]);
+    expect(merged[2]).toBe(replacement);
+  });
+
+  it("replaces a same-name tail entry in place", () => {
+    const replacement = mw("tail1");
+    const merged = mergeMiddlewareStack(core, [replacement], tail);
+    expect(merged[3]).toBe(replacement);
+    expect(names(merged)).toEqual([
+      "head",
+      "core1",
+      "core2",
+      "tail1",
+      "tail2",
+    ]);
+  });
+
+  it("appendNew:false drops novel custom middleware but still replaces", () => {
+    const replacement = mw("core1");
+    const merged = mergeMiddlewareStack(
+      core,
+      [mw("novel"), replacement],
+      tail,
+      { appendNew: false },
+    );
+    expect(names(merged)).toEqual(["head", "core1", "core2", "tail1", "tail2"]);
+    expect(merged[1]).toBe(replacement);
+  });
+});
