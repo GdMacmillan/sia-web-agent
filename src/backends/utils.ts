@@ -8,8 +8,9 @@
 
 import micromatch from "micromatch";
 import safeRegex from "safe-regex";
-import { basename } from "path";
-import type { FileData, GrepMatch } from "./protocol.js";
+import { basename, extname } from "path";
+import type { FileData, FileInfo, GrepMatch } from "./protocol.js";
+import { isFileDataV1 } from "./protocol.js";
 import { detectEol, toLf, toEol } from "../utils/eol.js";
 
 /** Max accepted length of a caller-supplied grep/search regex pattern. */
@@ -149,7 +150,11 @@ export function checkEmptyContent(content: string): string | null {
  * @returns Content as string with lines joined by newlines
  */
 export function fileDataToString(fileData: FileData): string {
-  return fileData.content.join("\n");
+  // v1 stores content as a line array; v2 stores a string (text) or bytes.
+  if (isFileDataV1(fileData)) {
+    return fileData.content.join("\n");
+  }
+  return typeof fileData.content === "string" ? fileData.content : "";
 }
 
 /**
@@ -461,9 +466,10 @@ export function grepSearchFiles(
 
   const results: Record<string, Array<[number, string]>> = {};
   for (const [filePath, fileData] of Object.entries(filtered)) {
-    for (let i = 0; i < fileData.content.length; i++) {
+    const lines = fileDataToString(fileData).split("\n");
+    for (let i = 0; i < lines.length; i++) {
       // Strip a trailing \r so $-anchored patterns and previews behave on CRLF.
-      const line = fileData.content[i].replace(/\r$/, "");
+      const line = lines[i].replace(/\r$/, "");
       const lineNum = i + 1;
       if (regex.test(line)) {
         if (!results[filePath]) {
@@ -522,9 +528,10 @@ export function grepMatchesFromFiles(
 
   const matches: GrepMatch[] = [];
   for (const [filePath, fileData] of Object.entries(filtered)) {
-    for (let i = 0; i < fileData.content.length; i++) {
+    const lines = fileDataToString(fileData).split("\n");
+    for (let i = 0; i < lines.length; i++) {
       // Strip a trailing \r so $-anchored patterns and previews behave on CRLF.
-      const line = fileData.content[i].replace(/\r$/, "");
+      const line = lines[i].replace(/\r$/, "");
       const lineNum = i + 1;
       if (regex.test(line)) {
         matches.push({ path: filePath, line: lineNum, text: line });
@@ -562,4 +569,115 @@ export function formatGrepMatches(
     return "No matches found";
   }
   return formatGrepResults(buildGrepResultsDict(matches), outputMode);
+}
+
+// ============================================================================
+// MIME type detection (ride-along: multimodal read path)
+// ============================================================================
+
+/**
+ * Extension → MIME type table. Ported from upstream deepagents. Only the
+ * non-text formats (images, audio, video, PDF/PPT) are treated as binary by
+ * {@link isTextMimeType}; everything else (source files, config, extension-less
+ * files) falls through to "text/plain" and reads as text, so we never
+ * base64-encode source into an unreadable document block.
+ */
+const MIME_TYPES: Record<string, string> = {
+  // images
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+  // audio
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".aiff": "audio/aiff",
+  ".aac": "audio/aac",
+  ".ogg": "audio/ogg",
+  ".flac": "audio/flac",
+  // video
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mpeg": "video/mpeg",
+  ".mov": "video/quicktime",
+  ".avi": "video/x-msvideo",
+  ".flv": "video/x-flv",
+  ".mpg": "video/mpeg",
+  ".wmv": "video/x-ms-wmv",
+  ".3gpp": "video/3gpp",
+  // documents
+  ".pdf": "application/pdf",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx":
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  // text / code — explicit entries give a specific MIME type; unknown
+  // extensions fall through to the "text/plain" default.
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".markdown": "text/markdown",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".css": "text/css",
+  ".csv": "text/csv",
+  ".xml": "text/xml",
+  ".json": "application/json",
+  ".js": "application/javascript",
+  ".mjs": "application/javascript",
+  ".cjs": "application/javascript",
+};
+
+/**
+ * Determine MIME type from a file path's extension. Defaults to "text/plain"
+ * for unknown extensions.
+ */
+export function getMimeType(filePath: string): string {
+  const ext = extname(filePath).toLocaleLowerCase();
+  return MIME_TYPES[ext] || "text/plain";
+}
+
+/**
+ * Whether a MIME type represents text content (read as a string) versus binary
+ * (read as raw bytes for a multimodal block).
+ */
+export function isTextMimeType(mimeType: string): boolean {
+  return (
+    mimeType.startsWith("text/") ||
+    mimeType === "application/json" ||
+    mimeType === "application/javascript" ||
+    mimeType === "image/svg+xml"
+  );
+}
+
+// ============================================================================
+// Result truncation (ride-along: bound ls/glob/grep result size)
+// ============================================================================
+
+/** Max entries returned from an ls/glob listing before truncation. */
+export const MAX_LISTING_RESULTS = 1000;
+/** Max grep matches returned before truncation. */
+export const MAX_GREP_MATCHES = 2000;
+
+/**
+ * Cap a FileInfo listing (ls/glob) at {@link MAX_LISTING_RESULTS} entries so a
+ * pathological directory can't return an unbounded result. Returns the input
+ * unchanged when it is already within the cap.
+ */
+export function truncateFileInfos(infos: FileInfo[]): FileInfo[] {
+  return infos.length > MAX_LISTING_RESULTS
+    ? infos.slice(0, MAX_LISTING_RESULTS)
+    : infos;
+}
+
+/**
+ * Cap grep matches at {@link MAX_GREP_MATCHES}. Returns the input unchanged when
+ * already within the cap.
+ */
+export function truncateGrepMatches(matches: GrepMatch[]): GrepMatch[] {
+  return matches.length > MAX_GREP_MATCHES
+    ? matches.slice(0, MAX_GREP_MATCHES)
+    : matches;
 }

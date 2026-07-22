@@ -78,14 +78,14 @@ describe("State Backend", () => {
       const result = await backend.read("/test.txt");
 
       expect(result).toBeDefined();
-      expect(typeof result).toBe("string");
+      expect(typeof result).toBe("object");
     });
 
     it("should handle non-existent files", async () => {
       const result = await backend.read("/nonexistent.txt");
 
       expect(result).toBeDefined();
-      expect(typeof result).toBe("string");
+      expect(typeof result).toBe("object");
     });
 
     it("should read empty files", async () => {
@@ -227,7 +227,7 @@ describe("State Backend", () => {
         backend.read("/shared.txt"),
       ]);
 
-      expect(results.every((r) => typeof r === "string")).toBe(true);
+      expect(results.every((r) => typeof r === "object")).toBe(true);
     });
   });
 
@@ -251,7 +251,7 @@ describe("State Backend", () => {
 
       const read = await backend.read("/verify.txt");
 
-      expect(typeof read).toBe("string");
+      expect(typeof read).toBe("object");
     });
   });
 });

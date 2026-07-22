@@ -4,10 +4,15 @@
 
 import type {
   BackendProtocol,
+  DeleteResult,
   EditResult,
   FileData,
   FileInfo,
-  GrepMatch,
+  GlobResult,
+  GrepResult,
+  LsResult,
+  ReadRawResult,
+  ReadResult,
   StateAndStore,
   WriteResult,
 } from "./protocol.js";
@@ -15,9 +20,12 @@ import {
   createFileData,
   fileDataToString,
   formatReadResponse,
+  getMimeType,
   globSearchFiles,
   grepMatchesFromFiles,
   performStringReplacement,
+  truncateFileInfos,
+  truncateGrepMatches,
   updateFileData,
 } from "./utils.js";
 
@@ -56,7 +64,7 @@ export class StateBackend implements BackendProtocol {
    * @returns List of FileInfo objects for files and directories directly in the directory.
    *          Directories have a trailing / in their path and is_dir=true.
    */
-  lsInfo(path: string): FileInfo[] {
+  ls(path: string): LsResult {
     const files = this.getFiles();
     const infos: FileInfo[] = [];
     const subdirs = new Set<string>();
@@ -82,7 +90,7 @@ export class StateBackend implements BackendProtocol {
       }
 
       // This is a file directly in the current directory
-      const size = fd.content.join("\n").length;
+      const size = fileDataToString(fd).length;
       infos.push({
         path: k,
         is_dir: false,
@@ -102,7 +110,7 @@ export class StateBackend implements BackendProtocol {
     }
 
     infos.sort((a, b) => a.path.localeCompare(b.path));
-    return infos;
+    return { files: truncateFileInfos(infos) };
   }
 
   /**
@@ -111,31 +119,38 @@ export class StateBackend implements BackendProtocol {
    * @param filePath - Absolute file path
    * @param offset - Line offset to start reading from (0-indexed)
    * @param limit - Maximum number of lines to read
-   * @returns Formatted file content with line numbers, or error message
+   * @returns ReadResult with content on success or error on failure
    */
-  read(filePath: string, offset: number = 0, limit: number = 2000): string {
+  read(
+    filePath: string,
+    offset: number = 0,
+    limit: number = 2000,
+  ): ReadResult {
     const files = this.getFiles();
     const fileData = files[filePath];
 
     if (!fileData) {
-      return `Error: File '${filePath}' not found`;
+      return { error: `File '${filePath}' not found` };
     }
 
-    return formatReadResponse(fileData, offset, limit);
+    return {
+      content: formatReadResponse(fileData, offset, limit),
+      mimeType: getMimeType(filePath),
+    };
   }
 
   /**
    * Read file content as raw FileData.
    *
    * @param filePath - Absolute file path
-   * @returns Raw file content as FileData
+   * @returns ReadRawResult with data on success or error on failure
    */
-  readRaw(filePath: string): FileData {
+  readRaw(filePath: string): ReadRawResult {
     const files = this.getFiles();
     const fileData = files[filePath];
 
-    if (!fileData) throw new Error(`File '${filePath}' not found`);
-    return fileData;
+    if (!fileData) return { error: `File '${filePath}' not found` };
+    return { data: fileData };
   }
 
   /**
@@ -199,31 +214,35 @@ export class StateBackend implements BackendProtocol {
   /**
    * Structured search results or error string for invalid input.
    */
-  grepRaw(
+  grep(
     pattern: string,
-    path: string = "/",
+    path: string | null = "/",
     glob: string | null = null,
-  ): GrepMatch[] | string {
+  ): GrepResult {
     const files = this.getFiles();
-    return grepMatchesFromFiles(files, pattern, path, glob);
+    const result = grepMatchesFromFiles(files, pattern, path ?? "/", glob);
+    if (typeof result === "string") {
+      return { error: result };
+    }
+    return { matches: truncateGrepMatches(result) };
   }
 
   /**
    * Structured glob matching returning FileInfo objects.
    */
-  globInfo(pattern: string, path: string = "/"): FileInfo[] {
+  glob(pattern: string, path: string = "/"): GlobResult {
     const files = this.getFiles();
     const result = globSearchFiles(files, pattern, path);
 
     if (result === "No files found") {
-      return [];
+      return { files: [] };
     }
 
     const paths = result.split("\n");
     const infos: FileInfo[] = [];
     for (const p of paths) {
       const fd = files[p];
-      const size = fd ? fd.content.join("\n").length : 0;
+      const size = fd ? fileDataToString(fd).length : 0;
       infos.push({
         path: p,
         is_dir: false,
@@ -231,6 +250,23 @@ export class StateBackend implements BackendProtocol {
         modified_at: fd?.modified_at || "",
       });
     }
-    return infos;
+    return { files: truncateFileInfos(infos) };
+  }
+
+  /**
+   * Validate that a file exists and is eligible for deletion.
+   *
+   * NOTE: LangGraph state is immutable except via `Command`, and `DeleteResult`
+   * carries no `filesUpdate`, so this does not itself remove the key from
+   * state. No `delete` tool is currently wired into the filesystem middleware;
+   * this satisfies the protocol surface and validates existence. A future
+   * delete tool would apply the state removal via a `Command` in its handler.
+   */
+  delete(filePath: string): DeleteResult {
+    const files = this.getFiles();
+    if (!(filePath in files)) {
+      return { error: `File '${filePath}' not found` };
+    }
+    return { path: filePath };
   }
 }

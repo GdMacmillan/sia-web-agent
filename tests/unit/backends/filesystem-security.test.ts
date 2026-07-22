@@ -8,6 +8,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import {
+  lsFiles,
+  globFiles,
+  grepResult,
+  readStr,
+  readRawData,
+} from "../../helpers/backend-compat.js";
 import { FilesystemBackend } from "../../../src/backends/filesystem.js";
 import {
   getProjectRoot,
@@ -48,17 +55,17 @@ describe("FilesystemBackend Security", () => {
       const testFile = path.join(tempDir, "test-read.txt");
       await fs.writeFile(testFile, "test content");
 
-      const result = await backend.read(testFile);
+      const result = await readStr(backend, testFile);
       expect(result).toContain("test content");
     });
 
     it("should reject reading /etc/passwd", async () => {
-      const result = await backend.read("/etc/passwd");
+      const result = await readStr(backend, "/etc/passwd");
       expect(result).toMatch(/Security Error|Path access denied|outside/i);
     });
 
     it("should reject reading from /tmp", async () => {
-      const result = await backend.read("/tmp/some-file.txt");
+      const result = await readStr(backend, "/tmp/some-file.txt");
       expect(result).toMatch(/Security Error|Path access denied|outside/i);
     });
 
@@ -71,7 +78,7 @@ describe("FilesystemBackend Security", () => {
         "etc",
         "passwd",
       );
-      const result = await backend.read(traversalPath);
+      const result = await readStr(backend, traversalPath);
       expect(result).toMatch(/Security Error|Path access denied|outside/i);
     });
 
@@ -79,7 +86,7 @@ describe("FilesystemBackend Security", () => {
       const homePath = path.join(os.homedir(), ".bashrc");
       // Only test if home is actually outside project
       if (!homePath.startsWith(projectRoot)) {
-        const result = await backend.read(homePath);
+        const result = await readStr(backend, homePath);
         expect(result).toMatch(/Security Error|Path access denied|outside/i);
       }
     });
@@ -153,12 +160,12 @@ describe("FilesystemBackend Security", () => {
 
   describe("List Operations", () => {
     it("should allow listing directories within project", async () => {
-      const result = await backend.lsInfo(tempDir);
+      const result = await lsFiles(backend, tempDir);
       expect(Array.isArray(result)).toBe(true);
     });
 
     it("should reject listing /etc directory", async () => {
-      const result = await backend.lsInfo("/etc");
+      const result = await lsFiles(backend, "/etc");
       // Should return empty array or throw error
       expect(Array.isArray(result)).toBe(true);
       // If it doesn't throw, it should return empty due to validation
@@ -169,7 +176,7 @@ describe("FilesystemBackend Security", () => {
     });
 
     it("should reject listing /tmp directory", async () => {
-      const result = await backend.lsInfo("/tmp");
+      const result = await lsFiles(backend, "/tmp");
       expect(Array.isArray(result)).toBe(true);
       // Should be empty due to validation
       if (result.length > 0) {
@@ -186,13 +193,13 @@ describe("FilesystemBackend Security", () => {
       await fs.writeFile(testFile1, "content1");
       await fs.writeFile(testFile2, "content2");
 
-      const result = await backend.globInfo("*.txt", tempDir);
+      const result = await globFiles(backend, "*.txt", tempDir);
       expect(Array.isArray(result)).toBe(true);
       expect(result.length).toBeGreaterThan(0);
     });
 
     it("should default search path to project root when given '/'", async () => {
-      const result = await backend.globInfo("*.md", "/");
+      const result = await globFiles(backend, "*.md", "/");
       expect(Array.isArray(result)).toBe(true);
       // Results should be within project
       for (const file of result) {
@@ -209,12 +216,12 @@ describe("FilesystemBackend Security", () => {
       const testFile = path.join(tempDir, "grep-test.txt");
       await fs.writeFile(testFile, "searchable content here");
 
-      const result = await backend.grepRaw("searchable", tempDir);
+      const result = await grepResult(backend, "searchable", tempDir);
       expect(Array.isArray(result) || typeof result === "string").toBe(true);
     });
 
     it("should reject grep outside project", async () => {
-      const result = await backend.grepRaw("root", "/etc");
+      const result = await grepResult(backend, "root", "/etc");
       // Should return empty results or error
       expect(Array.isArray(result) || typeof result === "string").toBe(true);
       if (Array.isArray(result)) {
@@ -226,17 +233,17 @@ describe("FilesystemBackend Security", () => {
 
   describe("Error Messages", () => {
     it("should include attempted path in error message", async () => {
-      const result = await backend.read("/etc/passwd");
+      const result = await readStr(backend, "/etc/passwd");
       expect(result).toContain("/etc/passwd");
     });
 
     it("should include project boundary in error message", async () => {
-      const result = await backend.read("/etc/passwd");
+      const result = await readStr(backend, "/etc/passwd");
       expect(result.toLowerCase()).toMatch(/project|boundary|root/);
     });
 
     it("should provide actionable guidance", async () => {
-      const result = await backend.read("/etc/passwd");
+      const result = await readStr(backend, "/etc/passwd");
       expect(result.toLowerCase()).toMatch(/within|inside|project/);
     });
   });
@@ -249,7 +256,7 @@ describe("FilesystemBackend Security", () => {
         virtualMode: false,
       });
 
-      const result1 = await backendNoVirtual.read("/etc/passwd");
+      const result1 = await readStr(backendNoVirtual, "/etc/passwd");
       expect(result1).toMatch(/Security Error|Path access denied|outside/i);
 
       // Test with virtualMode: true
@@ -262,7 +269,7 @@ describe("FilesystemBackend Security", () => {
       });
 
       // Try path traversal in virtualMode - should be blocked
-      const result2 = await backendVirtual.read("../../../etc/passwd");
+      const result2 = await readStr(backendVirtual, "../../../etc/passwd");
       expect(result2).toMatch(/Path traversal not allowed/i);
     });
 
@@ -275,7 +282,7 @@ describe("FilesystemBackend Security", () => {
         rootDir: projectRoot,
         virtualMode: false,
       });
-      const result1 = await backendNoVirtual.read(testFile);
+      const result1 = await readStr(backendNoVirtual, testFile);
       expect(result1).toContain("test");
 
       // virtualMode: true
@@ -284,7 +291,7 @@ describe("FilesystemBackend Security", () => {
         virtualMode: true,
       });
       const relativePath = path.relative(projectRoot, testFile);
-      const result2 = await backendVirtual.read("/" + relativePath);
+      const result2 = await readStr(backendVirtual, "/" + relativePath);
       expect(result2).toContain("test");
     });
   });
@@ -300,12 +307,12 @@ describe("FilesystemBackend Security", () => {
         "etc",
         "passwd",
       );
-      const result = await backend.read(traversal);
+      const result = await readStr(backend, traversal);
       expect(result).toMatch(/Security Error|Path access denied|outside/i);
     });
 
     it("should block absolute path attack: /etc/shadow", async () => {
-      const result = await backend.read("/etc/shadow");
+      const result = await readStr(backend, "/etc/shadow");
       expect(result).toMatch(/Security Error|Path access denied|outside/i);
     });
 
@@ -321,7 +328,7 @@ describe("FilesystemBackend Security", () => {
       const parentDir = path.dirname(projectRoot);
       // Only test if parent is actually different (handles root directory edge case)
       if (parentDir !== projectRoot) {
-        const result = await backend.read(
+        const result = await readStr(backend, 
           path.join(parentDir, "some-file.txt"),
         );
         expect(result).toMatch(/Security Error|Path access denied|outside/i);

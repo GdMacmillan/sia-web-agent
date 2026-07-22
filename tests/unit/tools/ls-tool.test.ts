@@ -27,7 +27,7 @@ describe("FilesystemBackend - ls tool path resolution", () => {
   describe("Path resolution behavior", () => {
     it("should resolve absolute path /usr without error", async () => {
       // This test documents that absolute paths are passed through to filesystem
-      const infos = await backend.lsInfo("/usr");
+      const infos = (await backend.ls("/usr")).files ?? [];
       // /usr should exist on most systems
       expect(Array.isArray(infos)).toBe(true);
       if (infos.length > 0) {
@@ -38,27 +38,27 @@ describe("FilesystemBackend - ls tool path resolution", () => {
 
     it("should resolve empty string without error", async () => {
       // Empty string as relative path should resolve to cwd (projectRoot)
-      const infos = await backend.lsInfo("");
+      const infos = (await backend.ls("")).files ?? [];
       // Should return an array (may be empty depending on directory)
       expect(Array.isArray(infos)).toBe(true);
     });
 
     it("should resolve relative path 'src' without error", async () => {
       // Relative paths should resolve relative to projectRoot
-      const infos = await backend.lsInfo("src");
+      const infos = (await backend.ls("src")).files ?? [];
       // Should not throw an error
       expect(Array.isArray(infos)).toBe(true);
     });
 
     it("should resolve root string / without error", async () => {
       // "/" is treated as absolute path by resolvePath
-      const infos = await backend.lsInfo("/");
+      const infos = (await backend.ls("/")).files ?? [];
       expect(Array.isArray(infos)).toBe(true);
     });
 
     it("should resolve dot . without error", async () => {
       // Current directory is projectRoot
-      const infos = await backend.lsInfo(".");
+      const infos = (await backend.ls(".")).files ?? [];
       // Should return an array
       expect(Array.isArray(infos)).toBe(true);
     });
@@ -73,8 +73,8 @@ describe("FilesystemBackend - ls tool path resolution", () => {
 
     it("backend should handle both absolute and relative paths", async () => {
       // Test that both absolute paths (/) and relative paths ("") work without error
-      const rootDirInfos = await backend.lsInfo("/");
-      const projectDirInfos = await backend.lsInfo("");
+      const rootDirInfos = (await backend.ls("/")).files ?? [];
+      const projectDirInfos = (await backend.ls("")).files ?? [];
 
       // Both should return arrays
       expect(Array.isArray(rootDirInfos)).toBe(true);

@@ -11,10 +11,14 @@ import type {
   BackendProtocol,
   EditResult,
   FileData,
-  FileInfo,
-  GrepMatch,
+  GlobResult,
+  GrepResult,
+  LsResult,
+  ReadRawResult,
+  ReadResult,
   WriteResult,
 } from "./protocol.js";
+import { fileDataToString, getMimeType } from "./utils.js";
 import { LRUCache, type CacheStats } from "../utils/lru-cache.js";
 
 const REMOTE_TIMEOUT_MS = 30_000;
@@ -43,11 +47,11 @@ export class RemoteBackend implements BackendProtocol {
   private nodeId: string;
   private leaderProjectRoot: string | null;
 
-  private readCache: LRUCache<string, string> | null;
+  private readCache: LRUCache<string, ReadResult> | null;
   private readRawCache: LRUCache<string, FileData> | null;
-  private grepCache: LRUCache<string, GrepMatch[] | string> | null;
-  private globCache: LRUCache<string, FileInfo[]> | null;
-  private lsCache: LRUCache<string, FileInfo[]> | null;
+  private grepCache: LRUCache<string, GrepResult> | null;
+  private globCache: LRUCache<string, GlobResult> | null;
+  private lsCache: LRUCache<string, LsResult> | null;
 
   constructor(config: RemoteBackendConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
@@ -159,7 +163,7 @@ export class RemoteBackend implements BackendProtocol {
     }
   }
 
-  async lsInfo(path: string): Promise<FileInfo[]> {
+  async ls(path: string): Promise<LsResult> {
     const cacheKey = `ls:${path}`;
     const cached = this.lsCache?.get(cacheKey);
     if (cached !== undefined) return cached;
@@ -174,20 +178,22 @@ export class RemoteBackend implements BackendProtocol {
         }>;
       }>("/files/ls", { path });
 
-      const result = data.entries.map((entry) => ({
-        path: entry.path,
-        is_dir: entry.is_dir,
-        size: entry.size,
-        modified_at: entry.modified_at,
-      }));
+      const result: LsResult = {
+        files: data.entries.map((entry) => ({
+          path: entry.path,
+          is_dir: entry.is_dir,
+          size: entry.size,
+          modified_at: entry.modified_at,
+        })),
+      };
       this.lsCache?.set(cacheKey, result);
       return result;
     } catch (error) {
+      // Recoverable {error} rather than a thrown, run-ending exception.
       const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Failed to list remote directory on ${this.nodeId}: ${msg}`,
-        { cause: error },
-      );
+      return {
+        error: `Failed to list remote directory on ${this.nodeId}: ${msg}`,
+      };
     }
   }
 
@@ -195,7 +201,7 @@ export class RemoteBackend implements BackendProtocol {
     filePath: string,
     offset: number = 0,
     limit: number = 2000,
-  ): Promise<string> {
+  ): Promise<ReadResult> {
     const cacheKey = `${filePath}:${offset}:${limit}`;
     const cached = this.readCache?.get(cacheKey);
     if (cached !== undefined) return cached;
@@ -210,43 +216,52 @@ export class RemoteBackend implements BackendProtocol {
         limit: String(limit),
       });
 
-      this.readCache?.set(cacheKey, data.content);
-      return data.content;
+      const result: ReadResult = {
+        content: data.content,
+        mimeType: getMimeType(filePath),
+      };
+      this.readCache?.set(cacheKey, result);
+      return result;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      return `Error reading remote file on ${this.nodeId}: ${msg}`;
+      return { error: `Error reading remote file on ${this.nodeId}: ${msg}` };
     }
   }
 
-  async readRaw(filePath: string): Promise<FileData> {
+  async readRaw(filePath: string): Promise<ReadRawResult> {
     const cached = this.readRawCache?.get(filePath);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) return { data: cached };
 
-    const data = await this.fetchJSON<{
-      content: string;
-      path: string;
-      modified_at?: string;
-    }>("/files/read", {
-      path: filePath,
-      offset: "0",
-      limit: "100000", // Read as much as possible
-    });
+    try {
+      const data = await this.fetchJSON<{
+        content: string;
+        path: string;
+        modified_at?: string;
+      }>("/files/read", {
+        path: filePath,
+        offset: "0",
+        limit: "100000", // Read as much as possible
+      });
 
-    // Parse the line-numbered content back into raw lines
-    const lines = data.content.split("\n").map((line) => {
-      // Strip the line number prefix (e.g. "     1\t")
-      const tabIndex = line.indexOf("\t");
-      return tabIndex >= 0 ? line.substring(tabIndex + 1) : line;
-    });
+      // Parse the line-numbered content back into raw lines
+      const lines = data.content.split("\n").map((line) => {
+        // Strip the line number prefix (e.g. "     1\t")
+        const tabIndex = line.indexOf("\t");
+        return tabIndex >= 0 ? line.substring(tabIndex + 1) : line;
+      });
 
-    const modifiedAt = data.modified_at ?? new Date().toISOString();
-    const result: FileData = {
-      content: lines,
-      created_at: modifiedAt,
-      modified_at: modifiedAt,
-    };
-    this.readRawCache?.set(filePath, result);
-    return result;
+      const modifiedAt = data.modified_at ?? new Date().toISOString();
+      const fileData: FileData = {
+        content: lines,
+        created_at: modifiedAt,
+        modified_at: modifiedAt,
+      };
+      this.readRawCache?.set(filePath, fileData);
+      return { data: fileData };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { error: `Error reading remote file on ${this.nodeId}: ${msg}` };
+    }
   }
 
   async write(filePath: string, content: string): Promise<WriteResult> {
@@ -293,8 +308,13 @@ export class RemoteBackend implements BackendProtocol {
       // Sync edited content to leader
       if (this.leaderProjectRoot) {
         try {
-          const data = await this.readRaw(filePath);
-          await this.syncToLeader(filePath, data.content.join("\n") + "\n");
+          const raw = await this.readRaw(filePath);
+          if (raw.data) {
+            await this.syncToLeader(
+              filePath,
+              fileDataToString(raw.data) + "\n",
+            );
+          }
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn(
@@ -314,11 +334,11 @@ export class RemoteBackend implements BackendProtocol {
     }
   }
 
-  async grepRaw(
+  async grep(
     pattern: string,
     path?: string | null,
     glob?: string | null,
-  ): Promise<GrepMatch[] | string> {
+  ): Promise<GrepResult> {
     const cacheKey = `grep:${pattern}:${path ?? ""}:${glob ?? ""}`;
     const cached = this.grepCache?.get(cacheKey);
     if (cached !== undefined) return cached;
@@ -333,20 +353,24 @@ export class RemoteBackend implements BackendProtocol {
         truncated: boolean;
       }>("/files/grep", body);
 
-      const result = data.matches.map((m) => ({
-        path: m.path,
-        line: m.line,
-        text: m.text,
-      }));
+      const result: GrepResult = {
+        matches: data.matches.map((m) => ({
+          path: m.path,
+          line: m.line,
+          text: m.text,
+        })),
+      };
       this.grepCache?.set(cacheKey, result);
       return result;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      return `Error searching remote files on ${this.nodeId}: ${msg}`;
+      return {
+        error: `Error searching remote files on ${this.nodeId}: ${msg}`,
+      };
     }
   }
 
-  async globInfo(pattern: string, path?: string): Promise<FileInfo[]> {
+  async glob(pattern: string, path?: string): Promise<GlobResult> {
     const cacheKey = `glob:${pattern}:${path ?? ""}`;
     const cached = this.globCache?.get(cacheKey);
     if (cached !== undefined) return cached;
@@ -365,19 +389,20 @@ export class RemoteBackend implements BackendProtocol {
         truncated: boolean;
       }>("/files/glob", params);
 
-      const result = data.files.map((f) => ({
-        path: f.path,
-        is_dir: f.is_dir,
-        size: f.size,
-        modified_at: f.modified_at,
-      }));
+      const result: GlobResult = {
+        files: data.files.map((f) => ({
+          path: f.path,
+          is_dir: f.is_dir,
+          size: f.size,
+          modified_at: f.modified_at,
+        })),
+      };
       this.globCache?.set(cacheKey, result);
       return result;
     } catch (error) {
+      // Recoverable {error} rather than a thrown exception.
       const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to glob remote files on ${this.nodeId}: ${msg}`, {
-        cause: error,
-      });
+      return { error: `Failed to glob remote files on ${this.nodeId}: ${msg}` };
     }
   }
 }

@@ -18,17 +18,27 @@ import fg from "fast-glob";
 import micromatch from "micromatch";
 import type {
   BackendProtocol,
+  DeleteResult,
   EditResult,
   FileData,
   FileInfo,
+  GlobResult,
   GrepMatch,
+  GrepResult,
+  LsResult,
+  ReadRawResult,
+  ReadResult,
   WriteResult,
 } from "./protocol.js";
 import {
   checkEmptyContent,
   compileUserRegex,
   formatContentWithLineNumbers,
+  getMimeType,
+  isTextMimeType,
   performStringReplacement,
+  truncateFileInfos,
+  truncateGrepMatches,
 } from "./utils.js";
 import { toLf } from "../utils/eol.js";
 import { resolveRipgrep } from "../utils/fs-compat.js";
@@ -106,13 +116,13 @@ export class FilesystemBackend implements BackendProtocol {
    * @returns List of FileInfo objects for files and directories directly in the directory.
    *          Directories have a trailing / in their path and is_dir=true.
    */
-  async lsInfo(dirPath: string): Promise<FileInfo[]> {
+  async ls(dirPath: string): Promise<LsResult> {
     try {
       const resolvedPath = this.resolvePath(dirPath);
       const stat = await fs.stat(resolvedPath);
 
       if (!stat.isDirectory()) {
-        return [];
+        return { files: [] };
       }
 
       const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
@@ -186,9 +196,9 @@ export class FilesystemBackend implements BackendProtocol {
       }
 
       results.sort((a, b) => a.path.localeCompare(b.path));
-      return results;
+      return { files: truncateFileInfos(results) };
     } catch {
-      return [];
+      return { files: [] };
     }
   }
 
@@ -204,16 +214,45 @@ export class FilesystemBackend implements BackendProtocol {
     filePath: string,
     offset: number = 0,
     limit: number = 2000,
-  ): Promise<string> {
+  ): Promise<ReadResult> {
     try {
       const resolvedPath = this.resolvePath(filePath);
+      const mimeType = getMimeType(filePath);
+
+      // Binary (non-text) files: return raw bytes + MIME type. Guard symlinks
+      // the same way the text path does.
+      if (!isTextMimeType(mimeType)) {
+        if (!SUPPORTS_NOFOLLOW) {
+          const lstat = await fs.lstat(resolvedPath);
+          if (lstat.isSymbolicLink()) {
+            return { error: `Symlinks are not allowed: ${filePath}` };
+          }
+        }
+        const stat = await fs.stat(resolvedPath);
+        if (!stat.isFile()) {
+          return { error: `File '${filePath}' not found` };
+        }
+        const flags = SUPPORTS_NOFOLLOW
+          ? fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW
+          : fsSync.constants.O_RDONLY;
+        const fd = await fs.open(resolvedPath, flags);
+        try {
+          const buf = await fd.readFile();
+          return {
+            content: new Uint8Array(buf),
+            mimeType,
+          };
+        } finally {
+          await fd.close();
+        }
+      }
 
       let content: string;
 
       if (SUPPORTS_NOFOLLOW) {
         const stat = await fs.stat(resolvedPath);
         if (!stat.isFile()) {
-          return `Error: File '${filePath}' not found`;
+          return { error: `File '${filePath}' not found` };
         }
         const fd = await fs.open(
           resolvedPath,
@@ -227,17 +266,19 @@ export class FilesystemBackend implements BackendProtocol {
       } else {
         const stat = await fs.lstat(resolvedPath);
         if (stat.isSymbolicLink()) {
-          return `Error: Symlinks are not allowed: ${filePath}`;
+          return { error: `Symlinks are not allowed: ${filePath}` };
         }
         if (!stat.isFile()) {
-          return `Error: File '${filePath}' not found`;
+          return { error: `File '${filePath}' not found` };
         }
         content = await fs.readFile(resolvedPath, "utf-8");
       }
 
       const emptyMsg = checkEmptyContent(content);
       if (emptyMsg) {
-        return emptyMsg;
+        // Preserve the informational "empty file" message as content (not an
+        // error) — the previous string-returning API surfaced it as output.
+        return { content: emptyMsg, mimeType };
       }
 
       const lines = content.split("\n");
@@ -245,13 +286,18 @@ export class FilesystemBackend implements BackendProtocol {
       const endIdx = Math.min(startIdx + limit, lines.length);
 
       if (startIdx >= lines.length) {
-        return `Error: Line offset ${offset} exceeds file length (${lines.length} lines)`;
+        return {
+          error: `Line offset ${offset} exceeds file length (${lines.length} lines)`,
+        };
       }
 
       const selectedLines = lines.slice(startIdx, endIdx);
-      return formatContentWithLineNumbers(selectedLines, startIdx + 1);
+      return {
+        content: formatContentWithLineNumbers(selectedLines, startIdx + 1),
+        mimeType,
+      };
     } catch (e: any) {
-      return `Error reading file '${filePath}': ${e.message}`;
+      return { error: `Error reading file '${filePath}': ${e.message}` };
     }
   }
 
@@ -261,40 +307,45 @@ export class FilesystemBackend implements BackendProtocol {
    * @param filePath - Absolute file path
    * @returns Raw file content as FileData
    */
-  async readRaw(filePath: string): Promise<FileData> {
-    const resolvedPath = this.resolvePath(filePath);
+  async readRaw(filePath: string): Promise<ReadRawResult> {
+    try {
+      const resolvedPath = this.resolvePath(filePath);
 
-    let content: string;
-    let stat: fsSync.Stats;
+      let content: string;
+      let stat: fsSync.Stats;
 
-    if (SUPPORTS_NOFOLLOW) {
-      stat = await fs.stat(resolvedPath);
-      if (!stat.isFile()) throw new Error(`File '${filePath}' not found`);
-      const fd = await fs.open(
-        resolvedPath,
-        fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW,
-      );
-      try {
-        content = await fd.readFile({ encoding: "utf-8" });
-      } finally {
-        await fd.close();
+      if (SUPPORTS_NOFOLLOW) {
+        stat = await fs.stat(resolvedPath);
+        if (!stat.isFile()) return { error: `File '${filePath}' not found` };
+        const fd = await fs.open(
+          resolvedPath,
+          fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW,
+        );
+        try {
+          content = await fd.readFile({ encoding: "utf-8" });
+        } finally {
+          await fd.close();
+        }
+      } else {
+        stat = await fs.lstat(resolvedPath);
+        if (stat.isSymbolicLink()) {
+          return { error: `Symlinks are not allowed: ${filePath}` };
+        }
+        if (!stat.isFile()) return { error: `File '${filePath}' not found` };
+        content = await fs.readFile(resolvedPath, "utf-8");
       }
-    } else {
-      stat = await fs.lstat(resolvedPath);
-      if (stat.isSymbolicLink()) {
-        throw new Error(`Symlinks are not allowed: ${filePath}`);
-      }
-      if (!stat.isFile()) throw new Error(`File '${filePath}' not found`);
-      content = await fs.readFile(resolvedPath, "utf-8");
+
+      const data: FileData = {
+        // Normalize CRLF on read so display/line-numbering is clean; the edit
+        // path re-reads raw bytes and preserves EOL on write-back separately.
+        content: toLf(content).split("\n"),
+        created_at: stat.ctime.toISOString(),
+        modified_at: stat.mtime.toISOString(),
+      };
+      return { data };
+    } catch (e: any) {
+      return { error: `Error reading file '${filePath}': ${e.message}` };
     }
-
-    return {
-      // Normalize CRLF on read so display/line-numbering is clean; the edit
-      // path re-reads raw bytes and preserves EOL on write-back separately.
-      content: toLf(content).split("\n"),
-      created_at: stat.ctime.toISOString(),
-      modified_at: stat.mtime.toISOString(),
-    };
   }
 
   /**
@@ -424,15 +475,15 @@ export class FilesystemBackend implements BackendProtocol {
   /**
    * Structured search results or error string for invalid input.
    */
-  async grepRaw(
+  async grep(
     pattern: string,
-    dirPath: string = "/",
+    dirPath: string | null = "/",
     glob: string | null = null,
-  ): Promise<GrepMatch[] | string> {
+  ): Promise<GrepResult> {
     // Validate + ReDoS-screen the regex up front.
     const patternCheck = compileUserRegex(pattern);
     if (!(patternCheck instanceof RegExp)) {
-      return patternCheck.error;
+      return { error: patternCheck.error };
     }
 
     // Resolve base path
@@ -440,13 +491,13 @@ export class FilesystemBackend implements BackendProtocol {
     try {
       baseFull = this.resolvePath(dirPath || ".");
     } catch {
-      return [];
+      return { matches: [] };
     }
 
     try {
       await fs.stat(baseFull);
     } catch {
-      return [];
+      return { matches: [] };
     }
 
     // Try ripgrep first, fallback to regex search
@@ -461,7 +512,7 @@ export class FilesystemBackend implements BackendProtocol {
         matches.push({ path: fpath, line: lineNum, text: lineText });
       }
     }
-    return matches;
+    return { matches: truncateGrepMatches(matches) };
   }
 
   /**
@@ -570,6 +621,7 @@ export class FilesystemBackend implements BackendProtocol {
       absolute: true,
       onlyFiles: true,
       dot: true,
+      suppressErrors: true,
     });
 
     for (const fp of files) {
@@ -628,35 +680,40 @@ export class FilesystemBackend implements BackendProtocol {
   /**
    * Structured glob matching returning FileInfo objects.
    */
-  async globInfo(
-    pattern: string,
-    searchPath: string = "/",
-  ): Promise<FileInfo[]> {
+  async glob(pattern: string, searchPath: string = "/"): Promise<GlobResult> {
     if (pattern.startsWith("/")) {
       pattern = pattern.substring(1);
     }
 
-    const resolvedSearchPath =
-      searchPath === "/" ? this.cwd : this.resolvePath(searchPath);
+    let resolvedSearchPath: string;
+    try {
+      resolvedSearchPath =
+        searchPath === "/" ? this.cwd : this.resolvePath(searchPath);
+    } catch (e: any) {
+      return { error: `Error resolving path '${searchPath}': ${e.message}` };
+    }
 
     try {
       const stat = await fs.stat(resolvedSearchPath);
       if (!stat.isDirectory()) {
-        return [];
+        return { files: [] };
       }
     } catch {
-      return [];
+      return { files: [] };
     }
 
     const results: FileInfo[] = [];
 
     try {
-      // Use fast-glob for pattern matching
+      // Use fast-glob for pattern matching. `suppressErrors` keeps a symlink
+      // cycle (ELOOP) or an unreadable dir from aborting the whole walk
+      // (ride-along fix, upstream 1.10.8).
       const matches = await fg(pattern, {
         cwd: resolvedSearchPath,
         absolute: true,
         onlyFiles: true,
         dot: true,
+        suppressErrors: true,
       });
 
       for (const matchedPath of matches) {
@@ -711,6 +768,27 @@ export class FilesystemBackend implements BackendProtocol {
     }
 
     results.sort((a, b) => a.path.localeCompare(b.path));
-    return results;
+    return { files: truncateFileInfos(results) };
+  }
+
+  /**
+   * Delete a single file. Refuses directories and symlinks; validated through
+   * the same path guard as every other operation.
+   */
+  async delete(filePath: string): Promise<DeleteResult> {
+    try {
+      const resolvedPath = this.resolvePath(filePath);
+      const stat = await fs.lstat(resolvedPath);
+      if (stat.isSymbolicLink()) {
+        return { error: `Symlinks are not allowed: ${filePath}` };
+      }
+      if (stat.isDirectory()) {
+        return { error: `Cannot delete '${filePath}': it is a directory` };
+      }
+      await fs.unlink(resolvedPath);
+      return { path: filePath };
+    } catch (e: any) {
+      return { error: `Error deleting file '${filePath}': ${e.message}` };
+    }
   }
 }

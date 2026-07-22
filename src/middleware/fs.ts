@@ -330,9 +330,12 @@ function createLsTool(
         };
         const resolvedBackend = getBackend(backend, stateAndStore);
         const path = input.path || "";
-        const allInfos = await resolvedBackend.lsInfo(path);
+        const result = await resolvedBackend.ls(path);
+        if (result.error) {
+          return `Error: ${result.error}`;
+        }
         const infos = filterByPermissions(
-          allInfos,
+          result.files ?? [],
           permissions,
           "read",
           (info) => info.path,
@@ -395,7 +398,19 @@ function createReadFileTool(
           store: (config as any).store,
         };
         const resolvedBackend = getBackend(backend, stateAndStore);
-        return await resolvedBackend.read(file_path, offset, limit);
+        const result = await resolvedBackend.read(file_path, offset, limit);
+        if (result.error) {
+          return `Error: ${result.error}`;
+        }
+        if (typeof result.content === "string") {
+          return result.content;
+        }
+        // Binary content (Uint8Array). Full multimodal block rendering would
+        // need provider-specific plumbing; surface a safe, informative note so
+        // the model knows the file is binary rather than mis-reading bytes as
+        // text.
+        const byteLength = result.content?.byteLength ?? 0;
+        return `[binary file '${file_path}': ${result.mimeType ?? "application/octet-stream"}, ${byteLength} bytes — not shown as text]`;
       } catch (error) {
         // Return errors as messages so the agent can recover
         const message = error instanceof Error ? error.message : String(error);
@@ -593,9 +608,12 @@ function createGlobTool(
         };
         const resolvedBackend = getBackend(backend, stateAndStore);
         const { pattern, path } = input;
-        const allInfos = await resolvedBackend.globInfo(pattern, path);
+        const result = await resolvedBackend.glob(pattern, path);
+        if (result.error) {
+          return `Error: ${result.error}`;
+        }
         const infos = filterByPermissions(
-          allInfos,
+          result.files ?? [],
           permissions,
           "read",
           (info) => info.path,
@@ -718,19 +736,18 @@ function createGrepTool(
         const { pattern, path, glob } = input;
         // Treat "*" as no filter (backward compatible with optional glob)
         const globFilter = glob === "*" ? null : glob;
-        const rawResult = await resolvedBackend.grepRaw(
+        const grepResult = await resolvedBackend.grep(
           pattern,
           path,
           globFilter,
         );
 
-        // If string, it's an error
-        if (typeof rawResult === "string") {
-          return rawResult;
+        if (grepResult.error) {
+          return grepResult.error;
         }
 
         const result = filterByPermissions(
-          rawResult,
+          grepResult.matches ?? [],
           permissions,
           "read",
           (match) => match.path,
