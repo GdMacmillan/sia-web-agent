@@ -10,18 +10,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import {
-  lsFiles,
-  globFiles,
-  grepResult,
-  readStr,
-  readRawData,
-} from "../../helpers/backend-compat.js";
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
 import * as os from "os";
 import { FilesystemBackend } from "../../../src/backends/filesystem.js";
+import type { FileDataV1 } from "../../../src/backends/protocol.js";
 
 describe("FilesystemBackend", () => {
   let testDir: string;
@@ -135,29 +129,28 @@ describe("FilesystemBackend", () => {
       const testContent = "Test file content";
       await fs.writeFile(path.join(testDir, "read-test.txt"), testContent);
 
-      const result = await readStr(backend, "/read-test.txt");
+      const { content } = await backend.read("/read-test.txt");
 
-      expect(result).toBeDefined();
-      expect(typeof result).toBe("string");
-      expect(result).toContain(testContent);
+      expect(content).toBeDefined();
+      expect(typeof content).toBe("string");
+      expect(content).toContain(testContent);
     });
 
     it("should handle non-existent files", async () => {
-      const result = await readStr(backend, "/nonexistent.txt");
+      const { error } = await backend.read("/nonexistent.txt");
 
-      expect(result).toBeDefined();
-      expect(typeof result).toBe("string");
-      // Should contain error message or indicate file not found
+      // Missing files surface as a recoverable {error} result.
+      expect(error).toBeDefined();
     });
 
     it("should read with offset and limit", async () => {
       const content = "line1\nline2\nline3\nline4\nline5";
       await fs.writeFile(path.join(testDir, "multiline.txt"), content);
 
-      const result = await readStr(backend, "/multiline.txt", 1, 2);
+      const { content: read } = await backend.read("/multiline.txt", 1, 2);
 
-      expect(result).toBeDefined();
-      expect(typeof result).toBe("string");
+      expect(read).toBeDefined();
+      expect(typeof read).toBe("string");
     });
 
     it("should preserve file encodings", async () => {
@@ -168,9 +161,9 @@ describe("FilesystemBackend", () => {
         "utf-8",
       );
 
-      const result = await readStr(backend, "/unicode-read.txt");
+      const { content } = await backend.read("/unicode-read.txt");
 
-      expect(result).toContain("世界");
+      expect(content).toContain("世界");
     });
   });
 
@@ -229,29 +222,29 @@ describe("FilesystemBackend", () => {
       await fs.writeFile(path.join(testDir, "file2.txt"), "");
       await fs.mkdir(path.join(testDir, "subdir"));
 
-      const result = await lsFiles(backend, "/");
+      const { files } = await backend.ls("/");
 
-      expect(result).toBeDefined();
-      expect(Array.isArray(result)).toBe(true);
+      expect(files).toBeDefined();
+      expect(Array.isArray(files)).toBe(true);
     });
 
     it("should list nested directory contents", async () => {
       await fs.mkdir(path.join(testDir, "deep", "nested"), { recursive: true });
       await fs.writeFile(path.join(testDir, "deep", "nested", "file.txt"), "");
 
-      const result = await lsFiles(backend, "/deep/nested");
+      const { files } = await backend.ls("/deep/nested");
 
-      expect(result).toBeDefined();
-      expect(Array.isArray(result)).toBe(true);
+      expect(files).toBeDefined();
+      expect(Array.isArray(files)).toBe(true);
     });
 
     it("should handle listing empty directories", async () => {
       await fs.mkdir(path.join(testDir, "empty"));
 
-      const result = await lsFiles(backend, "/empty");
+      const { files } = await backend.ls("/empty");
 
-      expect(result).toBeDefined();
-      expect(Array.isArray(result)).toBe(true);
+      expect(files).toBeDefined();
+      expect(Array.isArray(files)).toBe(true);
     });
   });
 
@@ -261,10 +254,10 @@ describe("FilesystemBackend", () => {
       await fs.writeFile(path.join(testDir, "file2.ts"), "");
       await fs.writeFile(path.join(testDir, "file.md"), "");
 
-      const result = await globFiles(backend, "/*.ts");
+      const { files } = await backend.glob("/*.ts");
 
-      expect(result).toBeDefined();
-      expect(Array.isArray(result)).toBe(true);
+      expect(files).toBeDefined();
+      expect(Array.isArray(files)).toBe(true);
     });
 
     it("should glob nested files", async () => {
@@ -272,10 +265,10 @@ describe("FilesystemBackend", () => {
       await fs.writeFile(path.join(testDir, "src", "index.ts"), "");
       await fs.writeFile(path.join(testDir, "src", "utils.ts"), "");
 
-      const result = await globFiles(backend, "/**/*.ts");
+      const { files } = await backend.glob("/**/*.ts");
 
-      expect(result).toBeDefined();
-      expect(Array.isArray(result)).toBe(true);
+      expect(files).toBeDefined();
+      expect(Array.isArray(files)).toBe(true);
     });
 
     it("should search file contents with grep", async () => {
@@ -288,17 +281,17 @@ describe("FilesystemBackend", () => {
         "This does not have it",
       );
 
-      const result = await grepResult(backend, "search", "/");
+      const { matches } = await backend.grep("search", "/");
 
-      expect(result).toBeDefined();
+      expect(matches).toBeDefined();
     });
 
     it("should handle regex patterns in grep", async () => {
       await fs.writeFile(path.join(testDir, "numbers.txt"), "abc123def456");
 
-      const result = await grepResult(backend, "[0-9]{3}", "/");
+      const { matches } = await backend.grep("[0-9]{3}", "/");
 
-      expect(result).toBeDefined();
+      expect(matches).toBeDefined();
     });
   });
 
@@ -343,7 +336,7 @@ describe("FilesystemBackend", () => {
         }
 
         // Backend should handle symlinks safely
-        const result = await readStr(backend, "/link.txt");
+        const result = await backend.read("/link.txt");
         expect(result).toBeDefined();
       } finally {
         await fs.rm(externalPath).catch(() => null);
@@ -367,13 +360,13 @@ describe("FilesystemBackend", () => {
       await fs.writeFile(path.join(testDir, "shared.txt"), "shared");
 
       const results = await Promise.all([
-        readStr(backend, "/shared.txt"),
-        readStr(backend, "/shared.txt"),
-        readStr(backend, "/shared.txt"),
+        backend.read("/shared.txt"),
+        backend.read("/shared.txt"),
+        backend.read("/shared.txt"),
       ]);
 
       expect(results.length).toBe(3);
-      expect(results.every((r) => typeof r === "string")).toBe(true);
+      expect(results.every((r) => typeof r.content === "string")).toBe(true);
     });
 
     it("should handle mixed concurrent operations", async () => {
@@ -381,7 +374,7 @@ describe("FilesystemBackend", () => {
 
       const results = await Promise.all([
         backend.write("/new1.txt", "content1"),
-        readStr(backend, "/existing.txt"),
+        backend.read("/existing.txt"),
         backend.write("/new2.txt", "content2"),
         backend.edit("/existing.txt", "original", "modified"),
       ]);
@@ -392,16 +385,16 @@ describe("FilesystemBackend", () => {
 
   describe("edge cases", () => {
     it("should handle root path operations", async () => {
-      const result = await lsFiles(backend, "/");
+      const { files } = await backend.ls("/");
 
-      expect(result).toBeDefined();
-      expect(Array.isArray(result)).toBe(true);
+      expect(files).toBeDefined();
+      expect(Array.isArray(files)).toBe(true);
     });
 
     it("should handle paths with trailing slashes", async () => {
       await fs.writeFile(path.join(testDir, "file.txt"), "content");
 
-      const result = await readStr(backend, "/file.txt");
+      const result = await backend.read("/file.txt");
 
       expect(result).toBeDefined();
     });
@@ -410,9 +403,9 @@ describe("FilesystemBackend", () => {
       const originalContent = "Original content with special chars: !@#$%^&*()";
       await backend.write("/integrity-test.txt", originalContent);
 
-      const readContent = await readStr(backend, "/integrity-test.txt");
+      const { content } = await backend.read("/integrity-test.txt");
 
-      expect(readContent).toContain("Original content");
+      expect(content).toContain("Original content");
     });
 
     it("should handle filenames with dots", async () => {
@@ -433,7 +426,9 @@ describe("FilesystemBackend", () => {
       const testContent = "hello world";
       await fs.writeFile(path.join(testDir, "raw.txt"), testContent);
 
-      const fileData = await readRawData(backend, "/raw.txt");
+      const { data, error } = await backend.readRaw("/raw.txt");
+      expect(error).toBeUndefined();
+      const fileData = data as FileDataV1;
 
       expect(fileData).toBeDefined();
       expect(fileData.content).toEqual(["hello world"]);
@@ -447,7 +442,8 @@ describe("FilesystemBackend", () => {
       const content = "line1\nline2\nline3";
       await fs.writeFile(path.join(testDir, "multiline.txt"), content);
 
-      const fileData = await readRawData(backend, "/multiline.txt");
+      const fileData = (await backend.readRaw("/multiline.txt"))
+        .data as FileDataV1;
 
       expect(fileData.content).toEqual(["line1", "line2", "line3"]);
       expect(fileData.created_at).toBeDefined();
@@ -457,7 +453,7 @@ describe("FilesystemBackend", () => {
     it("should handle empty files", async () => {
       await fs.writeFile(path.join(testDir, "empty.txt"), "");
 
-      const fileData = await readRawData(backend, "/empty.txt");
+      const fileData = (await backend.readRaw("/empty.txt")).data as FileDataV1;
 
       expect(fileData.content).toEqual([""]);
       expect(fileData.created_at).toBeDefined();
@@ -468,7 +464,8 @@ describe("FilesystemBackend", () => {
       const content = "line1\nline2\n";
       await fs.writeFile(path.join(testDir, "trailing.txt"), content);
 
-      const fileData = await readRawData(backend, "/trailing.txt");
+      const fileData = (await backend.readRaw("/trailing.txt"))
+        .data as FileDataV1;
 
       expect(fileData.content).toEqual(["line1", "line2", ""]);
     });
@@ -477,15 +474,15 @@ describe("FilesystemBackend", () => {
       const content = "Hello 世界\n🚀 emoji\nΩ omega";
       await fs.writeFile(path.join(testDir, "unicode.txt"), content);
 
-      const fileData = await readRawData(backend, "/unicode.txt");
+      const fileData = (await backend.readRaw("/unicode.txt"))
+        .data as FileDataV1;
 
       expect(fileData.content).toEqual(["Hello 世界", "🚀 emoji", "Ω omega"]);
     });
 
     it("should reject non-existent files", async () => {
-      await expect(readRawData(backend, "/nonexistent.txt")).rejects.toThrow(
-        /not found|no such file/,
-      );
+      const { error } = await backend.readRaw("/nonexistent.txt");
+      expect(error).toMatch(/not found|no such file/i);
     });
 
     it("should reject symlinks", async () => {
@@ -501,9 +498,8 @@ describe("FilesystemBackend", () => {
           return;
         }
 
-        await expect(readRawData(backend, "/link-raw.txt")).rejects.toThrow(
-          /not allowed|too many symbolic links/,
-        );
+        const { error } = await backend.readRaw("/link-raw.txt");
+        expect(error).toMatch(/not allowed|too many symbolic links/i);
       } finally {
         await fs.rm(externalPath).catch(() => null);
       }
@@ -512,7 +508,8 @@ describe("FilesystemBackend", () => {
     it("should include ISO 8601 timestamps", async () => {
       await fs.writeFile(path.join(testDir, "timestamps.txt"), "content");
 
-      const fileData = await readRawData(backend, "/timestamps.txt");
+      const fileData = (await backend.readRaw("/timestamps.txt"))
+        .data as FileDataV1;
 
       expect(new Date(fileData.created_at).toISOString()).toBe(
         fileData.created_at,
@@ -526,7 +523,7 @@ describe("FilesystemBackend", () => {
       const largeContent = "x".repeat(10000);
       await fs.writeFile(path.join(testDir, "large.txt"), largeContent);
 
-      const fileData = await readRawData(backend, "/large.txt");
+      const fileData = (await backend.readRaw("/large.txt")).data as FileDataV1;
 
       expect(fileData.content).toEqual([largeContent]);
       expect(fileData.content[0]).toHaveLength(10000);
@@ -536,14 +533,15 @@ describe("FilesystemBackend", () => {
       const content = "test\ncontent\nhere";
       await fs.writeFile(path.join(testDir, "consistency.txt"), content);
 
-      const rawData = await readRawData(backend, "/consistency.txt");
-      const readResult = await readStr(backend, "/consistency.txt");
+      const rawData = (await backend.readRaw("/consistency.txt"))
+        .data as FileDataV1;
+      const { content: readContent } = await backend.read("/consistency.txt");
 
       expect(rawData.content.join("\n")).toBe(content);
       // read() adds line numbers, so check that all raw lines appear in result
-      expect(readResult).toContain("test");
-      expect(readResult).toContain("content");
-      expect(readResult).toContain("here");
+      expect(readContent).toContain("test");
+      expect(readContent).toContain("content");
+      expect(readContent).toContain("here");
     });
   });
 });

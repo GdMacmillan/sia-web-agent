@@ -10,13 +10,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import {
-  lsFiles,
-  globFiles,
-  grepResult,
-  readStr,
-  readRawData,
-} from "../../helpers/backend-compat.js";
 import { FilesystemBackend } from "../../../src/backends/filesystem.js";
 import {
   getProjectRoot,
@@ -81,7 +74,7 @@ describe("FilesystemBackend Edge Cases", () => {
       }
 
       // Test root listing
-      const rootListing = await lsFiles(backend, testDir);
+      const rootListing = (await backend.ls(testDir)).files ?? [];
       const rootPaths = rootListing.map((f) => f.path);
 
       // Should include immediate children
@@ -96,7 +89,7 @@ describe("FilesystemBackend Edge Cases", () => {
       );
 
       // Test src/ listing
-      const srcListing = await lsFiles(backend, path.join(testDir, "src"));
+      const srcListing = (await backend.ls(path.join(testDir, "src"))).files ?? [];
       const srcPaths = srcListing.map((f) => f.path);
 
       // Should include src/main.ts
@@ -107,9 +100,8 @@ describe("FilesystemBackend Edge Cases", () => {
       expect(srcPaths).not.toContain(path.join(testDir, "src/utils/helper.ts"));
 
       // Test src/utils/ listing
-      const utilsListing = await lsFiles(backend, 
-        path.join(testDir, "src/utils"),
-      );
+      const utilsListing =
+        (await backend.ls(path.join(testDir, "src/utils"))).files ?? [];
       const utilsPaths = utilsListing.map((f) => f.path);
 
       // Should include both files in utils
@@ -123,7 +115,7 @@ describe("FilesystemBackend Edge Cases", () => {
       await fs.mkdir(path.join(testDir, "subdir"), { recursive: true });
       await fs.writeFile(path.join(testDir, "file.txt"), "content");
 
-      const listing = await lsFiles(backend, testDir);
+      const listing = (await backend.ls(testDir)).files ?? [];
 
       // Find directory entry
       const dirEntry = listing.find((f) => f.is_dir);
@@ -145,8 +137,10 @@ describe("FilesystemBackend Edge Cases", () => {
     });
 
     it("should handle trailing slash consistently for ls operations", async () => {
-      const withSlash = await lsFiles(backend, path.join(testDir, "dir") + "/");
-      const withoutSlash = await lsFiles(backend, path.join(testDir, "dir"));
+      const withSlash =
+        (await backend.ls(path.join(testDir, "dir") + "/")).files ?? [];
+      const withoutSlash =
+        (await backend.ls(path.join(testDir, "dir"))).files ?? [];
 
       // Both should return same results
       expect(withSlash.length).toBe(withoutSlash.length);
@@ -158,17 +152,16 @@ describe("FilesystemBackend Edge Cases", () => {
     it("should handle root directory with trailing slash", async () => {
       await fs.writeFile(path.join(testDir, "root-file.txt"), "content");
 
-      const withSlash = await lsFiles(backend, testDir + "/");
-      const withoutSlash = await lsFiles(backend, testDir);
+      const withSlash = (await backend.ls(testDir + "/")).files ?? [];
+      const withoutSlash = (await backend.ls(testDir)).files ?? [];
 
       expect(withSlash.length).toBeGreaterThan(0);
       expect(withSlash.length).toBe(withoutSlash.length);
     });
 
     it("should return empty array for nonexistent directory with trailing slash", async () => {
-      const listing = await lsFiles(backend, 
-        path.join(testDir, "nonexistent") + "/",
-      );
+      const listing =
+        (await backend.ls(path.join(testDir, "nonexistent") + "/")).files ?? [];
       expect(Array.isArray(listing)).toBe(true);
       expect(listing.length).toBe(0);
     });
@@ -181,32 +174,32 @@ describe("FilesystemBackend Edge Cases", () => {
 
     it("should return error string for invalid regex in grep", async () => {
       // Invalid regex: unmatched bracket
-      const result = await grepResult(backend, "[", testDir);
+      const { matches, error } = await backend.grep("[", testDir);
 
-      // Should return error string, not throw
-      expect(typeof result === "string" || Array.isArray(result)).toBe(true);
+      // Should return an {error} result, not throw
+      expect(typeof error === "string" || Array.isArray(matches)).toBe(true);
 
-      if (typeof result === "string") {
+      if (typeof error === "string") {
         // Error message should indicate regex problem
-        expect(result.toLowerCase()).toMatch(/regex|pattern|invalid|error/);
+        expect(error.toLowerCase()).toMatch(/regex|pattern|invalid|error/);
       }
     });
 
     it("should return error string for unmatched parenthesis", async () => {
-      const result = await grepResult(backend, "(unclosed", testDir);
+      const { error } = await backend.grep("(unclosed", testDir);
 
-      if (typeof result === "string") {
-        expect(result.toLowerCase()).toMatch(/regex|pattern|invalid|error/);
+      if (typeof error === "string") {
+        expect(error.toLowerCase()).toMatch(/regex|pattern|invalid|error/);
       }
     });
 
     it("should handle valid complex regex correctly", async () => {
-      const result = await grepResult(backend, "search.*content", testDir);
+      const { matches } = await backend.grep("search.*content", testDir);
 
-      expect(Array.isArray(result)).toBe(true);
-      if (Array.isArray(result)) {
-        expect(result.length).toBeGreaterThan(0);
-        expect(result[0].text).toContain("searchable content");
+      expect(Array.isArray(matches)).toBe(true);
+      if (matches) {
+        expect(matches.length).toBeGreaterThan(0);
+        expect(matches[0].text).toContain("searchable content");
       }
     });
   });
@@ -222,7 +215,7 @@ describe("FilesystemBackend Edge Cases", () => {
     });
 
     it("should return ls results in sorted order", async () => {
-      const listing = await lsFiles(backend, testDir);
+      const listing = (await backend.ls(testDir)).files ?? [];
       const paths = listing.map((f) => f.path);
 
       // Verify results are sorted
@@ -231,7 +224,7 @@ describe("FilesystemBackend Edge Cases", () => {
     });
 
     it("should return glob results in sorted order", async () => {
-      const results = await globFiles(backend, "*.txt", testDir);
+      const results = (await backend.glob("*.txt", testDir)).files ?? [];
       const paths = results.map((f) => f.path);
 
       // Verify results are sorted
@@ -240,8 +233,8 @@ describe("FilesystemBackend Edge Cases", () => {
     });
 
     it("should maintain consistent ordering across multiple calls", async () => {
-      const listing1 = await lsFiles(backend, testDir);
-      const listing2 = await lsFiles(backend, testDir);
+      const listing1 = (await backend.ls(testDir)).files ?? [];
+      const listing2 = (await backend.ls(testDir)).files ?? [];
 
       expect(listing1.map((f) => f.path)).toEqual(listing2.map((f) => f.path));
     });
@@ -249,21 +242,20 @@ describe("FilesystemBackend Edge Cases", () => {
 
   describe("Nonexistent Path Handling", () => {
     it("should return empty array for nonexistent directory in ls", async () => {
-      const listing = await lsFiles(backend, 
-        path.join(testDir, "does-not-exist"),
-      );
+      const listing =
+        (await backend.ls(path.join(testDir, "does-not-exist"))).files ?? [];
 
       expect(Array.isArray(listing)).toBe(true);
       expect(listing.length).toBe(0);
     });
 
     it("should return error message for nonexistent file in read", async () => {
-      const result = await readStr(backend, 
+      const { error } = await backend.read(
         path.join(testDir, "nonexistent-file.txt"),
       );
 
-      expect(typeof result).toBe("string");
-      expect(result).toMatch(/ENOENT|not found|no such file/i);
+      expect(typeof error).toBe("string");
+      expect(error).toMatch(/ENOENT|not found|no such file/i);
     });
 
     it("should distinguish between empty directory and nonexistent directory", async () => {
@@ -271,14 +263,13 @@ describe("FilesystemBackend Edge Cases", () => {
       const emptyDir = path.join(testDir, "empty");
       await fs.mkdir(emptyDir);
 
-      const emptyListing = await lsFiles(backend, emptyDir);
+      const emptyListing = (await backend.ls(emptyDir)).files ?? [];
       expect(Array.isArray(emptyListing)).toBe(true);
       expect(emptyListing.length).toBe(0);
 
       // Nonexistent directory
-      const nonexistentListing = await lsFiles(backend, 
-        path.join(testDir, "nonexistent"),
-      );
+      const nonexistentListing =
+        (await backend.ls(path.join(testDir, "nonexistent"))).files ?? [];
       expect(Array.isArray(nonexistentListing)).toBe(true);
       expect(nonexistentListing.length).toBe(0);
 
@@ -290,7 +281,7 @@ describe("FilesystemBackend Edge Cases", () => {
       await fs.writeFile(path.join(testDir, "test.txt"), "content");
 
       // Glob for pattern that doesn't match
-      const results = await globFiles(backend, "*.xyz", testDir);
+      const results = (await backend.glob("*.xyz", testDir)).files ?? [];
 
       expect(Array.isArray(results)).toBe(true);
       expect(results.length).toBe(0);
@@ -300,11 +291,14 @@ describe("FilesystemBackend Edge Cases", () => {
       await fs.writeFile(path.join(testDir, "test.txt"), "content");
 
       // Search for pattern that doesn't exist
-      const results = await grepResult(backend, "nonexistent-pattern", testDir);
+      const { matches, error } = await backend.grep(
+        "nonexistent-pattern",
+        testDir,
+      );
 
-      expect(Array.isArray(results) || typeof results === "string").toBe(true);
-      if (Array.isArray(results)) {
-        expect(results.length).toBe(0);
+      expect(Array.isArray(matches) || typeof error === "string").toBe(true);
+      if (matches) {
+        expect(matches.length).toBe(0);
       }
     });
   });
@@ -324,19 +318,21 @@ describe("FilesystemBackend Edge Cases", () => {
       await fs.writeFile(path.join(deepPath, "deep-file.txt"), "deep content");
 
       // Test reading from deep path
-      const content = await readStr(backend, path.join(deepPath, "deep-file.txt"));
+      const { content } = await backend.read(
+        path.join(deepPath, "deep-file.txt"),
+      );
       expect(content).toContain("deep content");
 
       // Test ls at each level
-      const level1 = await lsFiles(backend, path.join(testDir, "level1"));
+      const level1 = (await backend.ls(path.join(testDir, "level1"))).files ?? [];
       expect(level1.length).toBeGreaterThan(0);
 
-      const level3 = await lsFiles(backend, 
-        path.join(testDir, "level1", "level2", "level3"),
-      );
+      const level3 =
+        (await backend.ls(path.join(testDir, "level1", "level2", "level3")))
+          .files ?? [];
       expect(level3.length).toBeGreaterThan(0);
 
-      const level5 = await lsFiles(backend, deepPath);
+      const level5 = (await backend.ls(deepPath)).files ?? [];
       expect(level5.length).toBe(1);
       expect(level5[0].path).toContain("deep-file.txt");
     });
@@ -356,7 +352,7 @@ describe("FilesystemBackend Edge Cases", () => {
       }
 
       // Glob for all .ts files
-      const results = await globFiles(backend, "**/*.ts", testDir);
+      const results = (await backend.glob("**/*.ts", testDir)).files ?? [];
 
       expect(results.length).toBe(3);
       expect(results.every((r) => r.path.endsWith(".ts"))).toBe(true);
@@ -377,12 +373,12 @@ describe("FilesystemBackend Edge Cases", () => {
       }
 
       // Grep for pattern across all files
-      const results = await grepResult(backend, "SEARCHME", testDir);
+      const { matches } = await backend.grep("SEARCHME", testDir);
 
-      expect(Array.isArray(results)).toBe(true);
-      if (Array.isArray(results)) {
-        expect(results.length).toBe(3);
-        expect(results.every((r) => r.text.includes("SEARCHME"))).toBe(true);
+      expect(Array.isArray(matches)).toBe(true);
+      if (matches) {
+        expect(matches.length).toBe(3);
+        expect(matches.every((r) => r.text.includes("SEARCHME"))).toBe(true);
       }
     });
   });
@@ -396,10 +392,10 @@ describe("FilesystemBackend Edge Cases", () => {
         "content with spaces",
       );
 
-      const content = await readStr(backend, path.join(spacedDir, "file.txt"));
+      const { content } = await backend.read(path.join(spacedDir, "file.txt"));
       expect(content).toContain("content with spaces");
 
-      const listing = await lsFiles(backend, spacedDir);
+      const listing = (await backend.ls(spacedDir)).files ?? [];
       expect(listing.length).toBe(1);
     });
 
@@ -407,7 +403,7 @@ describe("FilesystemBackend Edge Cases", () => {
       const unicodeFile = path.join(testDir, "файл.txt");
       await fs.writeFile(unicodeFile, "unicode content");
 
-      const content = await readStr(backend, unicodeFile);
+      const { content } = await backend.read(unicodeFile);
       expect(content).toContain("unicode content");
     });
 
@@ -415,10 +411,10 @@ describe("FilesystemBackend Edge Cases", () => {
       const emojiFile = path.join(testDir, "test-🚀-file.txt");
       await fs.writeFile(emojiFile, "emoji content");
 
-      const content = await readStr(backend, emojiFile);
+      const { content } = await backend.read(emojiFile);
       expect(content).toContain("emoji content");
 
-      const listing = await lsFiles(backend, testDir);
+      const listing = (await backend.ls(testDir)).files ?? [];
       expect(listing.some((f) => f.path.includes("🚀"))).toBe(true);
     });
   });
@@ -429,7 +425,7 @@ describe("FilesystemBackend Edge Cases", () => {
       const content = "x".repeat(1000); // 1000 bytes
       await fs.writeFile(testFile, content);
 
-      const listing = await lsFiles(backend, testDir);
+      const listing = (await backend.ls(testDir)).files ?? [];
       const fileInfo = listing.find((f) => f.path === testFile);
 
       expect(fileInfo).toBeDefined();
@@ -441,7 +437,7 @@ describe("FilesystemBackend Edge Cases", () => {
       await fs.mkdir(path.join(testDir, "dir1"), { recursive: true });
       await fs.writeFile(path.join(testDir, "file1.txt"), "content");
 
-      const listing = await lsFiles(backend, testDir);
+      const listing = (await backend.ls(testDir)).files ?? [];
 
       const dirEntry = listing.find((f) => f.path.includes("dir1"));
       const fileEntry = listing.find((f) => f.path.includes("file1.txt"));
@@ -460,12 +456,14 @@ describe("FilesystemBackend Edge Cases", () => {
       }
 
       // Read all files concurrently
-      const reads = files.map((file) => readStr(backend, path.join(testDir, file)));
+      const reads = files.map((file) =>
+        backend.read(path.join(testDir, file)),
+      );
       const results = await Promise.all(reads);
 
       expect(results.length).toBe(3);
       results.forEach((result, i) => {
-        expect(result).toContain(`content of ${files[i]}`);
+        expect(result.content).toContain(`content of ${files[i]}`);
       });
     });
 
@@ -484,7 +482,7 @@ describe("FilesystemBackend Edge Cases", () => {
       });
 
       // Verify all files were created
-      const listing = await lsFiles(backend, testDir);
+      const listing = (await backend.ls(testDir)).files ?? [];
       expect(listing.length).toBe(3);
     });
   });
