@@ -139,6 +139,7 @@ Outcome tracking ranks memory results by historical success rate.
 | `NODE_ENV` | `development` | Standard Node environment marker. |
 | `SIA_PROJECT_ROOT` | unset | Override the project root. When unset, resolved automatically via `getProjectRoot()` (walks up from module location looking for marker files). |
 | `SIA_CLI_SOCKET_PATH` | unset | Reserved for CLI socket integration. |
+| `HARNESS_PROFILE` | unset | Harness-profile override. `off` disables profiles; a built-in name (e.g. `anthropic-claude`) forces that profile; unset resolves by model string. See [`ARCHITECTURE.md`](./ARCHITECTURE.md#harness-profiles). |
 
 ## Notes on hidden config flow
 

@@ -261,6 +261,42 @@ The skills middleware concatenates summaries of all `skills/*/SKILL.md`
 files into the system prompt at boot, so the orchestrator knows what
 skills are available without holding their full bodies in context.
 
+## Harness profiles
+
+`src/profiles/` defines **harness profiles** — small, JSON-serializable
+units of behavior configuration ("proto-genomes") that shape an agent at
+assembly time, *orthogonal to model selection*. A `HarnessProfile` has
+five fields: `baseSystemPrompt` (replace the base prompt),
+`systemPromptSuffix` (append after it), `toolDescriptionOverrides`
+(rewrite named tool descriptions), `excludedTools`, and
+`excludedMiddleware`.
+
+`resolveHarnessProfile(modelString, override)` (`profiles/builtins.ts`)
+picks a profile: the `HARNESS_PROFILE` env var overrides everything
+(`off` disables profiles; a name selects a built-in), otherwise the
+model string is matched by pattern. One built-in ships today —
+`anthropic-claude` (matches `anthropic/claude-*`), carrying the
+universal Claude guidance suffix (parallel tool calls /
+investigate-before-answering / tool-result reflection).
+
+`createDeepAgent` applies the resolved profile: the suffix/base flow
+through the Phase-4 `SystemPromptConfig` assembly; `excludedMiddleware`
+filters the merged stack **post-merge** (required scaffolding —
+`FilesystemMiddleware`, `subAgentMiddleware` — is always protected);
+`excludedTools` appends `_ToolExclusionMiddleware`
+(`middleware/tool_exclusion.ts`) so exclusions catch every
+tool-injecting middleware; and `toolDescriptionOverrides` feed
+`createFilesystemTools` and the subagent `task` description.
+
+**Serialization** (`profiles/harness.ts`) is deliberate, not incidental:
+`serializeProfile` / `parseHarnessProfileConfig` round-trip a profile
+through a `.strict()` zod schema with prototype-pollution rejection
+(`__proto__` / `constructor` / `prototype` at any depth). This is what
+lets profiles serve as genome snapshots / blueprints. The upstream
+global-symbol registry, merge machinery, `extraMiddleware`, and
+general-purpose-subagent config are intentionally **not** ported (slim
+scope).
+
 ## State
 
 The agent uses LangGraph's `MessagesAnnotation` by default — a

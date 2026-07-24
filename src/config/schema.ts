@@ -214,6 +214,13 @@ export interface RuntimeConfig {
   siaProjectRoot: string | undefined;
   /** IPC socket path for CLI communication */
   siaCliSocketPath: string | undefined;
+  /**
+   * Harness profile override (`HARNESS_PROFILE`).
+   *
+   * `off` disables profiles; a built-in name selects a specific profile;
+   * undefined resolves by model string. See `src/profiles/`.
+   */
+  harnessProfile: string | undefined;
   /** Unique agent identifier (default: "self-improving-agent") */
   agentId: string;
   /** Human-friendly agent name (default: "Self-Improving Agent") */
