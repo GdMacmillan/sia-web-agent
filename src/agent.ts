@@ -291,6 +291,22 @@ export async function createDeepAgent<
   // Emit raw token-usage events to siad for host-side cost computation (AGI-268)
   const usageEventsMiddleware = createUsageEventsMiddleware();
 
+  // Opt-in QuickJS `eval` code interpreter (parallel subagent fan-out +
+  // programmatic tool calling). The default tsx `execute_code` tool stays on
+  // regardless; this adds a second, sandboxed surface when enabled.
+  //
+  // Loaded via dynamic import ONLY when enabled: the interpreter pulls in
+  // heavy ESM/WASM deps (QuickJS WASM, prettier via json-schema-to-typescript)
+  // that eagerly run dynamic imports at module-eval time. Keeping it out of the
+  // static graph means the default (disabled) path — including the whole test
+  // suite — never loads them. Call the factory once per stack so main and
+  // subagent agents get distinct sessions (matches upstream registration).
+  const codeInterpreterEnabled = getConfig().features.codeInterpreter.enabled;
+  const makeCodeInterpreterMiddleware = codeInterpreterEnabled
+    ? (await import("./code-interpreter/index.js"))
+        .createCodeInterpreterMiddleware
+    : null;
+
   const middleware: AgentMiddleware[] = [
     // Retry transient LLM errors (first so retries are invisible to cost tracking)
     autoContinueMiddleware,
@@ -322,6 +338,11 @@ export async function createDeepAgent<
             maxExecutionTime: 120000,
           }),
         ]
+      : []),
+    // Opt-in sandboxed `eval` interpreter — enables parallel subagent
+    // fan-out via the in-REPL `task()` global (gated by ENABLE_CODE_INTERPRETER)
+    ...(makeCodeInterpreterMiddleware
+      ? [makeCodeInterpreterMiddleware()]
       : []),
     // Enables delegation to specialized subagents for complex tasks
     createSubAgentMiddleware({
@@ -358,6 +379,10 @@ export async function createDeepAgent<
                 maxExecutionTime: 120000,
               }),
             ]
+          : []),
+        // Subagent middleware: opt-in sandboxed `eval` interpreter
+        ...(makeCodeInterpreterMiddleware
+          ? [makeCodeInterpreterMiddleware()]
           : []),
         // Subagent middleware: Automatic conversation summarization when token limits are approached
         summarizationMiddleware({
