@@ -5,10 +5,15 @@
 import type { Item } from "@langchain/langgraph";
 import type {
   BackendProtocol,
+  DeleteResult,
   EditResult,
   FileData,
   FileInfo,
-  GrepMatch,
+  GlobResult,
+  GrepResult,
+  LsResult,
+  ReadRawResult,
+  ReadResult,
   StateAndStore,
   WriteResult,
 } from "./protocol.js";
@@ -16,9 +21,12 @@ import {
   createFileData,
   fileDataToString,
   formatReadResponse,
+  getMimeType,
   globSearchFiles,
   grepMatchesFromFiles,
   performStringReplacement,
+  truncateFileInfos,
+  truncateGrepMatches,
   updateFileData,
 } from "./utils.js";
 
@@ -163,7 +171,7 @@ export class StoreBackend implements BackendProtocol {
    * @returns List of FileInfo objects for files and directories directly in the directory.
    *          Directories have a trailing / in their path and is_dir=true.
    */
-  async lsInfo(path: string): Promise<FileInfo[]> {
+  async ls(path: string): Promise<LsResult> {
     const store = this.getStore();
     const namespace = this.getNamespace();
 
@@ -198,7 +206,7 @@ export class StoreBackend implements BackendProtocol {
       // This is a file directly in the current directory
       try {
         const fd = this.convertStoreItemToFileData(item);
-        const size = fd.content.join("\n").length;
+        const size = fileDataToString(fd).length;
         infos.push({
           path: itemKey,
           is_dir: false,
@@ -222,7 +230,7 @@ export class StoreBackend implements BackendProtocol {
     }
 
     infos.sort((a, b) => a.path.localeCompare(b.path));
-    return infos;
+    return { files: truncateFileInfos(infos) };
   }
 
   /**
@@ -231,34 +239,40 @@ export class StoreBackend implements BackendProtocol {
    * @param filePath - Absolute file path
    * @param offset - Line offset to start reading from (0-indexed)
    * @param limit - Maximum number of lines to read
-   * @returns Formatted file content with line numbers, or error message
+   * @returns ReadResult with content on success or error on failure
    */
   async read(
     filePath: string,
     offset: number = 0,
     limit: number = 2000,
-  ): Promise<string> {
-    try {
-      const fileData = await this.readRaw(filePath);
-      return formatReadResponse(fileData, offset, limit);
-    } catch (e: any) {
-      return `Error: ${e.message}`;
+  ): Promise<ReadResult> {
+    const raw = await this.readRaw(filePath);
+    if (raw.error || !raw.data) {
+      return { error: raw.error ?? `File '${filePath}' not found` };
     }
+    return {
+      content: formatReadResponse(raw.data, offset, limit),
+      mimeType: getMimeType(filePath),
+    };
   }
 
   /**
    * Read file content as raw FileData.
    *
    * @param filePath - Absolute file path
-   * @returns Raw file content as FileData
+   * @returns ReadRawResult with data on success or error on failure
    */
-  async readRaw(filePath: string): Promise<FileData> {
+  async readRaw(filePath: string): Promise<ReadRawResult> {
     const store = this.getStore();
     const namespace = this.getNamespace();
     const item = await store.get(namespace, filePath);
 
-    if (!item) throw new Error(`File '${filePath}' not found`);
-    return this.convertStoreItemToFileData(item);
+    if (!item) return { error: `File '${filePath}' not found` };
+    try {
+      return { data: this.convertStoreItemToFileData(item) };
+    } catch (e: any) {
+      return { error: e.message };
+    }
   }
 
   /**
@@ -332,11 +346,11 @@ export class StoreBackend implements BackendProtocol {
   /**
    * Structured search results or error string for invalid input.
    */
-  async grepRaw(
+  async grep(
     pattern: string,
-    path: string = "/",
+    path: string | null = "/",
     glob: string | null = null,
-  ): Promise<GrepMatch[] | string> {
+  ): Promise<GrepResult> {
     const store = this.getStore();
     const namespace = this.getNamespace();
     const items = await this.searchStorePaginated(store, namespace);
@@ -351,13 +365,17 @@ export class StoreBackend implements BackendProtocol {
       }
     }
 
-    return grepMatchesFromFiles(files, pattern, path, glob);
+    const result = grepMatchesFromFiles(files, pattern, path ?? "/", glob);
+    if (typeof result === "string") {
+      return { error: result };
+    }
+    return { matches: truncateGrepMatches(result) };
   }
 
   /**
    * Structured glob matching returning FileInfo objects.
    */
-  async globInfo(pattern: string, path: string = "/"): Promise<FileInfo[]> {
+  async glob(pattern: string, path: string = "/"): Promise<GlobResult> {
     const store = this.getStore();
     const namespace = this.getNamespace();
     const items = await this.searchStorePaginated(store, namespace);
@@ -374,14 +392,14 @@ export class StoreBackend implements BackendProtocol {
 
     const result = globSearchFiles(files, pattern, path);
     if (result === "No files found") {
-      return [];
+      return { files: [] };
     }
 
     const paths = result.split("\n");
     const infos: FileInfo[] = [];
     for (const p of paths) {
       const fd = files[p];
-      const size = fd ? fd.content.join("\n").length : 0;
+      const size = fd ? fileDataToString(fd).length : 0;
       infos.push({
         path: p,
         is_dir: false,
@@ -389,6 +407,20 @@ export class StoreBackend implements BackendProtocol {
         modified_at: fd?.modified_at || "",
       });
     }
-    return infos;
+    return { files: truncateFileInfos(infos) };
+  }
+
+  /**
+   * Delete a file from the store.
+   */
+  async delete(filePath: string): Promise<DeleteResult> {
+    const store = this.getStore();
+    const namespace = this.getNamespace();
+    const item = await store.get(namespace, filePath);
+    if (!item) {
+      return { error: `File '${filePath}' not found` };
+    }
+    await store.delete(namespace, filePath);
+    return { path: filePath };
   }
 }

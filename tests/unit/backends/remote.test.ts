@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import * as fsPromises from "fs/promises";
 import { RemoteBackend } from "../../../src/backends/remote.js";
+import type { FileDataV1 } from "../../../src/backends/protocol.js";
 
 // Mock fs/promises
 jest.mock("fs/promises", () => ({
@@ -52,8 +53,8 @@ describe("RemoteBackend", () => {
         }),
       } as any);
 
-      const result = await backend.read("/packages/agent/src/graph.ts");
-      expect(result).toContain("import { foo }");
+      const { content } = await backend.read("/packages/agent/src/graph.ts");
+      expect(content).toContain("import { foo }");
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
       const calledUrl = new URL(mockFetch.mock.calls[0][0] as string);
@@ -70,9 +71,9 @@ describe("RemoteBackend", () => {
         text: async () => '{"error":"not_found"}',
       } as any);
 
-      const result = await backend.read("/nonexistent.txt");
-      expect(result).toContain("Error reading remote file");
-      expect(result).toContain("sia-desktop-01");
+      const { error } = await backend.read("/nonexistent.txt");
+      expect(error).toContain("Error reading remote file");
+      expect(error).toContain("sia-desktop-01");
     });
 
     it("passes offset and limit parameters", async () => {
@@ -117,12 +118,12 @@ describe("RemoteBackend", () => {
         }),
       } as any);
 
-      const result = await backend.lsInfo("/");
-      expect(result).toHaveLength(2);
-      expect(result[0].path).toBe("/packages/");
-      expect(result[0].is_dir).toBe(true);
-      expect(result[1].path).toBe("/README.md");
-      expect(result[1].size).toBe(1234);
+      const files = (await backend.ls("/")).files ?? [];
+      expect(files).toHaveLength(2);
+      expect(files[0].path).toBe("/packages/");
+      expect(files[0].is_dir).toBe(true);
+      expect(files[1].path).toBe("/README.md");
+      expect(files[1].size).toBe(1234);
     });
   });
 
@@ -136,10 +137,10 @@ describe("RemoteBackend", () => {
         }),
       } as any);
 
-      const result = await backend.readRaw("/file.txt");
-      expect(result.content).toEqual(["first line", "second line"]);
-      expect(result.created_at).toBeTruthy();
-      expect(result.modified_at).toBeTruthy();
+      const data = (await backend.readRaw("/file.txt")).data as FileDataV1;
+      expect(data.content).toEqual(["first line", "second line"]);
+      expect(data.created_at).toBeTruthy();
+      expect(data.modified_at).toBeTruthy();
     });
   });
 
@@ -252,8 +253,8 @@ describe("RemoteBackend", () => {
         }),
       } as any);
 
-      const result = await backend.grepRaw("pattern", "src", "*.ts");
-      expect(result).toEqual([
+      const { matches } = await backend.grep("pattern", "src", "*.ts");
+      expect(matches).toEqual([
         { path: "src/foo.ts", line: 42, text: "matching line" },
       ]);
 
@@ -273,9 +274,9 @@ describe("RemoteBackend", () => {
         text: async () => '{"error":"invalid_pattern"}',
       } as any);
 
-      const result = await backend.grepRaw("[invalid");
-      expect(typeof result).toBe("string");
-      expect(result).toContain("Error searching remote files");
+      const { error } = await backend.grep("[invalid");
+      expect(typeof error).toBe("string");
+      expect(error).toContain("Error searching remote files");
     });
   });
 
@@ -296,8 +297,8 @@ describe("RemoteBackend", () => {
         }),
       } as any);
 
-      const result = await backend.globInfo("**/*.ts", "src");
-      expect(result).toEqual([
+      const { files } = await backend.glob("**/*.ts", "src");
+      expect(files).toEqual([
         {
           path: "src/foo.ts",
           is_dir: false,
@@ -312,16 +313,17 @@ describe("RemoteBackend", () => {
       expect(calledUrl.searchParams.get("path")).toBe("src");
     });
 
-    it("throws on failure", async () => {
+    it("returns a recoverable error result on failure", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 400,
         text: async () => '{"error":"missing_pattern"}',
       } as any);
 
-      await expect(backend.globInfo("**/*.ts")).rejects.toThrow(
-        "Failed to glob remote files",
-      );
+      // Protocol v2: remote failures are recoverable {error} results, not throws.
+      const result = await backend.glob("**/*.ts");
+      expect(result.error).toContain("Failed to glob remote files");
+      expect(result.files).toBeUndefined();
     });
   });
 
@@ -504,8 +506,8 @@ describe("RemoteBackend", () => {
     it("read() returns cached result on second call", async () => {
       mockFetch.mockResolvedValueOnce(mockReadResponse());
 
-      const r1 = await cachedBackend.read("/file.ts");
-      const r2 = await cachedBackend.read("/file.ts");
+      const r1 = (await cachedBackend.read("/file.ts")).content;
+      const r2 = (await cachedBackend.read("/file.ts")).content;
 
       expect(r1).toBe(r2);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -527,19 +529,19 @@ describe("RemoteBackend", () => {
         mockReadResponse("     1\tline one\n     2\tline two"),
       );
 
-      const r1 = await cachedBackend.readRaw("/file.ts");
-      const r2 = await cachedBackend.readRaw("/file.ts");
+      const r1 = (await cachedBackend.readRaw("/file.ts")).data;
+      const r2 = (await cachedBackend.readRaw("/file.ts")).data;
 
       expect(r1).toBe(r2);
-      expect(r1.content).toEqual(["line one", "line two"]);
+      expect((r1 as FileDataV1).content).toEqual(["line one", "line two"]);
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it("grepRaw() returns cached result on second call", async () => {
       mockFetch.mockResolvedValueOnce(mockGrepResponse());
 
-      const r1 = await cachedBackend.grepRaw("pattern", "src", "*.ts");
-      const r2 = await cachedBackend.grepRaw("pattern", "src", "*.ts");
+      const r1 = (await cachedBackend.grep("pattern", "src", "*.ts")).matches;
+      const r2 = (await cachedBackend.grep("pattern", "src", "*.ts")).matches;
 
       expect(r1).toEqual(r2);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -548,8 +550,8 @@ describe("RemoteBackend", () => {
     it("globInfo() returns cached result on second call", async () => {
       mockFetch.mockResolvedValueOnce(mockGlobResponse());
 
-      const r1 = await cachedBackend.globInfo("**/*.ts", "src");
-      const r2 = await cachedBackend.globInfo("**/*.ts", "src");
+      const r1 = (await cachedBackend.glob("**/*.ts", "src")).files;
+      const r2 = (await cachedBackend.glob("**/*.ts", "src")).files;
 
       expect(r1).toEqual(r2);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -558,8 +560,8 @@ describe("RemoteBackend", () => {
     it("lsInfo() returns cached result on second call", async () => {
       mockFetch.mockResolvedValueOnce(mockLsResponse());
 
-      const r1 = await cachedBackend.lsInfo("/src");
-      const r2 = await cachedBackend.lsInfo("/src");
+      const r1 = (await cachedBackend.ls("/src")).files;
+      const r2 = (await cachedBackend.ls("/src")).files;
 
       expect(r1).toEqual(r2);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -571,7 +573,7 @@ describe("RemoteBackend", () => {
       await cachedBackend.read("/file.ts");
       // Populate grep cache
       mockFetch.mockResolvedValueOnce(mockGrepResponse());
-      await cachedBackend.grepRaw("pattern");
+      await cachedBackend.grep("pattern");
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
 
@@ -591,7 +593,7 @@ describe("RemoteBackend", () => {
 
       // Re-grep should fetch again
       mockFetch.mockResolvedValueOnce(mockGrepResponse());
-      await cachedBackend.grepRaw("pattern");
+      await cachedBackend.grep("pattern");
 
       // 2 initial + 1 write + 2 re-fetches = 5
       expect(mockFetch).toHaveBeenCalledTimes(5);
@@ -639,12 +641,12 @@ describe("RemoteBackend", () => {
       } as any);
 
       const r1 = await cachedBackend.read("/file.ts");
-      expect(r1).toContain("Error reading remote file");
+      expect(r1.error).toContain("Error reading remote file");
 
       // Second call should fetch again, not return cached error
       mockFetch.mockResolvedValueOnce(mockReadResponse());
       const r2 = await cachedBackend.read("/file.ts");
-      expect(r2).not.toContain("Error");
+      expect(r2.error).toBeUndefined();
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
@@ -655,12 +657,12 @@ describe("RemoteBackend", () => {
         text: async () => "bad pattern",
       } as any);
 
-      const r1 = await cachedBackend.grepRaw("[invalid");
-      expect(typeof r1).toBe("string");
+      const r1 = await cachedBackend.grep("[invalid");
+      expect(typeof r1.error).toBe("string");
 
       mockFetch.mockResolvedValueOnce(mockGrepResponse());
-      const r2 = await cachedBackend.grepRaw("[invalid");
-      expect(Array.isArray(r2)).toBe(true);
+      const r2 = await cachedBackend.grep("[invalid");
+      expect(Array.isArray(r2.matches)).toBe(true);
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 

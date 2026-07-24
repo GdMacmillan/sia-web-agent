@@ -28,7 +28,7 @@ describe("Middleware context passing for filesystem tools", () => {
       const backend = new FilesystemBackend({ rootDir: testRoot });
 
       // List contents using relative path
-      const infos = await backend.lsInfo(".");
+      const infos = (await backend.ls(".")).files ?? [];
       expect(infos).toBeDefined();
       expect(Array.isArray(infos)).toBe(true);
     });
@@ -53,7 +53,7 @@ describe("Middleware context passing for filesystem tools", () => {
       const backend = new FilesystemBackend({ rootDir: projectRoot });
 
       // When we pass empty string, backend resolves it to projectRoot
-      const infos = await backend.lsInfo("");
+      const infos = (await backend.ls("")).files ?? [];
 
       // All paths should be within projectRoot
       for (const info of infos) {
@@ -74,7 +74,7 @@ describe("Middleware context passing for filesystem tools", () => {
 
       // With virtualMode, we should not be able to access /etc or other system dirs
       // This is a security feature that prevents escaping the sandbox
-      const infos = await backend.lsInfo("/etc");
+      const infos = (await backend.ls("/etc")).files ?? [];
       // With virtualMode, /etc would be treated as virtual path under projectRoot/etc
       // It should either be empty or list virtual/etc
       expect(Array.isArray(infos)).toBe(true);

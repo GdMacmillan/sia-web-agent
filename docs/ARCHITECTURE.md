@@ -164,6 +164,48 @@ state-backed backend; production uses the real filesystem backend; a
 host that needs custom file semantics (sandboxed write, S3-backed,
 etc.) supplies its own.
 
+### Protocol v2 (structured Result returns)
+
+`BackendProtocol` uses upstream deepagents' **v2** shape (ported
+in-place — no v1/v2 split or `adaptBackendProtocol` shim, since all five
+backends are local with a single consumer). Every read-style method
+returns a structured Result carrying either data or a recoverable
+`error` string, instead of a bare value or a thrown exception:
+
+| Method | Returns | Notes |
+|---|---|---|
+| `ls(path)` | `LsResult` `{ files? , error? }` | renamed from `lsInfo` |
+| `read(path, offset?, limit?)` | `ReadResult` `{ content?, mimeType?, error? }` | `content` is a `string` (text) or `Uint8Array` (binary) |
+| `readRaw(path)` | `ReadRawResult` `{ data?, error? }` | |
+| `grep(pattern, path?, glob?)` | `GrepResult` `{ matches?, error? }` | renamed from `grepRaw` |
+| `glob(pattern, path?)` | `GlobResult` `{ files?, error? }` | renamed from `globInfo` |
+| `write` / `edit` | `WriteResult` / `EditResult` | unchanged |
+| `delete?(path)` | `DeleteResult` `{ path?, error? }` | **optional**; implemented on `FilesystemBackend` + `StateBackend`/`StoreBackend`, omitted on `RemoteBackend` until siad supports it |
+
+`FileData` is now a union `FileDataV1 | FileDataV2` — v1 (`content: string[]`)
+is what state/store persist and the LangGraph state schema validates; v2
+(`content: string | Uint8Array` + `mimeType`) carries binary reads. The
+`FilesystemBackend.read` **multimodal path** returns raw bytes + MIME
+type for non-text files (see `getMimeType`/`isTextMimeType` in
+`backends/utils.ts`); the `read_file` tool surfaces binary safely rather
+than mis-decoding bytes as text.
+
+Ride-along robustness fixes landed with the rewrite: recoverable
+`{ error }` returns replace thrown exceptions on remote failures;
+`ls`/`glob`/`grep` results are size-capped (`truncateFileInfos` /
+`truncateGrepMatches`); and `glob` passes `suppressErrors` to fast-glob
+so a symlink cycle (`ELOOP`) can't abort the walk. All preserved
+invariants — `validatePathInProject`, `O_NOFOLLOW`, virtualMode, and
+`CompositeBackend`'s `/remote/{nodeId}/` routing — are unchanged; the
+permissions layer above still sits atop the hard project-root boundary.
+
+`BaseSandbox` (`backends/sandbox.ts`, `SandboxBackendProtocolV2`) is an
+abstract base for sandboxed/remote execution backends: subclasses
+implement `execute` / `uploadFiles` / `downloadFiles` / `id` and inherit
+POSIX-shell default implementations of the filesystem methods. It is
+scaffolding for future distributed execution — no concrete sandbox
+backend is wired in yet.
+
 ### Filesystem permissions
 
 `createFilesystemMiddleware` / `createFilesystemTools` accept an optional

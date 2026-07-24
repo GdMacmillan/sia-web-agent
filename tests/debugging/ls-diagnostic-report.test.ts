@@ -50,7 +50,7 @@ describeTest("Diagnostic Report: ls Tool Issue", () => {
 
     // Test what happens with "/" (buggy tool default)
     console.log("\nTest A: Passing " / " to backend.lsInfo()");
-    const rootListings = await backend.lsInfo("/");
+    const rootListings = (await backend.ls("/")).files ?? [];
     console.log(
       `  Result: ${rootListings.length} entries found in filesystem root`,
     );
@@ -69,7 +69,7 @@ describeTest("Diagnostic Report: ls Tool Issue", () => {
 
     // Test what happens with "" (correct behavior)
     console.log("\nTest B: Passing '' (empty string) to backend.lsInfo()");
-    const projectListings = await backend.lsInfo("");
+    const projectListings = (await backend.ls("")).files ?? [];
     console.log(
       `  Result: ${projectListings.length} entries found in project root`,
     );
@@ -179,7 +179,7 @@ describeTest("Diagnostic Report: ls Tool Issue", () => {
     console.log("-".repeat(80));
 
     // Simulate what the fix would do
-    const fixedListings = await backend.lsInfo("");
+    const fixedListings = (await backend.ls("")).files ?? [];
 
     console.log(`\nWith proposed fix:`);
     console.log(`  ls tool would call backend.lsInfo("")`);

@@ -79,24 +79,24 @@ describe("CompositeBackend", () => {
     expect(storeRes.error).toBeUndefined();
     expect(storeRes.filesUpdate).toBeNull();
 
-    const infos = await composite.lsInfo("/");
+    const infos = (await composite.ls("/")).files ?? [];
     const paths = infos.map((i) => i.path);
     expect(paths).toContain("/file.txt");
     expect(paths).toContain("/memories/");
 
-    const matches1 = await composite.grepRaw("alpha", "/");
+    const matches1 = (await composite.grep("alpha", "/")).matches;
     expect(Array.isArray(matches1)).toBe(true);
-    if (Array.isArray(matches1)) {
+    if (matches1) {
       expect(matches1.some((m) => m.path === "/file.txt")).toBe(true);
     }
 
-    const matches2 = await composite.grepRaw("beta", "/");
+    const matches2 = (await composite.grep("beta", "/")).matches;
     expect(Array.isArray(matches2)).toBe(true);
-    if (Array.isArray(matches2)) {
+    if (matches2) {
       expect(matches2.some((m) => m.path === "/memories/readme.md")).toBe(true);
     }
 
-    const glob = await composite.globInfo("**/*.md", "/");
+    const glob = (await composite.glob("**/*.md", "/")).files ?? [];
     expect(glob.some((i) => i.path === "/memories/readme.md")).toBe(true);
   });
 
@@ -134,22 +134,22 @@ describe("CompositeBackend", () => {
     expect(resCache.filesUpdate).toBeNull();
     expect(resCache.path).toBe("/session.json");
 
-    const infos = await composite.lsInfo("/");
+    const infos = (await composite.ls("/")).files ?? [];
     const paths = infos.map((i) => i.path);
     expect(paths).toContain("/temp.txt");
     expect(paths).toContain("/memories/");
     expect(paths).toContain("/archive/");
     expect(paths).toContain("/cache/");
 
-    const memInfos = await composite.lsInfo("/memories/");
+    const memInfos = (await composite.ls("/memories/")).files ?? [];
     const memPaths = memInfos.map((i) => i.path);
     expect(memPaths).toContain("/memories/important.md");
     expect(memPaths).not.toContain("/temp.txt");
     expect(memPaths).not.toContain("/archive/old.log");
 
-    const allMatches = await composite.grepRaw(".", "/");
+    const allMatches = (await composite.grep(".", "/")).matches;
     expect(Array.isArray(allMatches)).toBe(true);
-    if (Array.isArray(allMatches)) {
+    if (allMatches) {
       const pathsWithContent = allMatches.map((m) => m.path);
       expect(pathsWithContent).toContain("/temp.txt");
       expect(pathsWithContent).toContain("/memories/important.md");
@@ -157,7 +157,7 @@ describe("CompositeBackend", () => {
       expect(pathsWithContent).toContain("/cache/session.json");
     }
 
-    const globResults = await composite.globInfo("**/*.md", "/");
+    const globResults = (await composite.glob("**/*.md", "/")).files ?? [];
     expect(globResults.some((i) => i.path === "/memories/important.md")).toBe(
       true,
     );
@@ -171,7 +171,9 @@ describe("CompositeBackend", () => {
     expect(editRes.error).toBeUndefined();
     expect(editRes.occurrences).toBe(1);
 
-    const updatedContent = await composite.read("/memories/important.md");
+    const { content: updatedContent } = await composite.read(
+      "/memories/important.md",
+    );
     expect(updatedContent).toContain("persistent memory");
   });
 
@@ -214,7 +216,7 @@ describe("CompositeBackend", () => {
       await composite.write(path, content);
     }
 
-    const rootListing = await composite.lsInfo("/");
+    const rootListing = (await composite.ls("/")).files ?? [];
     const rootPaths = rootListing.map((fi) => fi.path);
     expect(rootPaths).toContain("/temp.txt");
     expect(rootPaths).toContain("/work/");
@@ -223,19 +225,19 @@ describe("CompositeBackend", () => {
     expect(rootPaths).not.toContain("/work/file1.txt");
     expect(rootPaths).not.toContain("/memories/important.txt");
 
-    const workListing = await composite.lsInfo("/work/");
+    const workListing = (await composite.ls("/work/")).files ?? [];
     const workPaths = workListing.map((fi) => fi.path);
     expect(workPaths).toContain("/work/file1.txt");
     expect(workPaths).toContain("/work/projects/");
     expect(workPaths).not.toContain("/work/projects/proj1.txt");
 
-    const memListing = await composite.lsInfo("/memories/");
+    const memListing = (await composite.ls("/memories/")).files ?? [];
     const memPaths = memListing.map((fi) => fi.path);
     expect(memPaths).toContain("/memories/important.txt");
     expect(memPaths).toContain("/memories/diary/");
     expect(memPaths).not.toContain("/memories/diary/entry1.txt");
 
-    const archListing = await composite.lsInfo("/archive/");
+    const archListing = (await composite.ls("/archive/")).files ?? [];
     const archPaths = archListing.map((fi) => fi.path);
     expect(archPaths).toContain("/archive/old.txt");
     expect(archPaths).toContain("/archive/2023/");
@@ -256,18 +258,18 @@ describe("CompositeBackend", () => {
 
     await composite.write("/store/item.txt", "store content");
 
-    const listing = await composite.lsInfo("/");
+    const listing = (await composite.ls("/")).files ?? [];
     const paths = listing.map((fi) => fi.path);
     expect(paths).toEqual(paths.slice().sort());
 
-    const emptyListing1 = await composite.lsInfo("/store/nonexistent/");
+    const emptyListing1 = (await composite.ls("/store/nonexistent/")).files ?? [];
     expect(emptyListing1).toEqual([]);
 
-    const emptyListing2 = await composite.lsInfo("/nonexistent/");
+    const emptyListing2 = (await composite.ls("/nonexistent/")).files ?? [];
     expect(emptyListing2).toEqual([]);
 
-    const listing1 = await composite.lsInfo("/store/");
-    const listing2 = await composite.lsInfo("/store");
+    const listing1 = (await composite.ls("/store/")).files ?? [];
+    const listing2 = (await composite.ls("/store")).files ?? [];
     expect(listing1.map((fi) => fi.path)).toEqual(
       listing2.map((fi) => fi.path),
     );
@@ -294,26 +296,28 @@ describe("CompositeBackend", () => {
     expect(res2.error).toBeUndefined();
     expect(res2.path).toBe("/important.txt");
 
-    const content1 = await composite.read("/notes.txt");
+    const { content: content1 } = await composite.read("/notes.txt");
     expect(content1).toContain("default store content");
 
-    const content2 = await composite.read("/memories/important.txt");
+    const { content: content2 } = await composite.read(
+      "/memories/important.txt",
+    );
     expect(content2).toContain("routed store content");
 
-    const infos = await composite.lsInfo("/");
+    const infos = (await composite.ls("/")).files ?? [];
     const paths = infos.map((i) => i.path);
     expect(paths).toContain("/notes.txt");
     expect(paths).toContain("/memories/");
 
-    const matches1 = await composite.grepRaw("default", "/");
+    const matches1 = (await composite.grep("default", "/")).matches;
     expect(Array.isArray(matches1)).toBe(true);
-    if (Array.isArray(matches1)) {
+    if (matches1) {
       expect(matches1.some((m) => m.path === "/notes.txt")).toBe(true);
     }
 
-    const matches2 = await composite.grepRaw("routed", "/");
+    const matches2 = (await composite.grep("routed", "/")).matches;
     expect(Array.isArray(matches2)).toBe(true);
-    if (Array.isArray(matches2)) {
+    if (matches2) {
       expect(matches2.some((m) => m.path === "/memories/important.txt")).toBe(
         true,
       );
