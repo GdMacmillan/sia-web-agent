@@ -1,9 +1,20 @@
 export {
   createFilesystemMiddleware,
   createFilesystemTools,
+  FILESYSTEM_TOOL_NAMES,
   type FilesystemMiddlewareOptions,
+  type FsToolName,
   type FileData,
 } from "./fs.js";
+export {
+  type FilesystemPermission,
+  type FilesystemOperation,
+  type PermissionMode,
+  validatePath,
+  globMatch,
+  decidePathAccess,
+  validatePermissionPaths,
+} from "../permissions/index.js";
 export {
   createSubAgentMiddleware,
   type SubAgentMiddlewareOptions,
