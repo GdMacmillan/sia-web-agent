@@ -44,7 +44,7 @@
     "langsmith": "0.7.1",
     "magic-string": "^0.30.21",
     "micromatch": "4.0.8",
-    "openai": "6.37.0",
+    "openai": "6.49.0",
     "p-queue": "^9.3.0",
     "pino": "10.3.1",
     "pino-pretty": "13.1.3",
