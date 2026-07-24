@@ -83,11 +83,24 @@ the source of truth; the order matters.
 | 7 | `createCodeExecutionMiddleware` *(if projectRoot set)* | Provides `execute_code` for TypeScript/JavaScript execution via tsx. Max execution time: 120s. |
 | 8 | `createSubAgentMiddleware` | Provides the `task` tool. Delegates work to sub-agents (see [Sub-agents](#sub-agents)). |
 | 9 | `summarizationMiddleware` | LangChain built-in. Compresses conversation history when token usage approaches a configured threshold. |
-| 10 | `anthropicPromptCachingMiddleware` | LangChain built-in. Enables Anthropic prompt caching. `unsupportedModelBehavior: "ignore"` so non-Anthropic providers don't error. |
-| 11 | `createPatchToolCallsMiddleware` | Repairs dangling / inconsistent tool calls across model providers. |
+| 10 | `createPatchToolCallsMiddleware` | Repairs dangling / inconsistent tool calls across model providers. End of the **core** segment. |
+| — | Caller-supplied **novel** custom middleware | Anything passed via `params.middleware` whose `.name` doesn't match a core/tail entry inserts **here**, between core and tail. |
+| 11 | `anthropicPromptCachingMiddleware` | LangChain built-in. Enables Anthropic prompt caching. `unsupportedModelBehavior: "ignore"` so non-Anthropic providers don't error. First of the **tail** segment. |
 | 12 | `createKnowledgeFormationMiddleware` | After a task completes, evaluates the outcome (via `outcome-critic.ts`) and stores learnings in graph memory. |
 | 13 | `humanInTheLoopMiddleware` *(if `interruptOn` provided)* | LangChain built-in. Pauses for human approval on configured tools. |
-| 14 | Caller-supplied custom middleware | Anything passed via `params.middleware` runs last. |
+
+The stack is assembled with `mergeMiddlewareStack(core, custom, tail)`
+(`src/middleware/utils.ts`). The **core** segment (rows 1–10) and the
+**tail** segment (rows 11–13, order per upstream PR #331: caching →
+knowledge formation → HITL) are merged with caller middleware **by
+`.name`**: a same-name custom entry *replaces* the matching core/tail
+entry in place; a novel custom entry inserts between the two segments.
+This name-addressable stack is a genome prerequisite (swap / toggle /
+add / remove operators). The system prompt is composed via
+`SystemPromptConfig { prefix, base, suffix }` (`normalizeSystemPrompt` +
+`assemblePromptParts`): a plain-string `systemPrompt` still goes before
+the base prompt (legacy), while a config can replace/remove the base or
+append a suffix (Phase 5 harness profiles drive this).
 
 `outcome-critic.ts` exists in `src/middleware/` but is not a standalone
 middleware — it's a utility imported by `knowledge-formation.ts`.
