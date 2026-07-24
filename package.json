@@ -64,7 +64,7 @@
     "@types/estree": "^1.0.9",
     "@types/jest": "^30.0.0",
     "@types/micromatch": "^4.0.10",
-    "@types/node": "^25.3.3",
+    "@types/node": "^26.1.1",
     "@types/safe-regex": "^1.1.6",
     "@types/uuid": "^11.0.0",
     "babel-jest": "^30.3.0",
