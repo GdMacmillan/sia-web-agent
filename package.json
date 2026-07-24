@@ -31,7 +31,7 @@
     "@langchain/openai": "1.4.5",
     "@langchain/openrouter": "0.2.4",
     "@sveltejs/acorn-typescript": "^1.0.9",
-    "@tavily/core": "0.7.2",
+    "@tavily/core": "0.7.6",
     "@vscode/ripgrep": "1.17.1",
     "acorn": "^8.16.0",
     "axios": "1.18.1",

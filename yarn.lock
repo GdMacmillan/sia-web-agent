@@ -1795,10 +1795,10 @@
   resolved "https://registry.yarnpkg.com/@sveltejs/acorn-typescript/-/acorn-typescript-1.0.11.tgz#a2e9276b3f2ae3f84219d9788c6ab80145e72f8c"
   integrity sha512-LFuZUkjJ9iF7JZye/aG5XM0SFcQ5VyL0oVX4WJ9dc0Va3R3s0OauX1BESVCb+YN/ol8TAfqGDDAQsTG627Y5kw==
 
-"@tavily/core@0.7.2":
-  version "0.7.2"
-  resolved "https://registry.yarnpkg.com/@tavily/core/-/core-0.7.2.tgz#7fc50fdb871d66a382db9097b4e34b1433bb87dd"
-  integrity sha512-N9xfw9miPD1jyVKYTMWV1hQvWPNjATT9Hffr6tv7VMHzwOPOeBwfX/R25ZE2F7meTyq6xSeGxclWnLVH2xHqFA==
+"@tavily/core@0.7.6":
+  version "0.7.6"
+  resolved "https://registry.yarnpkg.com/@tavily/core/-/core-0.7.6.tgz#cfa2a319ceb17a645f9821ea2499330e67af87c4"
+  integrity sha512-swNz2RaietpfXWrA+y/ERSQ9H3bq0mNu0hcp2OcVKqTrUUcdygEXIXr67o6qQ1XSjgBbB3FNQtAkrPPB8bYkaA==
   dependencies:
     axios "^1.7.7"
     https-proxy-agent "^7.0.6"
