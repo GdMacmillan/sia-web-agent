@@ -49,10 +49,10 @@ back to parity.
 [`08ed740`](https://github.com/langchain-ai/deepagentsjs/commit/08ed740)),
 plus one unpinned middleware-utilities port made shortly after.
 
-**Target:** deepagentsjs **v1.11.1** (upstream commit
+**Current pin:** deepagentsjs **v1.11.1** (upstream commit
 [`b215e70`](https://github.com/langchain-ai/deepagentsjs/commit/b215e70))
-— 387 commits ahead. **Status: sync in progress** (see phase status
-lines below).
+— 387 commits ahead of the baseline. **Status: sync complete** — all 6
+phases landed (see phase status lines below).
 
 ### Monorepo restructure (read this before diffing)
 
@@ -77,13 +77,13 @@ each a kebab-case branch + PR verified with
 
 | Phase | Branch | Status |
 |---|---|---|
-| 0 — docs: record the sync plan | `docs-upstream-sync-scope` | in progress |
-| 1 — QuickJS code interpreter (vendored) | `quickjs-code-interpreter` | pending |
-| 2 — filesystem permissions + allowlist | `filesystem-permissions` | pending |
-| 3 — backend protocol v2 (in-place) | `backend-protocol-v2` | pending |
-| 4 — agent.ts prompt config + middleware merge | `agent-prompt-and-middleware-merge` | pending |
-| 5 — harness profiles (slim + serializable) | `harness-profiles-slim` | pending |
-| 6 — final docs + pin close-out | folded into each phase | pending |
+| 0 — docs: record the sync plan | `docs-upstream-sync-scope` | completed |
+| 1 — QuickJS code interpreter (vendored) | `quickjs-code-interpreter` | completed |
+| 2 — filesystem permissions + allowlist | `filesystem-permissions` | completed |
+| 3 — backend protocol v2 (in-place) | `backend-protocol-v2` | completed |
+| 4 — agent.ts prompt config + middleware merge | `agent-prompt-and-middleware-merge` | completed |
+| 5 — harness profiles (slim + serializable) | `harness-profiles-slim` | completed |
+| 6 — final docs + pin close-out | folded into each phase | completed |
 
 ### Classification (what to adopt vs skip this cycle)
 
