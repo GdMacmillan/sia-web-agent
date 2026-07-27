@@ -68,13 +68,13 @@
     "@types/safe-regex": "^1.1.6",
     "@types/uuid": "^11.0.0",
     "babel-jest": "^30.3.0",
-    "eslint": "^10.7.0",
+    "eslint": "^10.8.0",
     "eslint-plugin-import": "^2.32.0",
     "globals": "^17.7.0",
     "jest": "^30.4.2",
     "ts-jest": "29.4.11",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",
-    "typescript-eslint": "^8.64.0"
+    "typescript-eslint": "^8.65.0"
   }
 }
