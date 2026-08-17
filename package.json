@@ -42,7 +42,7 @@
     "json-schema-to-typescript": "^15.0.4",
     "langchain": "1.4.0",
     "langsmith": "0.7.1",
-    "magic-string": "^0.30.21",
+    "magic-string": "^1.2.0",
     "micromatch": "4.0.8",
     "openai": "6.37.0",
     "p-queue": "^9.3.0",
