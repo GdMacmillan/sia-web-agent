@@ -1,11 +1,38 @@
 import { describe, it, expect } from "@jest/globals";
 import { existsSync } from "fs";
-// eslint-disable-next-line import/no-extraneous-dependencies
-import { rgPath } from "@vscode/ripgrep";
+import { join, isAbsolute } from "path";
 import {
   sanitizePathSegment,
   resolveRipgrep,
 } from "../../../src/utils/fs-compat.js";
+import { getProjectRoot } from "../../../src/utils/path-utils.js";
+
+/**
+ * Recompute the path `resolveRipgrep` should find, using the same
+ * `@vscode/ripgrep-<platform>-<arch>/bin/rg` layout the source relies on.
+ * Deliberately does not import `@vscode/ripgrep`: that module is ESM-only and
+ * throws while evaluating when its platform package is absent.
+ */
+const PLATFORM_PKG = `@vscode/ripgrep-${process.platform}-${
+  process.env.npm_config_arch || process.arch
+}`;
+const BINARY_NAME = process.platform === "win32" ? "rg.exe" : "rg";
+
+function expectedBundledPath(): string | null {
+  for (const root of [getProjectRoot(), process.cwd()].filter(Boolean)) {
+    const candidate = join(
+      root,
+      "node_modules",
+      PLATFORM_PKG,
+      "bin",
+      BINARY_NAME,
+    );
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
 
 describe("fs-compat", () => {
   describe("sanitizePathSegment", () => {
@@ -35,11 +62,24 @@ describe("fs-compat", () => {
 
   describe("resolveRipgrep", () => {
     it("returns the bundled path when present, else 'rg'", () => {
-      if (existsSync(rgPath)) {
-        expect(resolveRipgrep()).toBe(rgPath);
+      const bundled = expectedBundledPath();
+      if (bundled) {
+        expect(resolveRipgrep()).toBe(bundled);
       } else {
         expect(resolveRipgrep()).toBe("rg");
       }
+    });
+
+    it("resolves an absolute path inside the platform package when bundled", () => {
+      const bundled = expectedBundledPath();
+      if (!bundled) {
+        // No bundled binary on this host; the PATH fallback is covered above.
+        return;
+      }
+      const resolved = resolveRipgrep();
+      expect(isAbsolute(resolved)).toBe(true);
+      expect(resolved).toContain(PLATFORM_PKG);
+      expect(existsSync(resolved)).toBe(true);
     });
 
     it("always returns a non-empty command string", () => {
