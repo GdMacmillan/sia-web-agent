@@ -4,7 +4,14 @@
  * Tests for createStandardTools and createDeepAgentComponents factory functions.
  */
 
-import { describe, it, expect, beforeEach, jest } from "@jest/globals";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterAll,
+  jest,
+} from "@jest/globals";
 
 // Mock dependencies that make external calls
 jest.mock("../../src/config/model-config.js", () => ({
@@ -23,6 +30,7 @@ import {
   createDeepAgentComponents,
 } from "../../src/deep-agent-setup.js";
 import { getProjectRoot } from "../../src/backend-config.js";
+import { resetConfig } from "../../src/config/index.js";
 
 const EXPECTED_TOOL_NAMES = [
   "search",
@@ -45,9 +53,33 @@ const EXPECTED_TOOL_NAMES = [
   "delete_checklist",
 ];
 
+/** Everything except `web_search`, which is key-gated. */
+const EXPECTED_TOOL_NAMES_WITHOUT_WEB_SEARCH = EXPECTED_TOOL_NAMES.filter(
+  (n) => n !== "web_search",
+);
+
+const originalTavilyKey = process.env.TAVILY_API_KEY;
+
+/**
+ * Pin TAVILY_API_KEY explicitly rather than inheriting it. jest.config
+ * loads a local `.env`, so a developer with a real key would otherwise
+ * see different tool sets than CI does.
+ */
+function setTavilyKey(key: string | undefined): void {
+  if (key === undefined) delete process.env.TAVILY_API_KEY;
+  else process.env.TAVILY_API_KEY = key;
+  // The config singleton caches env at first read.
+  resetConfig();
+}
+
+afterAll(() => {
+  setTavilyKey(originalTavilyKey);
+});
+
 describe("Deep Agent Setup", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    setTavilyKey("tvly-test-key");
   });
 
   describe("createStandardTools", () => {
@@ -81,6 +113,54 @@ describe("Deep Agent Setup", () => {
       const names = tools.map((t) => t.name);
       const uniqueNames = new Set(names);
       expect(uniqueNames.size).toBe(names.length);
+    });
+  });
+
+  /**
+   * `web_search` is registered only when a Tavily API key is configured.
+   * Without one the tool cannot succeed at anything, so advertising it in
+   * the schema just invites the model to spend a turn finding that out.
+   */
+  describe("createStandardTools — web_search key gate", () => {
+    it("omits web_search when no Tavily API key is configured", () => {
+      setTavilyKey(undefined);
+
+      const toolNames = createStandardTools("/test/project").map((t) => t.name);
+
+      expect(toolNames).not.toContain("web_search");
+      // Exactly one tool is withheld — the gate must not take anything
+      // else with it.
+      expect(toolNames.sort()).toEqual(
+        [...EXPECTED_TOOL_NAMES_WITHOUT_WEB_SEARCH].sort(),
+      );
+    });
+
+    it("omits web_search when the key is present but empty", () => {
+      setTavilyKey("");
+
+      const toolNames = createStandardTools("/test/project").map((t) => t.name);
+
+      expect(toolNames).not.toContain("web_search");
+    });
+
+    it("includes web_search when a Tavily API key is configured", () => {
+      setTavilyKey("tvly-test-key");
+
+      const toolNames = createStandardTools("/test/project").map((t) => t.name);
+
+      expect(toolNames).toContain("web_search");
+      expect(toolNames.sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
+    });
+
+    it("still returns valid StructuredTools with the gate closed", () => {
+      setTavilyKey(undefined);
+
+      for (const tool of createStandardTools("/test/project")) {
+        expect(typeof tool.name).toBe("string");
+        expect(tool.name.length).toBeGreaterThan(0);
+        expect(typeof tool.description).toBe("string");
+        expect(tool.description.length).toBeGreaterThan(0);
+      }
     });
   });
 
