@@ -4655,10 +4655,10 @@ lru-cache@^5.1.1:
   dependencies:
     yallist "^3.0.2"
 
-magic-string@^0.30.21:
-  version "0.30.21"
-  resolved "https://registry.yarnpkg.com/magic-string/-/magic-string-0.30.21.tgz#56763ec09a0fa8091df27879fd94d19078c00d91"
-  integrity sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==
+magic-string@^1.2.2:
+  version "1.2.2"
+  resolved "https://registry.yarnpkg.com/magic-string/-/magic-string-1.2.2.tgz#7b84c3b4f594964a5f402a13fd7a3539c56709df"
+  integrity sha512-veT/+7iXrXzT39XnEN4lOxtNl72dMgJ8Lp+5Bd6YcMSWpb0n0MjBM8Uuooi6jgJr8dhUW2swQgBmoZVMni5SVg==
   dependencies:
     "@jridgewell/sourcemap-codec" "^1.5.5"
 
