@@ -12,7 +12,7 @@ import {
 } from "langchain";
 import { Command, getCurrentTaskInput } from "@langchain/langgraph";
 import type { LanguageModelLike } from "@langchain/core/language_models/base";
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import type { Runnable } from "@langchain/core/runnables";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { getSubagentTools } from "../tools/tool-sets.js";
@@ -419,8 +419,15 @@ function createTaskTool(options: {
 
       // Get current state and filter it for subagent
       const currentState = getCurrentTaskInput<Record<string, unknown>>();
-      const subagentState = filterStateForSubagent(currentState);
-      subagentState.messages = [new HumanMessage({ content: message })];
+      // `messages` must be a declared property, not just an index-signature
+      // key: langchain's `UserInput` requires it, and a bare
+      // `Record<string, unknown>` does not satisfy that.
+      const subagentState: Record<string, unknown> & {
+        messages: BaseMessage[];
+      } = {
+        ...filterStateForSubagent(currentState),
+        messages: [new HumanMessage({ content: message })],
+      };
 
       // Emit started event for streaming clients
       await dispatchCustomEvent(
