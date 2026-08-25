@@ -10,16 +10,7 @@ concurrency:
 
 jobs:
   verify:
-    # TEMP-HOSTED-BUDGET (2026-08-25, revert on/after 2026-09-01): was
-    # `runs-on: ubuntu-latest`. The account's hosted-runner budget is
-    # exhausted, so hosted jobs fail without starting; a repo-registered
-    # self-hosted runner services this label until the budget resets. Revert
-    # the whole marked set with `git revert` on the commit that introduced it;
-    # `grep -rn TEMP-HOSTED-BUDGET .github/workflows` lists every site.
-    runs-on: [self-hosted, Linux, X64]
-    # Runaway guard: never inherit GitHub's 360-minute default on a job
-    # that normally finishes in a few minutes.
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
