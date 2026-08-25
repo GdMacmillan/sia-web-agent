@@ -11,7 +11,11 @@ permissions:
 jobs:
   auto-merge:
     if: github.actor == 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    # TEMP-HOSTED-BUDGET (2026-08-25, revert on/after 2026-09-01): was
+    # `runs-on: ubuntu-latest` — see the verify job in ci.yml for the full
+    # rationale.
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
     steps:
       - name: Fetch Dependabot metadata
         id: meta
