@@ -305,26 +305,25 @@ function zodToTypeScript(schema: ZodTypeAny, depth = 0): string {
 }
 
 /**
- * Get description from a Zod schema (handles both v3 and v4)
+ * Escape text for safe interpolation inside a JSDoc block comment.
+ *
+ * A description containing an asterisk-slash sequence (escaped here as
+ * `*\/`) would otherwise terminate the generated comment early and turn the
+ * rest of the text into (invalid) code. Escaping the slash keeps the sequence
+ * inert while staying readable; already-escaped text is left unchanged.
+ */
+function escapeJsDocText(text: string): string {
+  return text.replace(/\*\//g, "*\\/");
+}
+
+/**
+ * Get description from a Zod schema.
+ *
+ * Uses the public `.description` getter, which is stable across Zod major
+ * versions (internal `_def` layouts are not).
  */
 function getZodDescription(schema: ZodTypeAny): string {
-  const def = (schema as any)?._def;
-
-  // Zod v3 style
-  if (def?.description) {
-    return def.description;
-  }
-
-  // Zod v4 style - description might be in checks
-  if (def?.checks) {
-    for (const check of def.checks) {
-      if (check.kind === "description") {
-        return check.value;
-      }
-    }
-  }
-
-  return "";
+  return (schema as any)?.description ?? "";
 }
 
 /**
@@ -352,7 +351,9 @@ function generateInterface(
       description,
     });
 
-    const docComment = description ? `  /** ${description} */\n` : "";
+    const docComment = description
+      ? `  /** ${escapeJsDocText(description)} */\n`
+      : "";
     return `${docComment}  ${key}${optionalMark}: ${typeStr};`;
   });
 
@@ -378,12 +379,15 @@ function generateToolModule(
 ): string {
   const functionName = toFunctionName(toolName);
   const interfaceInfo = generateInterface(toolName, schema);
+  // Tool and property descriptions are uncontrolled text; escape them at
+  // every point where they land inside a generated block comment.
+  const safeDescription = escapeJsDocText(description);
 
   const lines: string[] = [
     "/**",
     ` * ${toolName} tool`,
     " *",
-    ` * ${description}`,
+    ` * ${safeDescription}`,
     " */",
     "",
     "import { callTool } from '../_runtime.js';",
@@ -391,7 +395,7 @@ function generateToolModule(
     interfaceInfo.definition,
     "",
     "/**",
-    ` * ${description}`,
+    ` * ${safeDescription}`,
   ];
 
   // Add parameter documentation
@@ -399,7 +403,7 @@ function generateToolModule(
     if (prop.description) {
       const optionalTag = prop.optional ? " (optional)" : "";
       lines.push(
-        ` * @param input.${prop.name}${optionalTag} ${prop.description}`,
+        ` * @param input.${prop.name}${optionalTag} ${escapeJsDocText(prop.description)}`,
       );
     }
   }
@@ -893,4 +897,10 @@ export function registerToolCategory(toolName: string, category: string): void {
 }
 
 // Export utilities for testing
-export { toFunctionName, toInterfaceName, zodToTypeScript, getToolCategory };
+export {
+  toFunctionName,
+  toInterfaceName,
+  zodToTypeScript,
+  getToolCategory,
+  escapeJsDocText,
+};

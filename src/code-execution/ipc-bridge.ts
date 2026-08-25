@@ -14,7 +14,34 @@ import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { isCommand } from "@langchain/langgraph";
 import { sanitizePathSegment } from "../utils/fs-compat.js";
+
+/**
+ * Normalize a tool result to the string contract of the generated tools API.
+ *
+ * Tools invoked through a graph may return rich values — a ToolMessage whose
+ * content carries the human-readable result, or a Command that updates agent
+ * state. The generated `callTool()` promises a plain string, and a Command
+ * cannot take effect across the IPC boundary at all, so results are flattened
+ * here rather than serialized wholesale.
+ */
+export function normalizeToolResult(result: unknown): string {
+  if (typeof result === "string") {
+    return result;
+  }
+  if (isCommand(result)) {
+    return "Error: this tool updates agent state and is not supported via the tools API";
+  }
+  if (result && typeof result === "object" && "content" in result) {
+    const content = (result as { content: unknown }).content;
+    if (typeof content === "string") {
+      return content;
+    }
+    return JSON.stringify(content) ?? String(content);
+  }
+  return JSON.stringify(result) ?? String(result);
+}
 
 /**
  * Whether an IPC address is a Windows named pipe (`\\.\pipe\…`).
@@ -282,7 +309,7 @@ export class IPCBridge {
 
       return {
         id,
-        result,
+        result: normalizeToolResult(result),
       };
     } catch (error) {
       const errorMessage =

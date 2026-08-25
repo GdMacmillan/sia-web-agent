@@ -283,6 +283,25 @@ function getBackend(
   return backend;
 }
 
+/**
+ * Resolve graph state and store from the tool-call config.
+ *
+ * Filesystem tools run both inside a graph run (where the current task input
+ * is available) and outside one — e.g. invoked through the code-execution
+ * bridge — where reading task input throws. State feeds backend factories
+ * only; a disk-backed backend never reads it, so outside a graph we pass
+ * `undefined` and let a state-dependent factory fail in its own terms.
+ */
+function tryGetStateAndStore(config: unknown): StateAndStore {
+  let state: unknown;
+  try {
+    state = getCurrentTaskInput(config as any);
+  } catch {
+    state = undefined;
+  }
+  return { state, store: (config as any)?.store };
+}
+
 // System prompts
 const FILESYSTEM_SYSTEM_PROMPT = `You have access to the real filesystem and can make actual code changes. Use absolute paths like
 /absolute/path/to/project/src/file.ts or relative paths like
@@ -324,10 +343,7 @@ function createLsTool(
   return tool(
     async (input, config) => {
       try {
-        const stateAndStore: StateAndStore = {
-          state: getCurrentTaskInput(config),
-          store: (config as any).store,
-        };
+        const stateAndStore = tryGetStateAndStore(config);
         const resolvedBackend = getBackend(backend, stateAndStore);
         const path = input.path || "";
         const result = await resolvedBackend.ls(path);
@@ -366,7 +382,10 @@ function createLsTool(
       name: "ls",
       description: customDescription || LS_TOOL_DESCRIPTION,
       schema: z.object({
-        path: z.string().describe("Directory path to list"),
+        path: z
+          .string()
+          .optional()
+          .describe("Directory path to list (defaults to the backend root)"),
       }),
     },
   );
@@ -393,10 +412,7 @@ function createReadFileTool(
         if (permissionError) {
           return permissionError;
         }
-        const stateAndStore: StateAndStore = {
-          state: getCurrentTaskInput(config),
-          store: (config as any).store,
-        };
+        const stateAndStore = tryGetStateAndStore(config);
         const resolvedBackend = getBackend(backend, stateAndStore);
         const result = await resolvedBackend.read(file_path, offset, limit);
         if (result.error) {
@@ -424,12 +440,14 @@ function createReadFileTool(
         file_path: z.string().describe("Absolute path to the file to read"),
         offset: z
           .number({ coerce: true })
+          .optional()
           .describe(
-            "Line offset to start reading from (0-indexed, use 0 for beginning)",
+            "Line offset to start reading from (0-indexed, defaults to 0)",
           ),
         limit: z
           .number({ coerce: true })
-          .describe("Maximum number of lines to read (use 2000 for default)"),
+          .optional()
+          .describe("Maximum number of lines to read (defaults to 2000)"),
       }),
     },
   );
@@ -459,10 +477,7 @@ function createWriteFileTool(
         if (permissionError) {
           return permissionError;
         }
-        const stateAndStore: StateAndStore = {
-          state: getCurrentTaskInput(config),
-          store: (config as any).store,
-        };
+        const stateAndStore = tryGetStateAndStore(config);
         const resolvedBackend = getBackend(backend, stateAndStore);
         const result = await resolvedBackend.write(file_path, content);
 
@@ -531,10 +546,7 @@ function createEditFileTool(
         if (permissionError) {
           return permissionError;
         }
-        const stateAndStore: StateAndStore = {
-          state: getCurrentTaskInput(config),
-          store: (config as any).store,
-        };
+        const stateAndStore = tryGetStateAndStore(config);
         const resolvedBackend = getBackend(backend, stateAndStore);
         const result = await resolvedBackend.edit(
           file_path,
@@ -579,8 +591,9 @@ function createEditFileTool(
         new_string: z.string().describe("String to replace with"),
         replace_all: z
           .boolean()
+          .optional()
           .describe(
-            "Whether to replace all occurrences (use false for single replacement)",
+            "Whether to replace all occurrences (defaults to false: single replacement)",
           ),
       }),
     },
@@ -602,10 +615,7 @@ function createGlobTool(
   return tool(
     async (input, config) => {
       try {
-        const stateAndStore: StateAndStore = {
-          state: getCurrentTaskInput(config),
-          store: (config as any).store,
-        };
+        const stateAndStore = tryGetStateAndStore(config);
         const resolvedBackend = getBackend(backend, stateAndStore);
         const { pattern, path } = input;
         const result = await resolvedBackend.glob(pattern, path);
@@ -728,14 +738,11 @@ function createGrepTool(
   return tool(
     async (input, config) => {
       try {
-        const stateAndStore: StateAndStore = {
-          state: getCurrentTaskInput(config),
-          store: (config as any).store,
-        };
+        const stateAndStore = tryGetStateAndStore(config);
         const resolvedBackend = getBackend(backend, stateAndStore);
         const { pattern, path, glob } = input;
-        // Treat "*" as no filter (backward compatible with optional glob)
-        const globFilter = glob === "*" ? null : glob;
+        // Treat a missing filter or "*" as no filter
+        const globFilter = !glob || glob === "*" ? null : glob;
         const grepResult = await resolvedBackend.grep(
           pattern,
           path,
@@ -785,8 +792,9 @@ function createGrepTool(
           .describe("Base path to search from (use project root if unsure)"),
         glob: z
           .string()
+          .optional()
           .describe(
-            "Glob pattern to filter files (e.g., '*.py'), use '*' for all files",
+            "Glob pattern to filter files (e.g., '*.py'); omit or use '*' for all files",
           ),
       }),
     },

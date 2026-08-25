@@ -6,7 +6,7 @@ description: |
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Code Execution Skill
@@ -66,9 +66,13 @@ Tools are available as typed imports from `./tools-api/`:
 import { grep, readFile } from "./tools-api/filesystem";
 import { searchEntities } from "./tools-api/memory";
 
-// Search codebase
+// Search codebase (glob filter is optional)
 const matches = await grep({ pattern: "TODO", path: "src/", glob: "*.ts" });
 console.log(matches);
+
+// Read a file — only file_path is required (offset/limit are optional)
+const content = await readFile({ file_path: "prompts/manager.md" });
+console.log(content);
 
 // Search memory
 const entities = await searchEntities({ query: "authentication" });
@@ -87,6 +91,9 @@ file lives:
 ```typescript
 import { readFile } from "#tools-api/filesystem";
 ```
+
+Every tool resolves to a plain string. Write-family tools (`writeFile`,
+`editFile`) return a short status string describing what changed.
 
 ### Tool Categories
 
