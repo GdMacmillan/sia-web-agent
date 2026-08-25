@@ -32,6 +32,7 @@ import {
   traverseGraphTool,
   createChecklistTools,
 } from "./tools/index.js";
+import { isConfigured as isWebSearchConfigured } from "./web-search/tavily-client.js";
 import { getProjectRoot } from "./backend-config.js";
 import {
   getPlanSubAgent,
@@ -68,7 +69,8 @@ export interface DeepAgentConfig<
  *
  * Available tools:
  * - search: Search the codebase
- * - web_search: Search the web, extract content from URLs, or crawl websites (requires TAVILY_API_KEY)
+ * - web_search: Search the web, extract content from URLs, or crawl websites.
+ *   Present ONLY when TAVILY_API_KEY is configured; omitted entirely otherwise.
  * - store_entity: Store any type of entity in memory (ideas, notes, learnings, tasks, etc.)
  * - retrieve_entity: Get full details of a specific entity by ID
  * - search_entities: Find entities using natural language semantic search
@@ -90,7 +92,17 @@ export function createStandardTools(projectRoot: string): StructuredTool[] {
   return [
     createSearchTool(projectRoot),
     createBashTool(projectRoot),
-    createWebSearchTool(),
+    // `web_search` is registered ONLY when a Tavily API key is configured.
+    // Without one, every call it can make fails, so advertising it in the
+    // schema just invites the model to spend a turn discovering that.
+    // Withholding it is the honest signal, and `getSystemPrompt()` appends
+    // a matching capability notice so the prompts don't plan around a tool
+    // that isn't there.
+    //
+    // This is the single choke point: `filterToolsByName` in
+    // `tools/tool-sets.ts` drops names missing from its source array, so
+    // the sub-agent tool sets cascade from here automatically.
+    ...(isWebSearchConfigured() ? [createWebSearchTool()] : []),
     // Generic entity management tools for long-term knowledge storage
     storeEntityTool,
     retrieveEntityTool,

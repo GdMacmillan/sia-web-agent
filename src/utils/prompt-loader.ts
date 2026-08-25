@@ -16,9 +16,17 @@ import { getAgentPackageRoot } from "./path-utils.js";
 const promptCache = new Map<string, string>();
 
 /**
- * Valid prompt file names (without extension)
+ * Valid prompt file names (without extension).
+ *
+ * `no-web-search` is a FRAGMENT, not an agent prompt: it is appended to
+ * another prompt rather than loaded on its own. See `system-prompts.ts`.
  */
-export type PromptName = "manager" | "planner" | "researcher" | "answer";
+export type PromptName =
+  | "manager"
+  | "planner"
+  | "researcher"
+  | "answer"
+  | "no-web-search";
 
 /**
  * Load a prompt file by name from the prompts directory.
