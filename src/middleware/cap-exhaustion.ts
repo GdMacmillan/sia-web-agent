@@ -17,6 +17,7 @@
 import { createMiddleware, type AgentMiddleware } from "langchain";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { z } from "zod";
+import { logger } from "../utils/logger.js";
 
 export const CapExhaustedDataSchema = z.object({
   reason: z.string(),
@@ -80,7 +81,7 @@ function extractReason(err: ErrLike): string | null {
 export function createCapExhaustionMiddleware(
   options: CapExhaustionMiddlewareOptions = {},
 ): AgentMiddleware {
-  const log = options.logger ?? { warn: (m: string) => console.warn(m) };
+  const log = options.logger ?? { warn: (m: string) => logger.warn(m) };
 
   return createMiddleware({
     name: "capExhaustionMiddleware",
