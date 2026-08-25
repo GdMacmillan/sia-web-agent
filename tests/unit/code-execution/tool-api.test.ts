@@ -244,7 +244,7 @@ describe("Tool API Generator", () => {
 
       expect(runtimeContent).toContain(socketPath);
       expect(runtimeContent).toContain(
-        "callTool(toolName: string, input: any)",
+        "callTool(toolName: string, input: unknown)",
       );
       expect(runtimeContent).toContain("closeConnection(): void");
     });

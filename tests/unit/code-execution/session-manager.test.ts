@@ -5,7 +5,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from "fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -331,6 +339,71 @@ describe("Code Execution", () => {
 
       expect(preview).toContain("3 more lines");
     });
+  });
+
+  describe("File-based execution", () => {
+    let projectRoot: string;
+
+    beforeEach(() => {
+      projectRoot = join(tmpDir, "project-root");
+      mkdirSync(projectRoot, { recursive: true });
+    });
+
+    function execScripts(workspaceDir: string): string[] {
+      return readdirSync(workspaceDir).filter((f) => f.startsWith(".exec-"));
+    }
+
+    it("should remove the temp script after successful execution", async () => {
+      const session = new CodeExecutionSession("script-success", tmpDir, projectRoot);
+
+      const result = await session.execute('console.log("done");');
+
+      expect(result.exitCode).toBe(0);
+      expect(execScripts(session.getWorkspaceDir())).toEqual([]);
+
+      session.cleanup();
+    }, 30000);
+
+    it("should remove the temp script after a timeout kill", async () => {
+      const session = new CodeExecutionSession("script-timeout", tmpDir, projectRoot);
+
+      // prettier-ignore
+      const code = "const start = Date.now();\nwhile (Date.now() - start < 5000) {}";
+      const result = await session.execute(code, 1000);
+
+      expect(result.timedOut).toBe(true);
+      expect(execScripts(session.getWorkspaceDir())).toEqual([]);
+
+      session.cleanup();
+    }, 30000);
+
+    it("should resolve relative filesystem paths against projectRoot", async () => {
+      const session = new CodeExecutionSession("script-cwd", tmpDir, projectRoot);
+
+      // prettier-ignore
+      const code = "import fs from 'fs';\nfs.writeFileSync('data.txt', 'from-project-root');\nconsole.log('written');";
+      const result = await session.execute(code);
+
+      expect(result.exitCode).toBe(0);
+      const dataPath = join(projectRoot, "data.txt");
+      expect(existsSync(dataPath)).toBe(true);
+      expect(readFileSync(dataPath, "utf-8")).toBe("from-project-root");
+
+      session.cleanup();
+    }, 30000);
+
+    it("should reference the temp script in error stack traces", async () => {
+      const session = new CodeExecutionSession("script-stack", tmpDir, projectRoot);
+
+      const result = await session.execute('throw new Error("boom");');
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("boom");
+      // Stack frames name the .exec-<uuid>.mts script rather than an eval frame
+      expect(result.output).toContain(".exec-");
+
+      session.cleanup();
+    }, 30000);
   });
 
   describe("File Operations", () => {

@@ -6,7 +6,7 @@ description: |
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Code Execution Skill
@@ -75,6 +75,19 @@ const entities = await searchEntities({ query: "authentication" });
 console.log(entities);
 ```
 
+Your code runs as a script inside the session workspace, so relative _import
+specifiers_ (like `./tools-api/filesystem`) resolve against the workspace —
+while relative _filesystem_ paths (like `./data.csv`) still resolve against the
+project root. To import project source files, use absolute paths.
+
+The alias `#tools-api/<category>` (and `#tools-api` for the root index) is
+equivalent to the relative form and works regardless of where the importing
+file lives:
+
+```typescript
+import { readFile } from "#tools-api/filesystem";
+```
+
 ### Tool Categories
 
 | Category     | Tools                                                       |
@@ -96,6 +109,9 @@ console.log(entities);
 ## Common Mistakes
 
 - Using Python syntax (`import pandas as pd`) - use TypeScript instead
+- Importing project source files with relative specifiers - imports resolve
+  against the session workspace, not the project root; use absolute paths for
+  project files (relative `fs` paths still work from project root)
 - Using absolute paths when relative paths work (`./file.csv` not `/full/path/file.csv`)
 - Returning raw data instead of processed summaries
 - Missing error handling for file operations
