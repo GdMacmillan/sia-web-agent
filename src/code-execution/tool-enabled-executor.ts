@@ -11,6 +11,7 @@
  * - Automatic cleanup of IPC resources
  */
 
+import { writeFileSync } from "fs";
 import { join } from "path";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
@@ -129,12 +130,33 @@ export class ToolEnabledExecutor {
     await bridge.start();
 
     // Generate tool APIs
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- workspaceDir is a host-derived session path (thread id sanitized at session creation), joined with a fixed literal.
     const toolsApiDir = join(workspaceDir, "tools-api");
     await generateToolAPIs({
       tools: this.tools,
       outputDir: toolsApiDir,
       ipcSocketPath: socketPath,
     });
+
+    // Mark the workspace as ESM and declare '#tools-api' subpath imports — a
+    // stable alias for the generated APIs that works independently of how the
+    // execution model resolves relative specifiers. Exact-file targets (with
+    // extensions) also match what native Node type stripping requires.
+    writeFileSync(
+      // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- workspaceDir is a host-derived session path (thread id sanitized at session creation), joined with a fixed literal.
+      join(workspaceDir, "package.json"),
+      JSON.stringify(
+        {
+          type: "module",
+          imports: {
+            "#tools-api": "./tools-api/index.ts",
+            "#tools-api/*": "./tools-api/*/index.ts",
+          },
+        },
+        null,
+        2,
+      ) + "\n",
+    );
 
     this.onLog(
       "info",
@@ -153,6 +175,7 @@ export class ToolEnabledExecutor {
    */
   getToolsApiDir(threadId: string): string {
     const session = this.sessionManager.getSession(threadId);
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- workspaceDir is a host-derived session path (thread id sanitized at session creation), joined with a fixed literal.
     return join(session.getWorkspaceDir(), "tools-api");
   }
 

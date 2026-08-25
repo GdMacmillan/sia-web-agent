@@ -13,9 +13,9 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
-import { mkdirSync, existsSync, rmSync } from "fs";
+import { randomUUID } from "crypto";
+import { mkdirSync, existsSync, rmSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
-import { pathToFileURL } from "url";
 import { sanitizePathSegment } from "../utils/fs-compat.js";
 
 /** Maximum output size in characters before truncation */
@@ -91,10 +91,9 @@ export interface ExecutionResult {
  * CodeExecutionSession manages TypeScript execution for a single thread
  *
  * Each session has its own workspace directory for file isolation.
- * Uses tsx for TypeScript execution with completion marker pattern.
- *
- * Code runs with cwd=projectRoot so relative file paths work naturally.
- * Imports from './tools-api/' are rewritten to absolute paths.
+ * Code is written to a temporary `.mts` script inside the workspace and run
+ * with tsx, so relative import specifiers (like './tools-api/') resolve
+ * against the workspace while cwd stays projectRoot for relative file paths.
  */
 export class CodeExecutionSession {
   private workspaceDir: string;
@@ -151,6 +150,10 @@ export class CodeExecutionSession {
 
     this.isExecuting = true;
 
+    // A unique script name per execution avoids clashing with a lingering
+    // killed process from an earlier run in the same workspace.
+    const scriptPath = join(this.workspaceDir, `.exec-${randomUUID()}.mts`);
+
     try {
       // Validate and cap timeout
       const effectiveTimeout = Math.min(
@@ -158,53 +161,34 @@ export class CodeExecutionSession {
         MAX_TIMEOUT_MS,
       );
 
-      // Execute the code
-      const result = await this.runTsx(code, effectiveTimeout);
+      // Write the code verbatim to a `.mts` script in the workspace: the
+      // extension forces ESM regardless of any package.json on the host, and
+      // running a real file gives relative import specifiers (like
+      // './tools-api/') the workspace as their resolution base.
+      writeFileSync(scriptPath, code);
+
+      // Execute the script
+      const result = await this.runTsx(scriptPath, effectiveTimeout);
       return result;
     } finally {
+      try {
+        unlinkSync(scriptPath);
+      } catch {
+        // Ignore unlink errors (e.g. the write itself failed)
+      }
       this.isExecuting = false;
     }
   }
 
   /**
-   * Rewrite ./tools-api/ imports to use absolute workspace path.
-   *
-   * This allows code to run with cwd=projectRoot (so relative file paths work)
-   * while still finding the generated tool APIs in the workspace directory.
+   * Run a TypeScript script via tsx subprocess
    */
-  private rewriteToolsApiImports(code: string): string {
-    const absoluteToolsApiPath = join(this.workspaceDir, "tools-api");
-    // ESM import specifiers must be a file URL (or forward-slash path) — a raw
-    // absolute Windows path (C:\...) is an invalid specifier and its
-    // backslashes are string-escape sequences. A file:// URL is valid on every
-    // platform; `require` accepts forward-slash paths.
-    const toolsApiImportBase = pathToFileURL(absoluteToolsApiPath).href;
-    const toolsApiRequireBase = absoluteToolsApiPath.replace(/\\/g, "/");
-    // Rewrite various import patterns:
-    // - from './tools-api/...'
-    // - from "./tools-api/..."
-    // - require('./tools-api/...')
-    // - require("./tools-api/...")
-    return code
-      .replace(/from\s+['"]\.\/tools-api\//g, `from '${toolsApiImportBase}/`)
-      .replace(
-        /require\s*\(\s*['"]\.\/tools-api\//g,
-        `require('${toolsApiRequireBase}/`,
-      );
-  }
-
-  /**
-   * Run TypeScript code via tsx subprocess
-   */
-  private runTsx(code: string, timeout: number): Promise<ExecutionResult> {
+  private runTsx(scriptPath: string, timeout: number): Promise<ExecutionResult> {
     return new Promise((resolve) => {
       let outputBuffer = "";
       let errorBuffer = "";
       let timedOut = false;
       let processExited = false;
-
-      // Rewrite ./tools-api/ imports to absolute paths so they work from projectRoot
-      const processedCode = this.rewriteToolsApiImports(code);
 
       // Resolve tsx on-device (cross-platform, no npx/PATH/.cmd-shim reliance).
       const tsx = resolveTsxCommand(this.projectRoot);
@@ -219,11 +203,12 @@ export class CodeExecutionSession {
         return;
       }
 
-      // Spawn tsx with --eval to execute code directly.
+      // Spawn tsx on the script file. The path is plain argv (no shell, no
+      // import-specifier semantics), so this is Windows-safe as-is.
       // cwd is projectRoot so relative file paths (like ./data.csv) work naturally.
       const tsxProcess: ChildProcess = spawn(
         tsx.command,
-        [...tsx.args, "--eval", processedCode],
+        [...tsx.args, scriptPath],
         {
           cwd: this.projectRoot,
           env: {
@@ -353,7 +338,8 @@ export class CodeExecutionSession {
  * CodeExecutionSessionManager manages multiple sessions by thread ID
  *
  * Each thread gets its own isolated workspace and execution session.
- * Code runs with cwd=projectRoot so relative file paths work naturally.
+ * Code executes as a script inside the workspace, with cwd=projectRoot so
+ * relative file paths work naturally.
  */
 export class CodeExecutionSessionManager {
   private sessions: Map<string, CodeExecutionSession> = new Map();
