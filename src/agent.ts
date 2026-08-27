@@ -25,6 +25,7 @@ import { MessagesAnnotation } from "@langchain/langgraph";
 
 import {
   createFilesystemMiddleware,
+  createMemoryAugmentationMiddleware,
   createFilesystemTools,
   createSubAgentMiddleware,
   createPatchToolCallsMiddleware,
@@ -321,6 +322,8 @@ export async function createDeepAgent<
       backend: filesystemBackend,
       tools: filesystemTools,
     }),
+    // Attach related graph-memory entries to search-type tool results
+    createMemoryAugmentationMiddleware(),
     // Loads skills from /skills directory and injects summaries into system prompt
     ...(projectRoot
       ? [
@@ -362,6 +365,8 @@ export async function createDeepAgent<
           backend: filesystemBackend,
           tools: filesystemTools,
         }),
+        // Attach related graph-memory entries to search-type tool results
+        createMemoryAugmentationMiddleware(),
         // Subagent middleware: Skills system for sub-agents (allows reading skill files)
         ...(projectRoot
           ? [

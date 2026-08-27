@@ -119,6 +119,8 @@ Highest to lowest:
 | Variable                              | Default    | Description                              |
 | ------------------------------------- | ---------- | ---------------------------------------- |
 | `KNOWLEDGE_FORMATION_ENABLED`         | `true`     | Enable knowledge extraction              |
+| `MEMORY_AUGMENTATION_ENABLED`         | `true`     | Attach graph-memory context to searches  |
+| `MEMORY_AUGMENTATION_BUDGET_MS`       | `500`      | Per-search memory lookup budget (ms)     |
 | `KNOWLEDGE_FORMATION_SENSITIVITY`     | `balanced` | Preset: aggressive/balanced/conservative |
 | `KNOWLEDGE_FORMATION_MIN_CONFIDENCE`  | `0.7`      | Min confidence to store                  |
 | `KNOWLEDGE_FORMATION_MAX_LEARNINGS`   | `3`        | Max learnings per task                   |

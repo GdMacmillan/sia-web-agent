@@ -135,6 +135,20 @@ export interface FeaturesConfig {
   knowledgeFormation: KnowledgeFormationConfig;
   outcomeTracking: OutcomeTrackingConfig;
   codeInterpreter: CodeInterpreterConfig;
+  memoryAugmentation: MemoryAugmentationConfig;
+}
+
+export interface MemoryAugmentationConfig {
+  /**
+   * Attach related graph-memory entries to the results of search-type
+   * tools (`grep`, `glob`, `search`, and `bash` invocations of
+   * `rg`/`grep`/`find`). Default: true. Opt-out via
+   * `MEMORY_AUGMENTATION_ENABLED=false`. Silently inactive when graph
+   * memory is not available (no workspace / no host daemon).
+   */
+  enabled: boolean;
+  /** Hard ceiling on the lookup in ms (default: 500). A slow lookup yields no context. */
+  budgetMs: number;
 }
 
 export interface CodeInterpreterConfig {

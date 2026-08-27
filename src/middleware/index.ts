@@ -58,3 +58,8 @@ export {
   type CapExhaustedData,
   CapExhaustedDataSchema,
 } from "./cap-exhaustion.js";
+export {
+  createMemoryAugmentationMiddleware,
+  MEMORY_CONTEXT_HEADER,
+  type MemoryAugmentationMiddlewareOptions,
+} from "./memory-augmentation.js";
