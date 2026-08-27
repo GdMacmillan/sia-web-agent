@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import {
   storeEntityTool,
   retrieveEntityTool,
+  searchEntitiesTool,
   _resetMemoryAdapterForTests,
   _setMemoryAdapterForTests,
 } from "../../../src/tools/memory-tools.js";
@@ -102,6 +103,33 @@ describe("memory-tools — thin-shell wiring", () => {
     const response = JSON.parse(raw);
     expect(response.entity.id).toBe("n_1");
     expect(response.entity.title).toBe("Hello");
+    // Pass-through shells carry the handler's next-step hint untouched.
+    expect(response.next_step).toContain("traverse_graph");
+    expect(response.next_step).toContain("n_1");
+  });
+
+  it("searchEntitiesTool re-attaches the next-step hint after re-shaping the envelope", async () => {
+    const searchMock = jest.fn(async () => ({
+      results: [],
+      level_used: "none",
+      levels_tried: [],
+      query: "anything",
+      threshold: 0.3,
+      total_results: 0,
+      timestamp: "2026-01-01T00:00:00Z",
+    })) as any;
+    _setMemoryAdapterForTests(makeStubAdapter({ searchEntities: searchMock }));
+
+    const raw = await searchEntitiesTool.func({
+      query: "anything",
+      use_hyde: false,
+      decompose: false,
+      rerank: false,
+    } as any);
+    const response = JSON.parse(raw);
+    expect(response.count).toBe(0);
+    expect(response.next_step).toMatch(/^Next: /);
+    expect(response.next_step).toContain("store_entity");
   });
 
   it("fails fast when SIA_WORKSPACE_ID is unset", async () => {
