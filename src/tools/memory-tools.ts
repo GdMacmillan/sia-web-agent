@@ -16,6 +16,7 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import {
   listEntities,
+  nextStepForSearch,
   promoteEntities,
   retrieveEntity,
   searchEntities,
@@ -384,6 +385,9 @@ export const searchEntitiesTool = new DynamicStructuredTool({
         message: decompositionResult.applied
           ? `Found ${entities.length} entities via query decomposition (${decompositionResult.successfulSubQueries} of ${decompositionResult.subQueries?.length} sub-queries succeeded)`
           : `Found ${entities.length} matching entities`,
+        // This tool re-shapes the handler result around the query
+        // enrichment envelope, so the handler's hint is re-attached here.
+        next_step: nextStepForSearch(entities.length),
       },
       null,
       2,

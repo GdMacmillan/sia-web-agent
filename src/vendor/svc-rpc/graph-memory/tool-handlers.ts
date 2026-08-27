@@ -65,6 +65,7 @@ export interface StoreEntityResult {
   suggested_related_entities?: SuggestedEntity[];
   suggestion_note?: string;
   suggestion_warning?: string;
+  next_step: string;
 }
 
 export interface ListEntitiesFilters {
@@ -73,6 +74,91 @@ export interface ListEntitiesFilters {
   priority?: Priority;
   status?: string;
   context?: string;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Next-step hints                                                           */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Every handler result carries a `next_step` — a one-line, conditional
+ * pointer at the tool that most naturally follows, so a caller chains
+ * memory tools in the right order without being told to in a prompt.
+ * Hints name exact tool names and parameter shapes. The helpers are
+ * exported because surfaces that re-shape a result (the search shells
+ * wrap the handler with query enrichment) need to attach the same hint.
+ */
+
+export function nextStepForStore(opts: {
+  id: string;
+  linkedCount: number;
+  failedCount: number;
+}): string {
+  if (opts.failedCount > 0) {
+    return `Next: ${opts.failedCount} relationship(s) failed — retry the ids listed in edge_errors via update_entity({entity_id: '${opts.id}'}) once the targets exist, or store_entity them first.`;
+  }
+  if (opts.linkedCount > 0) {
+    return `Next: traverse_graph({node_id: '${opts.id}'}) to verify the ${opts.linkedCount} link(s) landed, or update_entity to refine content/tags.`;
+  }
+  return `Next: search_entities to find related entities, then update_entity({entity_id: '${opts.id}'}) or store_entity with related_entity_ids to link them into the graph.`;
+}
+
+export function nextStepForSearch(count: number): string {
+  if (count === 0) {
+    return "Next: no matches — broaden by dropping filters or lowering threshold, try list_entities filtered by context, or store_entity if this is genuinely new knowledge.";
+  }
+  return "Next: retrieve_entity({entity_id}) for full content of a result, or traverse_graph({node_id}) to explore what it connects to.";
+}
+
+export function nextStepForRetrieve(id: string): string {
+  return `Next: traverse_graph({node_id: '${id}'}) to explore connections, or update_entity({entity_id: '${id}'}) to refine content/tags/status.`;
+}
+
+export function nextStepForList(count: number): string {
+  if (count === 0) {
+    return "Next: nothing matched these filters — relax them, or use search_entities for a semantic query instead of exact filters.";
+  }
+  return "Next: retrieve_entity({entity_id}) for full content, or search_entities for a semantic query across these results.";
+}
+
+export function nextStepForUpdate(id: string): string {
+  return `Next: traverse_graph({node_id: '${id}'}) to verify the updated entity's connections still make sense.`;
+}
+
+export function nextStepForStatus(id: string, status: string): string {
+  switch (status) {
+    case "archived":
+      return `Next: search_entities for entities that reference '${id}' and update_entity them so nothing still points at an archived node.`;
+    case "completed":
+      return `Next: store_entity a 'learning' capturing what the outcome taught, with related_entity_ids: ['${id}'].`;
+    case "blocked":
+      return `Next: store_entity a 'decision' or 'note' recording the blocker, with related_entity_ids: ['${id}'], so the reason survives.`;
+    default:
+      return `Next: retrieve_entity({entity_id: '${id}'}) to confirm the new status, or traverse_graph to see dependents.`;
+  }
+}
+
+export function nextStepForPromote(opts: {
+  dryRun: boolean;
+  promotedId?: string;
+}): string {
+  if (opts.dryRun) {
+    return "Next: review the preview, then re-run promote_entities with dry_run: false to create the synthesized entity.";
+  }
+  if (opts.promotedId) {
+    return `Next: retrieve_entity({entity_id: '${opts.promotedId}'}) to verify the synthesis, then update_entity_status the superseded raw sources to 'archived' if they were not archived automatically.`;
+  }
+  return "Next: nothing was promoted — check the source ids exist and share an abstraction level below the target.";
+}
+
+export function nextStepForTraverse(opts: {
+  id: string;
+  count: number;
+}): string {
+  if (opts.count === 0) {
+    return `Next: '${opts.id}' has no connections in this direction — update_entity or store_entity with related_entity_ids to link it, or retry with direction: 'both'.`;
+  }
+  return "Next: update_entity to record any new relationships you discovered, or store_entity to capture an insight from this neighbourhood.";
 }
 
 /* ------------------------------------------------------------------------- */
@@ -180,6 +266,11 @@ export async function storeEntity(
       context: stored.context,
       created_at: stored.created_at,
     },
+    next_step: nextStepForStore({
+      id: stored.id,
+      linkedCount: related.length - edgeErrors.length,
+      failedCount: edgeErrors.length,
+    }),
   };
 
   if (edgeErrors.length > 0) {
@@ -205,6 +296,7 @@ export async function storeEntity(
 export interface RetrieveEntityResult {
   entity: StoredEntityShape;
   message: string;
+  next_step: string;
 }
 
 export async function retrieveEntity(
@@ -222,6 +314,7 @@ export async function retrieveEntity(
   return {
     entity,
     message: `Retrieved ${entity.entity_type}: "${entity.title}"`,
+    next_step: nextStepForRetrieve(entity.id),
   };
 }
 
@@ -247,6 +340,7 @@ export interface SearchEntitiesResult {
   count: number;
   entities: StoredEntityShape[];
   message: string;
+  next_step: string;
 }
 
 export async function searchEntities(
@@ -288,6 +382,7 @@ export async function searchEntities(
     count: filtered.length,
     entities: filtered,
     message: `Found ${filtered.length} matching entities`,
+    next_step: nextStepForSearch(filtered.length),
   };
 }
 
@@ -306,6 +401,7 @@ export interface ListEntitiesResult {
   entity_types: Record<string, number>;
   entities: StoredEntityShape[];
   message: string;
+  next_step: string;
 }
 
 export async function listEntities(
@@ -346,6 +442,7 @@ export async function listEntities(
     entity_types: Object.fromEntries(entityTypes),
     entities,
     message: `Listed ${entities.length} entities`,
+    next_step: nextStepForList(entities.length),
   };
 }
 
@@ -370,6 +467,7 @@ export interface UpdateEntityStatusResult {
   notes?: string;
   updated_at: string;
   message: string;
+  next_step: string;
 }
 
 export async function updateEntityStatus(
@@ -397,6 +495,7 @@ export async function updateEntityStatus(
     notes: input.notes,
     updated_at: decoded.updated_at,
     message: `Entity status updated to "${decoded.status}"`,
+    next_step: nextStepForStatus(decoded.id, input.status),
   };
 }
 
@@ -428,6 +527,7 @@ export interface UpdateEntityResult {
   changed_fields: string[];
   updated_at: string;
   message: string;
+  next_step: string;
 }
 
 export async function updateEntity(
@@ -472,6 +572,7 @@ export async function updateEntity(
     changed_fields: decoded.changed_fields,
     updated_at: decoded.updated_at,
     message: `Entity updated to version ${decoded.version}`,
+    next_step: nextStepForUpdate(decoded.id),
   };
 }
 
@@ -504,6 +605,7 @@ export interface PromoteEntitiesResult {
   source_entities: Array<{ id?: string; entity_type?: string; title?: string }>;
   timestamp: string;
   message: string;
+  next_step: string;
 }
 
 export async function promoteEntities(
@@ -567,6 +669,7 @@ export async function promoteEntities(
     })),
     timestamp: wireResp.timestamp,
     message,
+    next_step: nextStepForPromote({ dryRun, promotedId: promoted?.id }),
   };
 }
 
@@ -600,6 +703,7 @@ export interface TraverseGraphResult {
   }>;
   count: number;
   message: string;
+  next_step: string;
 }
 
 export async function traverseGraph(
@@ -651,6 +755,7 @@ export async function traverseGraph(
     results,
     count: wireResp.count,
     message: `Found ${wireResp.count} connected entities within ${maxDepth} hop(s)`,
+    next_step: nextStepForTraverse({ id: startId, count: wireResp.count }),
   };
 }
 
