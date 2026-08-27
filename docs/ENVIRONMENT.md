@@ -136,6 +136,8 @@ Outcome tracking ranks memory results by historical success rate.
 | Variable | Default | Purpose |
 |---|---|---|
 | `ENABLE_CODE_INTERPRETER` | `false` | Set to `true` to enable the opt-in QuickJS-sandboxed `eval` tool (parallel subagent fan-out + programmatic tool calling). The default tsx `execute_code` tool is unaffected. See [`ARCHITECTURE.md`](./ARCHITECTURE.md#code-interpreter-quickjs). |
+| `MEMORY_AUGMENTATION_ENABLED` | `true` | Set to `false` to stop attaching related graph-memory entries to `grep` / `glob` / `search` / `bash` search results. On by default; silently inactive when graph memory is unavailable (no `SIA_WORKSPACE_ID` / host daemon). |
+| `MEMORY_AUGMENTATION_BUDGET_MS` | `500` | Hard ceiling on the per-search memory lookup; a slow lookup yields no context, never a slow tool. |
 
 ## Runtime
 

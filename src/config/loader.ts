@@ -225,6 +225,15 @@ function loadFeaturesConfig(): FeaturesConfig {
     knowledgeFormation: loadKnowledgeFormationConfig(),
     outcomeTracking: loadOutcomeTrackingConfig(),
     codeInterpreter: loadCodeInterpreterConfig(),
+    memoryAugmentation: loadMemoryAugmentationConfig(),
+  };
+}
+
+function loadMemoryAugmentationConfig(): FeaturesConfig["memoryAugmentation"] {
+  return {
+    // Opt-out: on unless the literal string "false".
+    enabled: env("MEMORY_AUGMENTATION_ENABLED") !== "false",
+    budgetMs: parseIntOrDefault(env("MEMORY_AUGMENTATION_BUDGET_MS"), 500)!,
   };
 }
 
