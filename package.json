@@ -30,7 +30,7 @@
     "@langchain/mcp-adapters": "1.1.4",
     "@langchain/openai": "1.5.10",
     "@langchain/openrouter": "0.4.10",
-    "@sveltejs/acorn-typescript": "^1.0.9",
+    "@sveltejs/acorn-typescript": "^1.0.13",
     "@tavily/core": "0.7.7",
     "@vscode/ripgrep": "1.18.0",
     "acorn": "^8.16.0",
