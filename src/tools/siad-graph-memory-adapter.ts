@@ -13,7 +13,10 @@
  * to the host implementation.
  */
 import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
-import { GRAPH_MEMORY_SCHEMA_HASH } from "../vendor/svc-rpc/graph-memory/schema-hash.js";
+import {
+  GRAPH_MEMORY_SCHEMA_HASH,
+  GRAPH_MEMORY_VERB_SCHEMA_HASHES,
+} from "../vendor/svc-rpc/graph-memory/schema-hash.js";
 import type {
   AdminHttpRequest,
   AdminHttpResponse,
@@ -56,6 +59,18 @@ interface RpcRequestEnvelope<TPayload> {
   serviceVersion: string;
   verb: string;
   schemaHash: string;
+  /**
+   * Schema hash scoped to the single verb being called.
+   *
+   * The service-wide `schemaHash` above identifies the whole IDL, so it
+   * changes whenever any verb does. `verbHash` identifies just the verb
+   * in this request, which lets the two sides agree per verb rather than
+   * all-or-nothing.
+   *
+   * Optional on the wire: unknown envelope fields are ignored, so
+   * including it is safe regardless of what the peer understands.
+   */
+  verbHash?: string;
   replyTo: string;
   deadlineUnixMs: number;
   payload: TPayload;
@@ -241,6 +256,13 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
       serviceVersion: SERVICE_VERSION,
       verb,
       schemaHash: GRAPH_MEMORY_SCHEMA_HASH,
+      // Send it only when the vendored map has a hash for this verb.
+      // The map covers every verb, so the guard is belt-and-braces; an
+      // empty string carries no more information than omitting the key
+      // and only widens the envelope.
+      ...(GRAPH_MEMORY_VERB_SCHEMA_HASHES[verb]
+        ? { verbHash: GRAPH_MEMORY_VERB_SCHEMA_HASHES[verb] }
+        : {}),
       replyTo: "_INBOX.agent",
       deadlineUnixMs: Date.now() + this.deadlineMs,
       payload,
