@@ -13,7 +13,10 @@
  * to the host implementation.
  */
 import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
-import { GRAPH_MEMORY_SCHEMA_HASH } from "../vendor/svc-rpc/graph-memory/schema-hash.js";
+import {
+  GRAPH_MEMORY_SCHEMA_HASH,
+  GRAPH_MEMORY_VERB_SCHEMA_HASHES,
+} from "../vendor/svc-rpc/graph-memory/schema-hash.js";
 import type {
   AdminHttpRequest,
   AdminHttpResponse,
@@ -56,6 +59,21 @@ interface RpcRequestEnvelope<TPayload> {
   serviceVersion: string;
   verb: string;
   schemaHash: string;
+  /**
+   * Per-verb schema hash for the verb being called.
+   *
+   * The service-wide `schemaHash` above is an all-or-nothing contract
+   * identity: it moves whenever ANY verb changes, so a host that has
+   * gained verbs since this build rejects every call — including calls
+   * to verbs whose shape never changed. `verbHash` narrows that check to
+   * the one verb actually being invoked.
+   *
+   * Optional on the wire so that sending it is safe against either host
+   * generation: a host that predates it simply ignores the unknown
+   * field and compares `schemaHash`. A host that DOES do per-verb
+   * hashing requires it — there is no fallback on that side.
+   */
+  verbHash?: string;
   replyTo: string;
   deadlineUnixMs: number;
   payload: TPayload;
@@ -241,6 +259,13 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
       serviceVersion: SERVICE_VERSION,
       verb,
       schemaHash: GRAPH_MEMORY_SCHEMA_HASH,
+      // Only send it when we actually have a hash for this verb. The
+      // vendored map covers every verb, so the guard is belt-and-braces;
+      // an empty string would be treated identically to omitting but
+      // needlessly widens the envelope.
+      ...(GRAPH_MEMORY_VERB_SCHEMA_HASHES[verb]
+        ? { verbHash: GRAPH_MEMORY_VERB_SCHEMA_HASHES[verb] }
+        : {}),
       replyTo: "_INBOX.agent",
       deadlineUnixMs: Date.now() + this.deadlineMs,
       payload,

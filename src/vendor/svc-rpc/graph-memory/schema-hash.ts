@@ -3,3 +3,26 @@
 
 /** Deterministic SHA-256 of the canonical IDL projection for the graph-memory.v1 service. */
 export const GRAPH_MEMORY_SCHEMA_HASH = "6852ad08e5a73b77b8f507f7745ca565edbd9989e656e228cb888c6e31206960";
+
+/**
+ * Per-verb schema hashes (AGI-357) for the graph-memory.v1 service.
+ *
+ * Each value is SHA-256 over the canonical projection of that verb
+ * alone, bound to the service + version. Adding a verb leaves every
+ * other entry byte-identical, which is what makes a purely additive
+ * IDL change non-breaking for existing clients.
+ */
+export const GRAPH_MEMORY_VERB_SCHEMA_HASHES: Record<string, string> = {
+  "admin.http": "86d83e91afd34d1aa8c558c614a2f421c25e509480daaa08901a6eb00aebca08",
+  "entities.list": "6e2d2fd2f5037cea27f327717295ab1826be6a67c678a27e30f8ebd8e4d74f2a",
+  "entities.promote": "bc3e423bc0d6151f37dc984fea021cb05aa9abbe7d5989f4c8b6f1a0a61eec82",
+  "entities.retrieve": "d14878c805a17c040639505837b688dfdc80af8a1fc81766064fc1be6a4248d1",
+  "entities.search": "1c34446eb6a6701b393b4ac0a643f3af96128dc897defe8a52ed10e61abc7d8f",
+  "entities.store": "30e330f16a689d881008c4c0ee6dfd103811c3c94559db843dc70573e5061e55",
+  "entities.update": "c370e15886fb8e6121ea6d71d0142608853b0f02a8f16bf8bb7639bc182fdf22",
+  "entities.update_status": "1efa63fcabfd583dc5e78ed67061bcea70ce9745294f4ae6b00b8f617f3a765b",
+  "graph.edges": "571c8466dc5c32ad904c84bf812a1d080577271ff8b43b9dda4efad99bd8fb14",
+  "graph.query": "9f1b18ff2f5a4eb99dd4ecf69302e0c570d97ca538f37181bfaafebe77ff0c71",
+  "graph.stats": "a2380c5897b3ba038eeae81ff8576cfa8a9af598f27e75696b450277397157be",
+  "graph.traverse": "f787b0e54a00a58ab46fc2474bc84e71b09f1abd33aa7ca1e6a9cd61937749a5",
+};
