@@ -1,6 +1,7 @@
 import { compile } from "json-schema-to-typescript";
 import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import dedent from "dedent";
+import { logger } from "../utils/logger.js";
 import type { ReplResult } from "./types.js";
 
 /**
@@ -62,6 +63,17 @@ export function formatReplResult(result: ReplResult): string {
   return parts.join("\n") || "(no output)";
 }
 
+/**
+ * Convert a tool schema for the interpreter's generated type declarations.
+ *
+ * Deliberately fail-soft: a tool whose schema will not convert is simply left
+ * out of the generated types rather than failing the whole generation. But the
+ * failure is logged, because the same conversion is what binds tools to the
+ * model — and there it is fatal. A schema that throws here is a run-killing
+ * defect elsewhere, and swallowing it silently is how one shipped: this
+ * function is exercised by a test that reads as broad coverage of the real
+ * tools, and it passed green while the tools it converted were unbindable.
+ */
 export function safeToJsonSchema(
   schema: unknown,
 ): Record<string, unknown> | undefined {
@@ -70,7 +82,13 @@ export function safeToJsonSchema(
       string,
       unknown
     >;
-  } catch {
+  } catch (error) {
+    logger.warn(
+      { err: error },
+      "Tool schema could not be converted to JSON Schema; omitting it from the " +
+        "generated types. The same conversion is fatal when tools are bound to " +
+        "the model, so treat this as a defect in the schema, not a soft miss.",
+    );
     return undefined;
   }
 }
