@@ -49,6 +49,12 @@ export interface WebSearchOptions extends WebCommonOptions {
   includeDomains?: string[];
   /** Domains to exclude from search results */
   excludeDomains?: string[];
+  /** Whether includeDomains filters results or merely boosts them */
+  includeDomainsMode?: "filter" | "boost";
+  /** Preferred result language: ISO 639-1 code or English name */
+  language?: string;
+  /** Drop results not in `language` instead of merely boosting them */
+  filterByLanguage?: boolean;
   /** Time range filter for results (long or short form) */
   timeRange?: "day" | "week" | "month" | "year" | "d" | "w" | "m" | "y";
   /** Number of days back to search (news topic) */

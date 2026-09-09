@@ -49,22 +49,25 @@ dates, and an AI-generated answer.
 }
 ```
 
-| Parameter         | Type                                            | Default   | Description                                      |
-| ----------------- | ----------------------------------------------- | --------- | ------------------------------------------------ |
-| `query`           | string                                          | required  | Search query                                     |
-| `maxResults`      | number                                          | 5         | Results to return (1-20)                         |
-| `searchDepth`     | "basic" \| "advanced" \| "fast" \| "ultra-fast" | "basic"   | Thoroughness; "advanced" costs 2 credits         |
-| `topic`           | "general" \| "news" \| "finance"                | "general" | Index to query                                   |
-| `includeAnswer`   | boolean \| "basic" \| "advanced"                | true      | AI summary of the results                        |
-| `chunksPerSource` | number                                          | 3         | Snippets per result (1-3)                        |
-| `includeDomains`  | string[]                                        | -         | Only these domains (max 300)                     |
-| `excludeDomains`  | string[]                                        | -         | Never these domains (max 150)                    |
-| `timeRange`       | "day" \| "week" \| "month" \| "year"            | -         | Recency filter                                   |
-| `startDate`       | string                                          | -         | Earliest publication date, `YYYY-MM-DD`          |
-| `endDate`         | string                                          | -         | Latest publication date, `YYYY-MM-DD`            |
-| `country`         | string                                          | -         | Boost a country's results (`general` topic only) |
-| `exactMatch`      | boolean                                         | false     | Require query terms verbatim                     |
-| `autoParameters`  | boolean                                         | false     | Let the API pick parameters; costs 2 credits     |
+| Parameter            | Type                                            | Default   | Description                                                |
+| -------------------- | ----------------------------------------------- | --------- | ---------------------------------------------------------- |
+| `query`              | string                                          | required  | Search query                                               |
+| `maxResults`         | number                                          | 5         | Results to return (1-20)                                   |
+| `searchDepth`        | "basic" \| "advanced" \| "fast" \| "ultra-fast" | "basic"   | Thoroughness; "advanced" costs 2 credits                   |
+| `topic`              | "general" \| "news" \| "finance"                | "general" | Index to query                                             |
+| `includeAnswer`      | boolean \| "basic" \| "advanced"                | true      | AI summary of the results                                  |
+| `chunksPerSource`    | number                                          | 3         | Snippets per result (1-3)                                  |
+| `includeDomains`     | string[]                                        | -         | Only these domains (max 300)                               |
+| `excludeDomains`     | string[]                                        | -         | Never these domains (max 150)                              |
+| `includeDomainsMode` | "filter" \| "boost"                             | -         | How `includeDomains` applies; needs `includeDomains`       |
+| `language`           | string                                          | -         | ISO 639-1 code or English name; boosts that language       |
+| `filterByLanguage`   | boolean                                         | false     | Drop other languages instead of boosting; needs `language` |
+| `timeRange`          | "day" \| "week" \| "month" \| "year"            | -         | Recency filter                                             |
+| `startDate`          | string                                          | -         | Earliest publication date, `YYYY-MM-DD`                    |
+| `endDate`            | string                                          | -         | Latest publication date, `YYYY-MM-DD`                      |
+| `country`            | string                                          | -         | Boost a country's results (`general` topic only)           |
+| `exactMatch`         | boolean                                         | false     | Require query terms verbatim                               |
+| `autoParameters`     | boolean                                         | false     | Let the API pick parameters; costs 2 credits               |
 
 ## Tool: `web_extract`
 

@@ -36,10 +36,11 @@ import type { WebUsage } from "../web-search/types.js";
  * - `includeFavicon` — same; presentation-only, and there is no UI reading it.
  * - `maxTokens` — output size is bounded here instead (see MAX_OUTPUT_CHARS),
  *   so the two budgets cannot disagree.
- * - `language` / `filter_by_language` — not in the SDK's typed options; only
- *   reachable through its `[key: string]: any` index signature, so exposing it
- *   would mean sending an unvalidated key. Revisit when the SDK types it.
- * - `safeSearch` / `includeDomainsMode` — same untyped-option situation.
+ * - `safeSearch` — a real API parameter, but still absent from the SDK's typed
+ *   options. It is reachable only through the `[key: string]: any` index
+ *   signature, and that path spreads keys verbatim with no camelCase→snake_case
+ *   conversion, so it would have to be sent as the literal `safe_search`.
+ *   Sending an unvalidated key is not worth it; revisit when the SDK types it.
  * - `research` / `getResearch` — a separate long-running product surface with
  *   its own polling lifecycle, not a variant of these calls.
  * - `humanId` — an end-user identifier. Deliberately never sent.
@@ -407,6 +408,24 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .max(150)
         .optional()
         .describe("Never return results from these domains"),
+      includeDomainsMode: z
+        .enum(["filter", "boost"])
+        .optional()
+        .describe(
+          "How includeDomains applies: 'filter' returns only those domains, 'boost' merely ranks them higher. Ignored unless includeDomains is set.",
+        ),
+      language: z
+        .string()
+        .optional()
+        .describe(
+          "Preferred result language — ISO 639-1 code ('en', 'fr', 'zh-cn') or English name ('french'). Boosts that language in the ranking. Write the query in the same language.",
+        ),
+      filterByLanguage: z
+        .boolean()
+        .optional()
+        .describe(
+          "Drop results not in 'language' rather than merely boosting them. Ignored unless 'language' is set.",
+        ),
       timeRange: z
         .enum(["day", "week", "month", "year"])
         .optional()
@@ -464,6 +483,15 @@ REQUIRES: TAVILY_API_KEY environment variable`,
           chunksPerSource: input.chunksPerSource,
           includeDomains: input.includeDomains,
           excludeDomains: input.excludeDomains,
+          // The API 400s on a dependent flag whose partner is absent, so these
+          // two are dropped rather than forwarded alone. Enforcing the pairing
+          // in the schema instead would turn a recoverable omission into the
+          // kind of validation error this tool split exists to remove.
+          includeDomainsMode: input.includeDomains?.length
+            ? input.includeDomainsMode
+            : undefined,
+          language: input.language,
+          filterByLanguage: input.language ? input.filterByLanguage : undefined,
           timeRange: input.timeRange,
           startDate: input.startDate,
           endDate: input.endDate,

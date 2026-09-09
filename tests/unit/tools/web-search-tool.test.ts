@@ -220,6 +220,55 @@ describe("Web Tools", () => {
       );
     });
 
+    it("should pass language and domain-mode options once typed by the SDK", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await searchTool.invoke({
+        query: "q",
+        includeDomains: ["lemonde.fr"],
+        includeDomainsMode: "boost",
+        language: "fr",
+        filterByLanguage: true,
+      });
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({
+          includeDomainsMode: "boost",
+          language: "fr",
+          filterByLanguage: true,
+        }),
+      );
+    });
+
+    it("should drop dependent flags whose partner option is absent", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      // The API 400s on either flag alone. Dropping them keeps a recoverable
+      // omission from becoming a failed turn.
+      await searchTool.invoke({
+        query: "q",
+        includeDomainsMode: "filter",
+        filterByLanguage: true,
+      });
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({
+          includeDomainsMode: undefined,
+          filterByLanguage: undefined,
+        }),
+      );
+    });
+
     it("should reject a malformed date", async () => {
       await expect(
         searchTool.invoke({ query: "x", startDate: "01/02/2026" }),
