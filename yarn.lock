@@ -1645,24 +1645,24 @@
   resolved "https://registry.yarnpkg.com/@langchain/langgraph-checkpoint/-/langgraph-checkpoint-1.1.5.tgz#c793177f9afcce31a1e9922f317f88fec1254282"
   integrity sha512-BwDwl5VeTOh6CVuiIPgsUgfK51vTJDMSbFcSCUfjJWsl8/DPdK/mbv+ejxJstkSk/BlSPMP4JfXWcN6jD2ea2Q==
 
-"@langchain/langgraph-sdk@~1.9.30":
-  version "1.9.31"
-  resolved "https://registry.yarnpkg.com/@langchain/langgraph-sdk/-/langgraph-sdk-1.9.31.tgz#4dad28c89a74014288f3b6ceadfda2cd42094715"
-  integrity sha512-y1sSdq39IPb6mOX43+JiSezVbUdA8EBEJ1gvn91GP0jrLG0EcSApeRDCjRouyDpPXZ51bQXEQhA8CiHM0mzcAw==
+"@langchain/langgraph-sdk@~1.10.2":
+  version "1.10.2"
+  resolved "https://registry.yarnpkg.com/@langchain/langgraph-sdk/-/langgraph-sdk-1.10.2.tgz#8380cce0d8b084972820d8f90477e1d3284e9b81"
+  integrity sha512-86qsfdBZWu1ZgywLN8AThU/jXi9rjPDZPWcTJp4SA1A/L62ypTNoSXbvtiwZt1odokXccYTxK1XWS8tmVdvEmw==
   dependencies:
-    "@langchain/protocol" "^0.0.18"
+    "@langchain/protocol" "^0.0.19"
     "@types/json-schema" "^7.0.15"
     p-queue "^9.0.1"
     p-retry "^7.1.1"
 
-"@langchain/langgraph@1.4.12", "@langchain/langgraph@^1.4.10":
-  version "1.4.12"
-  resolved "https://registry.yarnpkg.com/@langchain/langgraph/-/langgraph-1.4.12.tgz#0870f26fc6a903c57feb6ad039bcf2f2a0c6ebc4"
-  integrity sha512-63iH/igH5Fh5fHqmWp09YYWaDKKB9v4RCmYNJBrnQ224rFRbjebgyYW6o5RCczN5FZxIhQj+xT51rrNmG0zi5A==
+"@langchain/langgraph@1.4.14", "@langchain/langgraph@^1.4.10":
+  version "1.4.14"
+  resolved "https://registry.yarnpkg.com/@langchain/langgraph/-/langgraph-1.4.14.tgz#230c64aa99a11a433b22e4032df884a7d538a2f1"
+  integrity sha512-uWAdRYTllfKCnTrlyovExPJCHJwcf3Wl2LzUlnaqsT7Rmoo3aCeYtq/7MV/Pw4q11motG8pR8bjr6T6V8Pe1gQ==
   dependencies:
     "@langchain/langgraph-checkpoint" "^1.1.5"
-    "@langchain/langgraph-sdk" "~1.9.30"
-    "@langchain/protocol" "^0.0.18"
+    "@langchain/langgraph-sdk" "~1.10.2"
+    "@langchain/protocol" "^0.0.19"
     "@standard-schema/spec" "1.1.0"
 
 "@langchain/mcp-adapters@1.1.4":
@@ -1685,28 +1685,28 @@
     openai "^6.37.0"
     zod "^3.25.76 || ^4"
 
-"@langchain/openai@1.5.10", "@langchain/openai@^1.4.1":
-  version "1.5.10"
-  resolved "https://registry.yarnpkg.com/@langchain/openai/-/openai-1.5.10.tgz#96ae81ee6a005bca20e65454a187116e10b12e82"
-  integrity sha512-4cxdgolkkXwnAiGEkNrue+ba7jUKjfBwleLCX5DrRVcRGrCc4w5EceblYZOIaHMY6+nhwMqIOtSzBWgcBCLfmw==
+"@langchain/openai@1.5.11", "@langchain/openai@^1.4.1":
+  version "1.5.11"
+  resolved "https://registry.yarnpkg.com/@langchain/openai/-/openai-1.5.11.tgz#d973b75285502c899f82b476df9db38ed2756428"
+  integrity sha512-BvGp5lQk5//0WVwTIepscazFpneT9I9+mc+kp+cLuhGHFb7mc9zGNrusZOXoa3p73SN0i3XqTo8lyIndpVx3Hw==
   dependencies:
     js-tiktoken "^1.0.12"
     openai "^7.5.0"
     zod "^3.25.76 || ^4"
 
-"@langchain/openrouter@0.4.10":
-  version "0.4.10"
-  resolved "https://registry.yarnpkg.com/@langchain/openrouter/-/openrouter-0.4.10.tgz#4fffe816236f452e1eb1106ac04536fc9cd7a57f"
-  integrity sha512-amaopfbWNbftTK4R+erGEylVWhE+E8qhaDKcTni5qztOh1dsFG/7essJMYrhJ0wjq5nR/MKc9hnqcJm6T+2lkA==
+"@langchain/openrouter@0.4.11":
+  version "0.4.11"
+  resolved "https://registry.yarnpkg.com/@langchain/openrouter/-/openrouter-0.4.11.tgz#4a18d092b41d0f2a30e7e7d3d300ff07ca3fada2"
+  integrity sha512-Fz1Rjd3T7SDnHOI7LW0LRDrqRI5DubQ9VLK339QJCoqyPBfMqGuBnMDoUt6ZYf60XkTM5EJBC6g+x3mTMof5Xw==
   dependencies:
-    "@langchain/openai" "1.5.10"
+    "@langchain/openai" "1.5.11"
     eventsource-parser "^3.1.0"
     openai "^6.41.0"
 
-"@langchain/protocol@^0.0.18":
-  version "0.0.18"
-  resolved "https://registry.yarnpkg.com/@langchain/protocol/-/protocol-0.0.18.tgz#6d96155e7263c958fbce6d4b7241b4725b72fbad"
-  integrity sha512-XW1egQtPfsGI41w2AMZNFZrUIwFSQHTjVMZs0OaTpCAvht/QLoaPN8FQcsysMVypOhupG28J29yOorrc70otBQ==
+"@langchain/protocol@^0.0.19":
+  version "0.0.19"
+  resolved "https://registry.yarnpkg.com/@langchain/protocol/-/protocol-0.0.19.tgz#7fe43fed115dc34b3b4c246e8d5283fbcbfab7b0"
+  integrity sha512-9hKcRrH7cBX6gfutdfXPoft1OCchHe4FEpALoDJMl5Qu+n/YG5ynZmyu8+8cxORlPwHBoKTxggvXz+76M1yX1Q==
 
 "@langchain/textsplitters@1.0.1":
   version "1.0.1"
@@ -4810,10 +4810,10 @@ langchain@1.5.10:
     langsmith ">=0.5.0 <1.0.0"
     zod "^3.25.76 || ^4"
 
-langsmith@0.9.0, "langsmith@>=0.4.0 <1.0.0", "langsmith@>=0.5.0 <1.0.0":
-  version "0.9.0"
-  resolved "https://registry.yarnpkg.com/langsmith/-/langsmith-0.9.0.tgz#48495c0af6ff1e0850736a5098b64cec9f6b475b"
-  integrity sha512-tlg/aG7qezAKY6G3fgADSX7PkRj+JKoF3z7QNkCMsAOvwvuzhiwP9Amn1Z+zAIxuKoWuXQdIjtFN0LVmUC1oUQ==
+langsmith@0.10.2, "langsmith@>=0.4.0 <1.0.0", "langsmith@>=0.5.0 <1.0.0":
+  version "0.10.2"
+  resolved "https://registry.yarnpkg.com/langsmith/-/langsmith-0.10.2.tgz#ace3722d834bfd99d95bc366911751c64d98ea25"
+  integrity sha512-9iqIcEPBMlRT+vvijcjCo4AeHlJHUZjxwbPtDdvQPpGgvo7nYxhsQ7jVd53zXkPstiPfjRhexfnIe0vLltVFmg==
   dependencies:
     p-queue "6.6.2"
 
