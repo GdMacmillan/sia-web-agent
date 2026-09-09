@@ -50,65 +50,148 @@ import type { WebUsage } from "../web-search/types.js";
  */
 
 /**
- * Models routinely serialize booleans as the strings "true" / "false" — most
- * often for a field whose JSON Schema is an `anyOf`, where the boolean branch
- * is only one of several and the model hedges toward a string.
+ * Models routinely serialize scalars as strings — `"true"` for a boolean, `"5"`
+ * for a number — and hand a lone string where an array is declared. Every one
+ * of those is understandable, and rejecting one costs the model a whole turn to
+ * discover and retry, which is the failure this tool split exists to remove.
  *
- * Coerce instead of rejecting. A rejected tool call costs the model a whole
- * turn to discover and retry, which is precisely the failure this tool split
- * exists to remove; there is nothing to be gained by being strict about the
- * spelling of a boolean.
- */
-function boolish<T extends z.ZodTypeAny>(inner: T) {
-  return z.preprocess(
-    (v) => (v === "true" ? true : v === "false" ? false : v),
-    inner,
-  );
-}
-
-/**
- * Coerce a stringified number and clamp it into the API's accepted range.
+ * The leniency lives in two halves that must stay separate:
  *
- * Same reasoning as `boolish`: models emit `"5"` as readily as `5`, and a
- * model that asks for more results than the API allows meant "as many as I can
- * get" — clamping answers that, while rejecting spends a turn teaching it a
- * bound the description already states.
+ *   - the SCHEMA below accepts the loose shapes, using only constructs that can
+ *     be represented in JSON Schema;
+ *   - the NORMALIZERS below convert them before the client call.
+ *
+ * A tool schema must contain NO transform of any kind — neither `z.preprocess`
+ * nor `.transform()`. The schema is converted to JSON Schema to be advertised
+ * to the model, and a transform cannot be represented there. `z.preprocess`
+ * throws outright. `.transform()` throws conditionally: the converter strips a
+ * trailing transform from an object property, an array item, `.optional()` and
+ * `.nullable()`, but not from inside `.default()`, `.catch()`, a union, a
+ * record or a tuple — and nearly every field here ends in one of those, so a
+ * transform placed in this schema throws in practice. Either way the failure
+ * is fatal at bind time: the whole run dies, not just the one call.
+ *
+ * Do not check this with Zod's own `z.toJSONSchema()`. The two converters
+ * disagree in opposite directions — Zod throws on `.transform()` and accepts
+ * `z.preprocess`, the LangChain converter does the reverse — so Zod passing
+ * says nothing about the one the runtime actually uses.
+ *
+ * DEFAULTS live in the `func` body too, never as `.default()` in the schema.
+ * A field carrying a default is advertised as `required`, which tells the
+ * model to fill in every optional parameter on every call — and a value it was
+ * told to invent is a value it can get wrong.
+ *
+ * `tests/unit/tools/web-search-schema.test.ts` pins both rules against the
+ * converter the runtime uses.
  */
-function intish(min: number, max: number) {
-  return z.preprocess((v) => clampNumeric(v, min, max, true), z.number().int());
-}
 
-/** `intish` for the float-valued timeouts. */
-function numish(min: number, max: number) {
-  return z.preprocess((v) => clampNumeric(v, min, max, false), z.number());
-}
+/** An integer the model may have spelled as a string. */
+const looseInt = z.union([z.number().int(), z.string().regex(/^\d+$/)]);
+/** A number (possibly fractional) the model may have spelled as a string. */
+const looseNumber = z.union([z.number(), z.string().regex(/^\d+(\.\d+)?$/)]);
+/** A boolean the model may have spelled as a string. */
+const looseBoolean = z.union([z.boolean(), z.enum(["true", "false"])]);
 
-function clampNumeric(
+/** Normalize a loose integer/number and clamp it into the API's range. */
+function toNumber(
   value: unknown,
   min: number,
   max: number,
-  round: boolean,
-): unknown {
-  const n =
-    typeof value === "string" && value.trim() !== "" ? Number(value) : value;
-  if (typeof n !== "number" || !Number.isFinite(n)) return value;
+  round = true,
+): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const n = typeof value === "string" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) return undefined;
   return Math.min(max, Math.max(min, round ? Math.round(n) : n));
 }
 
+/** Normalize a loose boolean. */
+function toBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
+/** Normalize `includeAnswer`, which is a boolean OR an answer depth. */
+function toIncludeAnswer(
+  value: unknown,
+): boolean | "basic" | "advanced" | undefined {
+  if (value === "basic" || value === "advanced") return value;
+  return toBoolean(value);
+}
+
 /**
- * Accept a bare host (`docs.example.com`) as well as a full URL. Models drop
- * the scheme routinely, and rejecting one costs the same turn as any other
- * validation failure.
+ * Treat a bare host as https, the way a browser address bar would, and reject
+ * a string that is not a URL under either reading.
+ *
+ * The schema can only require a non-empty string here — a `.url()` in the
+ * schema would reject the bare host this is meant to accept — so this is where
+ * the check has to live. Throwing is caught by the caller's try/catch and
+ * returned as a tool-result string, per the codebase-wide convention.
  */
-const urlish = z.preprocess(
-  (v) =>
-    typeof v === "string" &&
-    v.trim() !== "" &&
-    !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(v.trim())
-      ? `https://${v.trim()}`
-      : v,
-  z.string().url(),
-);
+function toUrl(value: string): string {
+  const trimmed = value.trim();
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  if (!URL.canParse(candidate)) {
+    throw new Error(
+      `"${value}" is not a URL. Pass a full URL ("https://example.com/page") ` +
+        `or a bare host ("example.com").`,
+    );
+  }
+  return candidate;
+}
+
+/**
+ * Read the `urls` argument as the list of URLs it means.
+ *
+ * A single URL string is the one-element list it plainly is. Beyond that,
+ * models routinely hand back a *string containing a list* rather than a list —
+ * observed live, repeatedly, in both of these shapes:
+ *
+ *   "[\"https://a.example\", \"https://b.example\"]"   (JSON, the common one)
+ *   "https://a.example https://b.example"            (whitespace / comma)
+ *
+ * This is the predictable consequence of declaring the parameter as a union:
+ * the model is shown `anyOf: [string, array]`, hedges toward the string
+ * branch, and then has to put the list somewhere. Treating that blob as one
+ * URL fails the call and costs a turn — the exact failure the loose shapes
+ * exist to remove — so it is unpacked here.
+ *
+ * Splitting on whitespace is lossless: a URL cannot contain a raw space. A
+ * trailing or leading comma is stripped per token so a comma-and-space list
+ * works too, while a comma *inside* a single URL (legal, if uncommon) is left
+ * alone because that string never gets split in the first place.
+ */
+function toUrlList(value: string | string[]): string[] {
+  if (Array.isArray(value)) return value.map(toUrl);
+
+  const trimmed = value.trim();
+
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.every((u): u is string => typeof u === "string")
+      ) {
+        return parsed.map(toUrl);
+      }
+    } catch {
+      // Not JSON after all — fall through and read it as a plain string.
+    }
+  }
+
+  const tokens = trimmed
+    .split(/\s+/)
+    .map((t) => t.replace(/^,+|,+$/g, ""))
+    .filter((t) => t.length > 0);
+
+  return (tokens.length > 1 ? tokens : [trimmed]).map(toUrl);
+}
 
 /** Overall backstop on a tool's output. Per-result clipping normally binds first. */
 const MAX_OUTPUT_CHARS = 32000;
@@ -136,8 +219,18 @@ function perResultBudget(count: number): number {
 
 /**
  * Clip one result's content, marking the truncation inline.
+ *
+ * The content is typed `string`, but the API returns null for a page it
+ * reached and could not extract — about one page in thirty of a documentation
+ * crawl, in practice. Every formatter funnels through here, so guarding this
+ * one place is what stops a single unextractable page from throwing and taking
+ * the entire crawl's output with it. Reporting the gap per page is also more
+ * useful than losing the other twenty-nine.
  */
 function clipResult(content: string, budget: number): string {
+  if (typeof content !== "string") {
+    return "(no content was returned for this result)";
+  }
   if (content.length <= budget) return content;
   const dropped = content.length - budget;
   return `${content.slice(0, budget)}\n...[truncated ${dropped} more characters of this result]...`;
@@ -385,9 +478,8 @@ const traversalFilterSchema = {
     .array(z.string())
     .optional()
     .describe("Skip URLs whose domain matches one of these regexes"),
-  allowExternal: boolish(z.boolean())
+  allowExternal: looseBoolean
     .optional()
-    .default(false)
     .describe(
       "Follow links off the starting domain. Defaults to false to keep the traversal on one site.",
     ),
@@ -418,33 +510,28 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "The search query. Be specific and include relevant context (e.g. 'LangGraph interrupt() resume semantics' rather than 'langgraph').",
         ),
-      maxResults: intish(1, 20)
+      maxResults: looseInt
         .optional()
-        .default(5)
-        .describe("Number of results to return (1-20)"),
+        .describe("Number of results to return (1-20). Defaults to 5."),
       searchDepth: z
         .enum(["basic", "advanced", "fast", "ultra-fast"])
         .optional()
-        .default("basic")
         .describe(
-          "'basic' (1 credit) suits most queries; 'fast'/'ultra-fast' trade recall for latency at the same price; 'advanced' (2 credits) digs deeper for hard queries.",
+          "'basic' (1 credit, the default) suits most queries; 'fast'/'ultra-fast' trade recall for latency at the same price; 'advanced' (2 credits) digs deeper for hard queries.",
         ),
       topic: z
         .enum(["general", "news", "finance"])
         .optional()
-        .default("general")
         .describe(
-          "Search index to query. Use 'news' for current events and 'finance' for markets.",
+          "Search index to query. Defaults to 'general'; use 'news' for current events and 'finance' for markets.",
         ),
-      includeAnswer: boolish(
-        z.union([z.boolean(), z.enum(["basic", "advanced"])]),
-      )
+      includeAnswer: z
+        .union([z.boolean(), z.enum(["basic", "advanced", "true", "false"])])
         .optional()
-        .default(true)
         .describe(
-          "Include an AI-generated answer. 'advanced' produces a longer synthesis; false skips it.",
+          "Include an AI-generated answer. Defaults to true; 'advanced' produces a longer synthesis, false skips it.",
         ),
-      chunksPerSource: intish(1, 3)
+      chunksPerSource: looseInt
         .optional()
         .describe(
           "Content snippets returned per result (1-3, default 3). Lower it to keep the output small. Not available at 'ultra-fast' depth.",
@@ -473,7 +560,7 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "Preferred result language — ISO 639-1 code ('en', 'fr', 'zh-cn') or English name ('french'). Boosts that language in the ranking. Write the query in the same language.",
         ),
-      filterByLanguage: boolish(z.boolean())
+      filterByLanguage: looseBoolean
         .optional()
         .describe(
           "Drop results not in 'language' rather than merely boosting them. Ignored unless 'language' is set.",
@@ -502,12 +589,12 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "Boost results from this country, lowercase English name (e.g. 'united kingdom'). Only applies when topic is 'general'.",
         ),
-      exactMatch: boolish(z.boolean())
+      exactMatch: looseBoolean
         .optional()
         .describe(
           "Require the query terms to appear verbatim. Useful for error strings and exact identifiers.",
         ),
-      autoParameters: boolish(z.boolean())
+      autoParameters: looseBoolean
         .optional()
         .describe(
           "Let the API choose search parameters for the query. Costs 2 credits and overrides some of your choices — use only when a plain search has already failed.",
@@ -526,11 +613,11 @@ REQUIRES: TAVILY_API_KEY environment variable`,
 
       try {
         const result = await search(input.query, {
-          maxResults: input.maxResults,
-          searchDepth: input.searchDepth,
-          topic: input.topic,
-          includeAnswer: input.includeAnswer,
-          chunksPerSource: input.chunksPerSource,
+          maxResults: toNumber(input.maxResults, 1, 20) ?? 5,
+          searchDepth: input.searchDepth ?? "basic",
+          topic: input.topic ?? "general",
+          includeAnswer: toIncludeAnswer(input.includeAnswer) ?? true,
+          chunksPerSource: toNumber(input.chunksPerSource, 1, 3),
           includeDomains: input.includeDomains,
           excludeDomains: input.excludeDomains,
           // The API 400s on a dependent flag whose partner is absent, so these
@@ -541,13 +628,15 @@ REQUIRES: TAVILY_API_KEY environment variable`,
             ? input.includeDomainsMode
             : undefined,
           language: input.language,
-          filterByLanguage: input.language ? input.filterByLanguage : undefined,
+          filterByLanguage: input.language
+            ? toBoolean(input.filterByLanguage)
+            : undefined,
           timeRange: input.timeRange,
           startDate: input.startDate,
           endDate: input.endDate,
           country: input.country,
-          exactMatch: input.exactMatch,
-          autoParameters: input.autoParameters,
+          exactMatch: toBoolean(input.exactMatch),
+          autoParameters: toBoolean(input.autoParameters),
           includeUsage: true,
           sessionId: sessionIdFrom(config),
         });
@@ -590,10 +679,7 @@ REQUIRES: TAVILY_API_KEY environment variable`,
       // A bare string is accepted and wrapped: the operation reads "one or
       // more pages", and a model handed a single URL naturally sends it alone.
       urls: z
-        .preprocess(
-          (v) => (typeof v === "string" ? [v] : v),
-          z.array(urlish).min(1).max(20),
-        )
+        .union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)])
         .describe("URLs to read (1-20 per call)"),
       query: z
         .string()
@@ -601,7 +687,7 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "What you are looking for on these pages. Supplying it reranks the content and returns matching chunks instead of the whole page.",
         ),
-      chunksPerSource: intish(1, 5)
+      chunksPerSource: looseInt
         .optional()
         .describe(
           "Chunks returned per page (1-5, default 3). Only takes effect when 'query' is supplied.",
@@ -609,18 +695,16 @@ REQUIRES: TAVILY_API_KEY environment variable`,
       extractDepth: z
         .enum(["basic", "advanced"])
         .optional()
-        .default("basic")
         .describe(
-          "'basic' (1 credit / 5 URLs) for ordinary pages; 'advanced' (2 credits / 5 URLs) when you need tables or embedded content.",
+          "'basic' (1 credit / 5 URLs, the default) for ordinary pages; 'advanced' (2 credits / 5 URLs) when you need tables or embedded content.",
         ),
       format: z
         .enum(["markdown", "text"])
         .optional()
-        .default("markdown")
         .describe(
-          "'markdown' preserves headings, lists and links; 'text' is plain prose.",
+          "'markdown' (the default) preserves headings, lists and links; 'text' is plain prose.",
         ),
-      timeout: numish(1, 60)
+      timeout: looseNumber
         .optional()
         .describe(
           "Seconds to wait before giving up (1-60). Defaults to 10 for basic depth, 30 for advanced.",
@@ -633,12 +717,12 @@ REQUIRES: TAVILY_API_KEY environment variable`,
       }
 
       try {
-        const result = await extract(input.urls, {
+        const result = await extract(toUrlList(input.urls), {
           query: input.query,
-          chunksPerSource: input.chunksPerSource,
-          extractDepth: input.extractDepth,
-          format: input.format,
-          timeout: input.timeout,
+          chunksPerSource: toNumber(input.chunksPerSource, 1, 5),
+          extractDepth: input.extractDepth ?? "basic",
+          format: input.format ?? "markdown",
+          timeout: toNumber(input.timeout, 1, 60, false),
           includeUsage: true,
           sessionId: sessionIdFrom(config),
         });
@@ -684,30 +768,27 @@ COST: 1 credit per 10 pages, or 2 per 10 when 'instructions' are supplied.
 REQUIRES: TAVILY_API_KEY environment variable`,
 
     schema: z.object({
-      url: urlish.describe("The URL to start crawling from"),
+      url: z.string().min(1).describe("The URL to start crawling from"),
       instructions: z
         .string()
         .optional()
         .describe(
           "Natural-language guidance for which pages matter (e.g. 'Find pages about authentication and rate limits'). Doubles the credit cost but sharply improves relevance.",
         ),
-      maxDepth: intish(1, 5)
+      maxDepth: looseInt
         .optional()
-        .default(1)
         .describe(
-          "How many links deep to follow from the start URL (1-5). Each level multiplies the pages visited.",
+          "How many links deep to follow from the start URL (1-5, default 1). Each level multiplies the pages visited.",
         ),
-      maxBreadth: intish(1, 500)
+      maxBreadth: looseInt
         .optional()
-        .default(20)
-        .describe("Maximum links followed per page (1-500)"),
-      limit: intish(1, 100)
+        .describe("Maximum links followed per page (1-500). Defaults to 20."),
+      limit: looseInt
         .optional()
-        .default(20)
         .describe(
-          "Total pages to visit before stopping (1-100). Kept below the API's own default to bound both cost and output size.",
+          "Total pages to visit before stopping (1-100, default 20). Kept below the API's own default to bound both cost and output size.",
         ),
-      chunksPerSource: intish(1, 5)
+      chunksPerSource: looseInt
         .optional()
         .describe(
           "Chunks returned per page (1-5, default 3). Only takes effect when 'instructions' are supplied.",
@@ -715,19 +796,16 @@ REQUIRES: TAVILY_API_KEY environment variable`,
       extractDepth: z
         .enum(["basic", "advanced"])
         .optional()
-        .default("basic")
         .describe(
-          "Content extraction depth for each page crawled. 'advanced' recovers tables and embedded content.",
+          "Content extraction depth for each page crawled. Defaults to 'basic'; 'advanced' recovers tables and embedded content.",
         ),
       format: z
         .enum(["markdown", "text"])
         .optional()
-        .default("markdown")
-        .describe("Output format for page content"),
+        .describe("Output format for page content. Defaults to 'markdown'."),
       ...traversalFilterSchema,
-      timeout: numish(10, 150)
+      timeout: looseNumber
         .optional()
-        .default(TRAVERSAL_DEFAULT_TIMEOUT_SECONDS)
         .describe(
           "Seconds to wait before giving up (10-150). Defaults to 45; the API's own 150s default outlives most tool budgets.",
         ),
@@ -739,20 +817,22 @@ REQUIRES: TAVILY_API_KEY environment variable`,
       }
 
       try {
-        const result = await crawl(input.url, {
+        const result = await crawl(toUrl(input.url), {
           instructions: input.instructions,
-          maxDepth: input.maxDepth,
-          maxBreadth: input.maxBreadth,
-          limit: input.limit,
-          chunksPerSource: input.chunksPerSource,
-          extractDepth: input.extractDepth,
-          format: input.format,
+          maxDepth: toNumber(input.maxDepth, 1, 5) ?? 1,
+          maxBreadth: toNumber(input.maxBreadth, 1, 500) ?? 20,
+          limit: toNumber(input.limit, 1, 100) ?? 20,
+          chunksPerSource: toNumber(input.chunksPerSource, 1, 5),
+          extractDepth: input.extractDepth ?? "basic",
+          format: input.format ?? "markdown",
           selectPaths: input.selectPaths,
           selectDomains: input.selectDomains,
           excludePaths: input.excludePaths,
           excludeDomains: input.excludeDomains,
-          allowExternal: input.allowExternal,
-          timeout: input.timeout,
+          allowExternal: toBoolean(input.allowExternal) ?? false,
+          timeout:
+            toNumber(input.timeout, 10, 150, false) ??
+            TRAVERSAL_DEFAULT_TIMEOUT_SECONDS,
           includeUsage: true,
           sessionId: sessionIdFrom(config),
         });
@@ -789,31 +869,29 @@ COST: 1 credit per 10 pages, or 2 per 10 when 'instructions' are supplied.
 REQUIRES: TAVILY_API_KEY environment variable`,
 
     schema: z.object({
-      url: urlish.describe("The URL to start mapping from"),
+      url: z.string().min(1).describe("The URL to start mapping from"),
       instructions: z
         .string()
         .optional()
         .describe(
           "Natural-language guidance for which parts of the site matter (e.g. 'Focus on the API reference'). Doubles the credit cost.",
         ),
-      maxDepth: intish(1, 5)
+      maxDepth: looseInt
         .optional()
-        .default(1)
-        .describe("How many links deep to follow from the start URL (1-5)"),
-      maxBreadth: intish(1, 500)
-        .optional()
-        .default(20)
-        .describe("Maximum links followed per page (1-500)"),
-      limit: intish(1, 500)
-        .optional()
-        .default(50)
         .describe(
-          "Total URLs to collect before stopping (1-500). Higher limits are affordable here because no page content is returned.",
+          "How many links deep to follow from the start URL (1-5). Defaults to 1.",
+        ),
+      maxBreadth: looseInt
+        .optional()
+        .describe("Maximum links followed per page (1-500). Defaults to 20."),
+      limit: looseInt
+        .optional()
+        .describe(
+          "Total URLs to collect before stopping (1-500, default 50). Higher limits are affordable here because no page content is returned.",
         ),
       ...traversalFilterSchema,
-      timeout: numish(10, 150)
+      timeout: looseNumber
         .optional()
-        .default(TRAVERSAL_DEFAULT_TIMEOUT_SECONDS)
         .describe(
           "Seconds to wait before giving up (10-150). Defaults to 45, matching web_crawl; the API's own 150s default outlives most tool budgets.",
         ),
@@ -825,17 +903,19 @@ REQUIRES: TAVILY_API_KEY environment variable`,
       }
 
       try {
-        const result = await map(input.url, {
+        const result = await map(toUrl(input.url), {
           instructions: input.instructions,
-          maxDepth: input.maxDepth,
-          maxBreadth: input.maxBreadth,
-          limit: input.limit,
+          maxDepth: toNumber(input.maxDepth, 1, 5) ?? 1,
+          maxBreadth: toNumber(input.maxBreadth, 1, 500) ?? 20,
+          limit: toNumber(input.limit, 1, 500) ?? 50,
           selectPaths: input.selectPaths,
           selectDomains: input.selectDomains,
           excludePaths: input.excludePaths,
           excludeDomains: input.excludeDomains,
-          allowExternal: input.allowExternal,
-          timeout: input.timeout,
+          allowExternal: toBoolean(input.allowExternal) ?? false,
+          timeout:
+            toNumber(input.timeout, 10, 150, false) ??
+            TRAVERSAL_DEFAULT_TIMEOUT_SECONDS,
           includeUsage: true,
           sessionId: sessionIdFrom(config),
         });

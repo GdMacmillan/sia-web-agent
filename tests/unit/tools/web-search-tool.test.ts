@@ -565,10 +565,17 @@ describe("Web Tools", () => {
       expect(mockExtract).not.toHaveBeenCalled();
     });
 
-    it("should reject a non-URL string", async () => {
-      await expect(
-        extractTool.invoke({ urls: ["not a url"] }),
-      ).rejects.toThrow();
+    /**
+     * The schema can only require a non-empty string here — a `.url()` would
+     * reject the bare host the tool deliberately accepts — so an unusable URL
+     * is caught in the tool body and comes back as a tool result, which is the
+     * codebase convention for a tool error.
+     */
+    it("should report a non-URL string without calling the API", async () => {
+      const result = await extractTool.invoke({ urls: ["not a url"] });
+
+      expect(result).toContain("Error");
+      expect(result).toContain("not a URL");
       expect(mockExtract).not.toHaveBeenCalled();
     });
   });
@@ -709,16 +716,52 @@ describe("Web Tools", () => {
       );
     });
 
-    it("should still reject input it cannot interpret", async () => {
-      await expect(
-        crawlTool.invoke({ url: "not a url at all" }),
-      ).rejects.toThrow();
+    /**
+     * The API returns null content for a page it reached and could not
+     * extract — about one page in thirty of a real documentation crawl. The
+     * response type says `string`, so nothing upstream catches it, and before
+     * this guard one such page threw and took the whole crawl's output with
+     * it.
+     */
+    it("should report a page with no content instead of losing the crawl", async () => {
+      mockCrawl.mockResolvedValueOnce({
+        baseUrl: "https://docs.example.com",
+        results: [
+          { url: "https://docs.example.com/a", rawContent: "First page." },
+          {
+            url: "https://docs.example.com/b",
+            rawContent: null as unknown as string,
+          },
+          { url: "https://docs.example.com/c", rawContent: "Third page." },
+        ],
+        responseTime: 1.0,
+      });
+
+      const result = await crawlTool.invoke({
+        url: "https://docs.example.com",
+      });
+
+      expect(result).not.toContain("Error");
+      expect(result).toContain("First page.");
+      expect(result).toContain("Third page.");
+      expect(result).toContain("no content was returned");
+    });
+
+    it("should still refuse input it cannot interpret", async () => {
+      // An unusable URL is reported as a tool result (see web_extract above).
+      const result = await crawlTool.invoke({ url: "not a url at all" });
+      expect(result).toContain("Error");
+      expect(result).toContain("not a URL");
+
+      // A non-numeric string where a number is declared is still a schema
+      // rejection: there is no reading of "deep" that yields a depth.
       await expect(
         crawlTool.invoke({
           url: "https://example.com",
           maxDepth: "deep",
         } as never),
       ).rejects.toThrow();
+
       expect(mockCrawl).not.toHaveBeenCalled();
     });
   });
