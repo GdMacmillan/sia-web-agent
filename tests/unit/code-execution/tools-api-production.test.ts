@@ -12,13 +12,7 @@
  * the tsx subprocess.
  */
 
-import {
-  describe,
-  it,
-  expect,
-  beforeAll,
-  afterAll,
-} from "@jest/globals";
+import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import {
   mkdtempSync,
   mkdirSync,
@@ -37,7 +31,7 @@ import { FilesystemBackend } from "../../../src/backends/filesystem.js";
 import {
   createSearchTool,
   createBashTool,
-  createWebSearchTool,
+  createWebTools,
   storeEntityTool,
   retrieveEntityTool,
   searchEntitiesTool,
@@ -80,7 +74,7 @@ function buildProductionTools(rootDir: string): StructuredToolInterface[] {
   > = [
     ["search", () => createSearchTool(rootDir)],
     ["bash", () => createBashTool(rootDir)],
-    ["web_search", () => createWebSearchTool()],
+    ["web tools", () => createWebTools()],
     ["checklists", () => createChecklistTools()],
   ];
   for (const [name, factory] of optionalFactories) {
@@ -90,7 +84,9 @@ function buildProductionTools(rootDir: string): StructuredToolInterface[] {
     } catch {
       // Tool does not construct outside a full runtime environment; skip it
       // rather than substituting a stub.
-      console.warn(`tools-api production gate: skipping ${name} (constructor threw)`);
+      console.warn(
+        `tools-api production gate: skipping ${name} (constructor threw)`,
+      );
     }
   }
 
@@ -226,7 +222,11 @@ describe("Tools API production surface", () => {
       'console.log("NONCE|" + content.split("\\n")[0]);',
     ].join("\n");
 
-    const result = await executor.execute("rehearsal-read", code, EXEC_TIMEOUT_MS);
+    const result = await executor.execute(
+      "rehearsal-read",
+      code,
+      EXEC_TIMEOUT_MS,
+    );
 
     // read_file returns cat -n style output, so the first line carries a
     // line-number prefix before the file text.
@@ -246,7 +246,11 @@ describe("Tools API production surface", () => {
       'console.log("WRITE_RESULT|" + result);',
     ].join("\n");
 
-    const result = await executor.execute("rehearsal-write", code, EXEC_TIMEOUT_MS);
+    const result = await executor.execute(
+      "rehearsal-write",
+      code,
+      EXEC_TIMEOUT_MS,
+    );
 
     expect(result.output).toContain("WRITE_TYPE|string");
     expect(result.output).toContain("WRITE_RESULT|Successfully wrote to");
@@ -307,9 +311,9 @@ describe("normalizeToolResult", () => {
   });
 
   it("stringifies non-string message content", () => {
-    expect(normalizeToolResult({ content: [{ type: "text", text: "hi" }] })).toBe(
-      '[{"type":"text","text":"hi"}]',
-    );
+    expect(
+      normalizeToolResult({ content: [{ type: "text", text: "hi" }] }),
+    ).toBe('[{"type":"text","text":"hi"}]');
   });
 
   it("rejects Command results with an error string", () => {

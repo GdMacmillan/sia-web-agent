@@ -36,6 +36,9 @@ const EXPECTED_TOOL_NAMES = [
   "search",
   "bash",
   "web_search",
+  "web_extract",
+  "web_crawl",
+  "web_map",
   "store_entity",
   "retrieve_entity",
   "search_entities",
@@ -53,9 +56,12 @@ const EXPECTED_TOOL_NAMES = [
   "delete_checklist",
 ];
 
-/** Everything except `web_search`, which is key-gated. */
+/** The four Tavily-backed tools, registered together behind one key gate. */
+const WEB_TOOL_NAMES = ["web_search", "web_extract", "web_crawl", "web_map"];
+
+/** Everything except the web tools, which are key-gated. */
 const EXPECTED_TOOL_NAMES_WITHOUT_WEB_SEARCH = EXPECTED_TOOL_NAMES.filter(
-  (n) => n !== "web_search",
+  (n) => !WEB_TOOL_NAMES.includes(n),
 );
 
 const originalTavilyKey = process.env.TAVILY_API_KEY;
@@ -117,38 +123,45 @@ describe("Deep Agent Setup", () => {
   });
 
   /**
-   * `web_search` is registered only when a Tavily API key is configured.
-   * Without one the tool cannot succeed at anything, so advertising it in
+   * The web tools are registered only when a Tavily API key is configured.
+   * Without one they cannot succeed at anything, so advertising them in
    * the schema just invites the model to spend a turn finding that out.
+   * All four share the key, so the gate is all-or-nothing.
    */
-  describe("createStandardTools — web_search key gate", () => {
-    it("omits web_search when no Tavily API key is configured", () => {
+  describe("createStandardTools — web tool key gate", () => {
+    it("omits every web tool when no Tavily API key is configured", () => {
       setTavilyKey(undefined);
 
       const toolNames = createStandardTools("/test/project").map((t) => t.name);
 
-      expect(toolNames).not.toContain("web_search");
-      // Exactly one tool is withheld — the gate must not take anything
-      // else with it.
+      for (const name of WEB_TOOL_NAMES) {
+        expect(toolNames).not.toContain(name);
+      }
+      // Exactly those four tools are withheld — the gate must not take
+      // anything else with it.
       expect(toolNames.sort()).toEqual(
         [...EXPECTED_TOOL_NAMES_WITHOUT_WEB_SEARCH].sort(),
       );
     });
 
-    it("omits web_search when the key is present but empty", () => {
+    it("omits every web tool when the key is present but empty", () => {
       setTavilyKey("");
 
       const toolNames = createStandardTools("/test/project").map((t) => t.name);
 
-      expect(toolNames).not.toContain("web_search");
+      for (const name of WEB_TOOL_NAMES) {
+        expect(toolNames).not.toContain(name);
+      }
     });
 
-    it("includes web_search when a Tavily API key is configured", () => {
+    it("includes every web tool when a Tavily API key is configured", () => {
       setTavilyKey("tvly-test-key");
 
       const toolNames = createStandardTools("/test/project").map((t) => t.name);
 
-      expect(toolNames).toContain("web_search");
+      for (const name of WEB_TOOL_NAMES) {
+        expect(toolNames).toContain(name);
+      }
       expect(toolNames.sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
     });
 

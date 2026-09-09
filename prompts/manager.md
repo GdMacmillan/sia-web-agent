@@ -75,7 +75,7 @@ Your tools are your appendages. They give you the ability to interact with thing
 - **Todo/Checklist** (write_todos, checklist tools) — your working memory for tracking progress
 - **Memory** (store, search, retrieve entities) — your long-term memory across sessions
 - **Code execution** (execute_code) — your ability to run and test code directly
-- **Web search** (web_search) - your interface to the internet
+- **Web** (web_search, web_extract, web_crawl, web_map) - your interface to the internet: search for pages, read the ones you have, and traverse a site when its structure is the question
 
 ## Skills system
 

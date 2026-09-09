@@ -39,7 +39,7 @@ const CHECKLIST_TOOLS = [
   "delete_checklist",
 ];
 const SEARCH_TOOLS = ["search"];
-const WEB_SEARCH_TOOLS = ["web_search"];
+const WEB_SEARCH_TOOLS = ["web_search", "web_extract", "web_crawl", "web_map"];
 const BASH_TOOLS = ["bash"];
 const CODE_EXECUTION_TOOLS = ["execute_code"];
 

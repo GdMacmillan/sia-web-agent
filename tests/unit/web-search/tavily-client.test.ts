@@ -23,6 +23,7 @@ jest.mock("@tavily/core", () => ({
     search: jest.fn(),
     extract: jest.fn(),
     crawl: jest.fn(),
+    map: jest.fn(),
   })),
 }));
 
@@ -32,6 +33,7 @@ import {
   search,
   extract,
   crawl,
+  map,
   isConfigured,
   resetClient,
 } from "../../../src/web-search/tavily-client.js";
@@ -43,17 +45,20 @@ describe("Tavily Client", () => {
   let mockSearch: jest.Mock;
   let mockExtract: jest.Mock;
   let mockCrawl: jest.Mock;
+  let mockMap: jest.Mock;
 
   beforeEach(() => {
     // Create fresh mocks for each test
     mockSearch = jest.fn();
     mockExtract = jest.fn();
     mockCrawl = jest.fn();
+    mockMap = jest.fn();
 
     mockTavily.mockReturnValue({
       search: mockSearch,
       extract: mockExtract,
       crawl: mockCrawl,
+      map: mockMap,
     } as unknown as ReturnType<typeof tavily>);
 
     // Reset mocks, client, and config cache
@@ -102,15 +107,15 @@ describe("Tavily Client", () => {
       const result = await search("test query");
 
       expect(mockTavily).toHaveBeenCalledWith({ apiKey: "test-api-key" });
-      expect(mockSearch).toHaveBeenCalledWith("test query", {
-        maxResults: 5,
-        searchDepth: "basic",
-        topic: "general",
-        includeAnswer: true,
-        includeDomains: undefined,
-        excludeDomains: undefined,
-        timeRange: undefined,
-      });
+      expect(mockSearch).toHaveBeenCalledWith(
+        "test query",
+        expect.objectContaining({
+          maxResults: 5,
+          searchDepth: "basic",
+          topic: "general",
+          includeAnswer: true,
+        }),
+      );
       expect(result.query).toBe("test query");
       expect(result.answer).toBe("Test answer");
       expect(result.results).toHaveLength(1);
@@ -278,18 +283,18 @@ describe("Tavily Client", () => {
 
       const result = await crawl("https://example.com");
 
-      expect(mockCrawl).toHaveBeenCalledWith("https://example.com", {
-        maxDepth: 1,
-        maxBreadth: 10,
-        limit: 10,
-        instructions: undefined,
-        extractDepth: "basic",
-        format: "markdown",
-        includeImages: false,
-        selectPaths: undefined,
-        excludePaths: undefined,
-        allowExternal: false,
-      });
+      expect(mockCrawl).toHaveBeenCalledWith(
+        "https://example.com",
+        expect.objectContaining({
+          maxDepth: 1,
+          maxBreadth: 20,
+          limit: 20,
+          extractDepth: "basic",
+          format: "markdown",
+          includeImages: false,
+          allowExternal: false,
+        }),
+      );
       expect(result.baseUrl).toBe("https://example.com");
       expect(result.results).toHaveLength(2);
     });
@@ -314,18 +319,21 @@ describe("Tavily Client", () => {
         allowExternal: true,
       });
 
-      expect(mockCrawl).toHaveBeenCalledWith("https://docs.example.com", {
-        maxDepth: 3,
-        maxBreadth: 20,
-        limit: 50,
-        instructions: "Focus on API documentation",
-        extractDepth: "advanced",
-        format: "text",
-        includeImages: true,
-        selectPaths: ["/api/.*"],
-        excludePaths: ["/blog/.*"],
-        allowExternal: true,
-      });
+      expect(mockCrawl).toHaveBeenCalledWith(
+        "https://docs.example.com",
+        expect.objectContaining({
+          maxDepth: 3,
+          maxBreadth: 20,
+          limit: 50,
+          instructions: "Focus on API documentation",
+          extractDepth: "advanced",
+          format: "text",
+          includeImages: true,
+          selectPaths: ["/api/.*"],
+          excludePaths: ["/blog/.*"],
+          allowExternal: true,
+        }),
+      );
     });
 
     it("should throw error for empty URL", async () => {
@@ -348,6 +356,221 @@ describe("Tavily Client", () => {
         expect(error).toBeInstanceOf(WebSearchError);
         expect((error as WebSearchError).message).toContain("Timeout");
       }
+    });
+  });
+
+  describe("option pass-through", () => {
+    it("should forward every widened search option, including the session id", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await search("q", {
+        chunksPerSource: 2,
+        includeRawContent: "markdown",
+        startDate: "2026-01-01",
+        endDate: "2026-02-01",
+        country: "canada",
+        exactMatch: true,
+        autoParameters: true,
+        includeFavicon: true,
+        includeUsage: true,
+        timeout: 20,
+        days: 7,
+        sessionId: "thread-1",
+      });
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({
+          chunksPerSource: 2,
+          includeRawContent: "markdown",
+          startDate: "2026-01-01",
+          endDate: "2026-02-01",
+          country: "canada",
+          exactMatch: true,
+          autoParameters: true,
+          includeFavicon: true,
+          includeUsage: true,
+          timeout: 20,
+          days: 7,
+          sessionId: "thread-1",
+        }),
+      );
+    });
+
+    it("should forward intent-based extract options", async () => {
+      mockExtract.mockResolvedValueOnce({
+        results: [],
+        failedResults: [],
+        responseTime: 0.1,
+      });
+
+      await extract(["https://example.com"], {
+        query: "pricing",
+        chunksPerSource: 5,
+        timeout: 45,
+        sessionId: "thread-2",
+      });
+
+      expect(mockExtract).toHaveBeenCalledWith(
+        ["https://example.com"],
+        expect.objectContaining({
+          query: "pricing",
+          chunksPerSource: 5,
+          timeout: 45,
+          sessionId: "thread-2",
+        }),
+      );
+    });
+
+    it("should forward domain filters and timeout on crawl", async () => {
+      mockCrawl.mockResolvedValueOnce({
+        baseUrl: "https://example.com",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await crawl("https://example.com", {
+        selectDomains: ["^example\\.com$"],
+        excludeDomains: ["^ads\\.example\\.com$"],
+        chunksPerSource: 3,
+        timeout: 45,
+        includeUsage: true,
+        sessionId: "thread-3",
+      });
+
+      expect(mockCrawl).toHaveBeenCalledWith(
+        "https://example.com",
+        expect.objectContaining({
+          selectDomains: ["^example\\.com$"],
+          excludeDomains: ["^ads\\.example\\.com$"],
+          chunksPerSource: 3,
+          timeout: 45,
+          includeUsage: true,
+          sessionId: "thread-3",
+        }),
+      );
+    });
+
+    it("should surface credit usage when the API reports it", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+        usage: { credits: 2 },
+      });
+
+      const result = await search("q", { includeUsage: true });
+
+      expect(result.usage).toEqual({ credits: 2 });
+    });
+  });
+
+  describe("map", () => {
+    it("should map with default options", async () => {
+      mockMap.mockResolvedValueOnce({
+        baseUrl: "https://example.com",
+        results: ["https://example.com/", "https://example.com/about"],
+        responseTime: 0.8,
+      });
+
+      const result = await map("https://example.com");
+
+      expect(mockMap).toHaveBeenCalledWith(
+        "https://example.com",
+        expect.objectContaining({
+          maxDepth: 1,
+          maxBreadth: 20,
+          limit: 50,
+          allowExternal: false,
+        }),
+      );
+      expect(result.baseUrl).toBe("https://example.com");
+      expect(result.results).toEqual([
+        "https://example.com/",
+        "https://example.com/about",
+      ]);
+      expect(result.responseTime).toBe(0.8);
+    });
+
+    it("should map with custom options", async () => {
+      mockMap.mockResolvedValueOnce({
+        baseUrl: "https://docs.example.com",
+        results: [],
+        responseTime: 1.2,
+        usage: { credits: 1 },
+      });
+
+      const result = await map("https://docs.example.com", {
+        maxDepth: 3,
+        maxBreadth: 100,
+        limit: 200,
+        instructions: "Focus on the API reference",
+        selectPaths: ["/api/.*"],
+        selectDomains: ["^docs\\.example\\.com$"],
+        excludePaths: ["/api/legacy/.*"],
+        excludeDomains: ["^ads\\.example\\.com$"],
+        allowExternal: true,
+        timeout: 60,
+        includeUsage: true,
+        sessionId: "thread-4",
+      });
+
+      expect(mockMap).toHaveBeenCalledWith(
+        "https://docs.example.com",
+        expect.objectContaining({
+          maxDepth: 3,
+          maxBreadth: 100,
+          limit: 200,
+          instructions: "Focus on the API reference",
+          selectPaths: ["/api/.*"],
+          selectDomains: ["^docs\\.example\\.com$"],
+          excludePaths: ["/api/legacy/.*"],
+          excludeDomains: ["^ads\\.example\\.com$"],
+          allowExternal: true,
+          timeout: 60,
+          includeUsage: true,
+          sessionId: "thread-4",
+        }),
+      );
+      expect(result.usage).toEqual({ credits: 1 });
+    });
+
+    it("should throw error for empty URL", async () => {
+      await expect(map("")).rejects.toThrow(WebSearchError);
+      await expect(map("")).rejects.toThrow("cannot be empty");
+    });
+
+    it("should throw error for invalid URL", async () => {
+      await expect(map("not-a-url")).rejects.toThrow(WebSearchError);
+      await expect(map("not-a-url")).rejects.toThrow("Invalid URL");
+    });
+
+    it("should wrap API errors with a MAP_FAILED code", async () => {
+      mockMap.mockRejectedValueOnce(new Error("Timeout"));
+
+      try {
+        await map("https://example.com");
+        fail("Expected error to be thrown");
+      } catch (error) {
+        expect(error).toBeInstanceOf(WebSearchError);
+        expect((error as WebSearchError).code).toBe("MAP_FAILED");
+        expect((error as WebSearchError).message).toContain("Timeout");
+      }
+    });
+
+    it("should not call the API when the key is missing", async () => {
+      delete process.env.TAVILY_API_KEY;
+      resetConfig();
+      resetClient();
+
+      await expect(map("https://example.com")).rejects.toThrow(
+        "TAVILY_API_KEY",
+      );
+      expect(mockMap).not.toHaveBeenCalled();
     });
   });
 });
