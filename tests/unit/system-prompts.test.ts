@@ -87,10 +87,20 @@ describe("getSystemPrompt — web-search capability notice", () => {
       }
     });
 
-    it("tells the agent not to plan around the tool", async () => {
+    it("tells the agent not to plan around the tools", async () => {
       const prompt = (await getSystemPrompt("answer")).toLowerCase();
       expect(prompt).toContain("absent from your tool list");
-      expect(prompt).toContain("must not plan around it");
+      expect(prompt).toContain("must not plan around them");
+      // Names every withheld tool, so the agent cannot conclude that only
+      // `web_search` is gone and reach for one of the other three.
+      for (const name of [
+        "web_search",
+        "web_extract",
+        "web_crawl",
+        "web_map",
+      ]) {
+        expect(prompt).toContain(name);
+      }
       // Names the alternatives it DOES have.
       expect(prompt).toContain("graph memory");
     });

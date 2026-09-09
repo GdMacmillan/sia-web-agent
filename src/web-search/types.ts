@@ -1,30 +1,80 @@
 /**
  * Web Search Types
  *
- * TypeScript interfaces for Tavily API operations:
- * - Search: Web search with optional answer generation
- * - Extract: Content extraction from specific URLs
- * - Crawl: Site crawling with depth/breadth controls
+ * TypeScript interfaces for the four Tavily operations exposed as tools:
+ * - Search: web search with optional answer generation
+ * - Extract: content extraction from a list of URLs
+ * - Crawl: site traversal that returns page content
+ * - Map: site traversal that returns only the URL structure
  */
+
+/** Credit usage reported by the API when `includeUsage` is requested. */
+export interface WebUsage {
+  /** Credits consumed by the request */
+  credits: number;
+}
+
+/**
+ * Options shared by every operation.
+ */
+interface WebCommonOptions {
+  /**
+   * Opaque session identifier forwarded as the `X-Session-Id` header so the
+   * provider can group the calls made within one conversation. Callers pass
+   * the LangGraph thread id.
+   */
+  sessionId?: string;
+}
 
 /**
  * Search operation options
  */
-export interface WebSearchOptions {
+export interface WebSearchOptions extends WebCommonOptions {
   /** Maximum number of results (1-20, default: 5) */
   maxResults?: number;
-  /** Search depth: "basic" (faster) or "advanced" (more thorough) */
-  searchDepth?: "basic" | "advanced";
+  /**
+   * Search depth. "basic", "fast" and "ultra-fast" cost 1 credit;
+   * "advanced" costs 2.
+   */
+  searchDepth?: "basic" | "advanced" | "fast" | "ultra-fast";
   /** Topic category for specialized results */
   topic?: "general" | "news" | "finance";
-  /** Whether to include an AI-generated answer summary */
-  includeAnswer?: boolean;
+  /** Whether to include an AI-generated answer summary (or its depth) */
+  includeAnswer?: boolean | "basic" | "advanced";
+  /** Content chunks returned per source (1-3) */
+  chunksPerSource?: number;
+  /** Whether to return the full page content alongside each result */
+  includeRawContent?: false | "markdown" | "text";
   /** Domains to include in search results */
   includeDomains?: string[];
   /** Domains to exclude from search results */
   excludeDomains?: string[];
-  /** Time range filter for results */
-  timeRange?: "day" | "week" | "month" | "year";
+  /** Whether includeDomains filters results or merely boosts them */
+  includeDomainsMode?: "filter" | "boost";
+  /** Preferred result language: ISO 639-1 code or English name */
+  language?: string;
+  /** Drop results not in `language` instead of merely boosting them */
+  filterByLanguage?: boolean;
+  /** Time range filter for results (long or short form) */
+  timeRange?: "day" | "week" | "month" | "year" | "d" | "w" | "m" | "y";
+  /** Number of days back to search (news topic) */
+  days?: number;
+  /** Earliest publication date, YYYY-MM-DD */
+  startDate?: string;
+  /** Latest publication date, YYYY-MM-DD */
+  endDate?: string;
+  /** Boost results from a country (general topic only) */
+  country?: string;
+  /** Require the query terms to appear verbatim */
+  exactMatch?: boolean;
+  /** Let the API pick search parameters for the query (costs 2 credits) */
+  autoParameters?: boolean;
+  /** Whether to return each result's favicon */
+  includeFavicon?: boolean;
+  /** Whether to return credit usage */
+  includeUsage?: boolean;
+  /** Request timeout in seconds */
+  timeout?: number;
 }
 
 /**
@@ -37,10 +87,14 @@ export interface WebSearchResult {
   url: string;
   /** Extracted content snippet */
   content: string;
+  /** Full page content, when includeRawContent was requested */
+  rawContent?: string;
   /** Relevance score (0-1) */
   score: number;
   /** Publication date if available */
   publishedDate?: string;
+  /** Favicon URL, when includeFavicon was requested */
+  favicon?: string;
 }
 
 /**
@@ -55,18 +109,30 @@ export interface WebSearchResponse {
   results: WebSearchResult[];
   /** Response time in seconds */
   responseTime: number;
+  /** Credit usage, when includeUsage was requested */
+  usage?: WebUsage;
 }
 
 /**
  * Extract operation options
  */
-export interface WebExtractOptions {
-  /** Extraction depth: "basic" (faster) or "advanced" (more thorough) */
+export interface WebExtractOptions extends WebCommonOptions {
+  /** Extraction depth: "basic" (faster) or "advanced" (tables, embedded content) */
   extractDepth?: "basic" | "advanced";
   /** Output format */
   format?: "markdown" | "text";
+  /** User intent used to rerank the extracted chunks */
+  query?: string;
+  /** Content chunks returned per source (1-5, requires `query`) */
+  chunksPerSource?: number;
+  /** Request timeout in seconds (1-60) */
+  timeout?: number;
   /** Whether to include images */
   includeImages?: boolean;
+  /** Whether to return each page's favicon */
+  includeFavicon?: boolean;
+  /** Whether to return credit usage */
+  includeUsage?: boolean;
 }
 
 /**
@@ -81,6 +147,8 @@ export interface WebExtractResult {
   rawContent: string;
   /** Extracted images if requested */
   images?: string[];
+  /** Favicon URL, when includeFavicon was requested */
+  favicon?: string;
 }
 
 /**
@@ -103,32 +171,52 @@ export interface WebExtractResponse {
   failedResults: WebExtractFailedResult[];
   /** Response time in seconds */
   responseTime: number;
+  /** Credit usage, when includeUsage was requested */
+  usage?: WebUsage;
+}
+
+/**
+ * Options shared by the two site-traversal operations (crawl and map).
+ */
+interface WebTraversalOptions extends WebCommonOptions {
+  /** Maximum link depth to traverse (1-5) */
+  maxDepth?: number;
+  /** Maximum links followed per page (1-500) */
+  maxBreadth?: number;
+  /** Maximum total pages to visit */
+  limit?: number;
+  /** Natural language instructions to guide the traversal */
+  instructions?: string;
+  /** Paths to include (regex patterns) */
+  selectPaths?: string[];
+  /** Domains to include (regex patterns) */
+  selectDomains?: string[];
+  /** Paths to exclude (regex patterns) */
+  excludePaths?: string[];
+  /** Domains to exclude (regex patterns) */
+  excludeDomains?: string[];
+  /** Whether to follow links off the starting domain */
+  allowExternal?: boolean;
+  /** Request timeout in seconds (10-150) */
+  timeout?: number;
+  /** Whether to return credit usage */
+  includeUsage?: boolean;
 }
 
 /**
  * Crawl operation options
  */
-export interface WebCrawlOptions {
-  /** Maximum link depth to crawl (default: 1) */
-  maxDepth?: number;
-  /** Maximum links per page (default: 10) */
-  maxBreadth?: number;
-  /** Maximum total pages to crawl (default: 10) */
-  limit?: number;
-  /** Natural language instructions to guide crawling */
-  instructions?: string;
+export interface WebCrawlOptions extends WebTraversalOptions {
   /** Extraction depth for page content */
   extractDepth?: "basic" | "advanced";
   /** Output format */
   format?: "markdown" | "text";
+  /** Content chunks returned per page (1-5, requires `instructions`) */
+  chunksPerSource?: number;
   /** Whether to include images */
   includeImages?: boolean;
-  /** Paths to include (regex patterns) */
-  selectPaths?: string[];
-  /** Paths to exclude (regex patterns) */
-  excludePaths?: string[];
-  /** Whether to follow external links */
-  allowExternal?: boolean;
+  /** Whether to return each page's favicon */
+  includeFavicon?: boolean;
 }
 
 /**
@@ -141,6 +229,8 @@ export interface WebCrawlPageResult {
   rawContent: string;
   /** Extracted images */
   images: string[];
+  /** Favicon URL, when includeFavicon was requested */
+  favicon?: string;
 }
 
 /**
@@ -153,31 +243,30 @@ export interface WebCrawlResponse {
   results: WebCrawlPageResult[];
   /** Response time in seconds */
   responseTime: number;
+  /** Credit usage, when includeUsage was requested */
+  usage?: WebUsage;
 }
 
 /**
- * Unified web search tool input
- * Supports search, extract, and crawl modes
+ * Map operation options
+ *
+ * Map takes the same traversal controls as crawl but returns only URLs, so it
+ * has no content-extraction options.
  */
-export interface WebSearchToolInput {
-  /** Search query (for search mode) */
-  query?: string;
-  /** URL to extract content from or crawl (for extract/crawl modes) */
-  url?: string;
-  /** Mode when URL is provided: "extract" or "crawl" */
-  mode?: "extract" | "crawl";
-  /** Search options */
-  maxResults?: number;
-  searchDepth?: "basic" | "advanced";
-  topic?: "general" | "news" | "finance";
-  includeAnswer?: boolean;
-  includeDomains?: string[];
-  excludeDomains?: string[];
-  timeRange?: "day" | "week" | "month" | "year";
-  /** Crawl-specific options */
-  crawlInstructions?: string;
-  maxDepth?: number;
-  limit?: number;
+export type WebMapOptions = WebTraversalOptions;
+
+/**
+ * Map operation response
+ */
+export interface WebMapResponse {
+  /** Base URL that was mapped */
+  baseUrl: string;
+  /** Discovered URLs */
+  results: string[];
+  /** Response time in seconds */
+  responseTime: number;
+  /** Credit usage, when includeUsage was requested */
+  usage?: WebUsage;
 }
 
 /**

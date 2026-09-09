@@ -10,7 +10,13 @@
 
 export { createSearchTool } from "./search-tool.js";
 export { createBashTool } from "./bash-tool.js";
-export { createWebSearchTool } from "./web-search-tool.js";
+export {
+  createWebSearchTool,
+  createWebExtractTool,
+  createWebCrawlTool,
+  createWebMapTool,
+  createWebTools,
+} from "./web-search-tool.js";
 // Code execution tool is provided by createCodeExecutionMiddleware, not here
 export {
   storeEntityTool,

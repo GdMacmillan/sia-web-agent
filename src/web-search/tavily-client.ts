@@ -2,7 +2,7 @@
  * Tavily Client Wrapper
  *
  * Thin wrapper around @tavily/core providing:
- * - Simplified interface for search, extract, and crawl operations
+ * - Simplified interface for search, extract, crawl, and map operations
  * - Consistent error handling
  * - Type-safe responses
  *
@@ -17,6 +17,8 @@ import type {
   WebExtractResponse,
   WebCrawlOptions,
   WebCrawlResponse,
+  WebMapOptions,
+  WebMapResponse,
 } from "./types.js";
 import { WebSearchError } from "./types.js";
 import { getConfig } from "../config/index.js";
@@ -61,6 +63,36 @@ export function isConfigured(): boolean {
 }
 
 /**
+ * Validate a URL, throwing a WebSearchError rather than a TypeError.
+ */
+function assertValidUrl(url: string): void {
+  try {
+    new URL(url);
+  } catch {
+    throw new WebSearchError(`Invalid URL: ${url}`, "INVALID_URL");
+  }
+}
+
+/**
+ * Wrap an unknown thrown value in a WebSearchError with an operation code.
+ */
+function toWebSearchError(
+  error: unknown,
+  label: string,
+  code: string,
+): WebSearchError {
+  if (error instanceof WebSearchError) {
+    return error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new WebSearchError(
+    `${label}: ${message}`,
+    code,
+    (error as { response?: { status?: number } }).response?.status,
+  );
+}
+
+/**
  * Perform a web search
  *
  * @param query - Search query
@@ -82,9 +114,24 @@ export async function search(
       searchDepth: options.searchDepth ?? "basic",
       topic: options.topic ?? "general",
       includeAnswer: options.includeAnswer ?? true,
+      chunksPerSource: options.chunksPerSource,
+      includeRawContent: options.includeRawContent,
       includeDomains: options.includeDomains,
       excludeDomains: options.excludeDomains,
+      includeDomainsMode: options.includeDomainsMode,
+      language: options.language,
+      filterByLanguage: options.filterByLanguage,
       timeRange: options.timeRange,
+      days: options.days,
+      startDate: options.startDate,
+      endDate: options.endDate,
+      country: options.country,
+      exactMatch: options.exactMatch,
+      autoParameters: options.autoParameters,
+      includeFavicon: options.includeFavicon,
+      includeUsage: options.includeUsage,
+      timeout: options.timeout,
+      sessionId: options.sessionId,
     });
 
     return {
@@ -94,21 +141,16 @@ export async function search(
         title: r.title,
         url: r.url,
         content: r.content,
+        rawContent: r.rawContent,
         score: r.score,
         publishedDate: r.publishedDate,
+        favicon: r.favicon,
       })),
       responseTime: response.responseTime,
+      usage: response.usage,
     };
   } catch (error: unknown) {
-    if (error instanceof WebSearchError) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    throw new WebSearchError(
-      `Search failed: ${message}`,
-      "SEARCH_FAILED",
-      (error as { response?: { status?: number } }).response?.status,
-    );
+    throw toWebSearchError(error, "Search failed", "SEARCH_FAILED");
   }
 }
 
@@ -132,13 +174,8 @@ export async function extract(
     );
   }
 
-  // Validate URLs
   for (const url of urlArray) {
-    try {
-      new URL(url);
-    } catch {
-      throw new WebSearchError(`Invalid URL: ${url}`, "INVALID_URL");
-    }
+    assertValidUrl(url);
   }
 
   try {
@@ -146,7 +183,13 @@ export async function extract(
     const response = await client.extract(urlArray, {
       extractDepth: options.extractDepth ?? "basic",
       format: options.format ?? "markdown",
+      query: options.query,
+      chunksPerSource: options.chunksPerSource,
+      timeout: options.timeout,
       includeImages: options.includeImages ?? false,
+      includeFavicon: options.includeFavicon,
+      includeUsage: options.includeUsage,
+      sessionId: options.sessionId,
     });
 
     return {
@@ -155,23 +198,17 @@ export async function extract(
         title: r.title,
         rawContent: r.rawContent,
         images: r.images,
+        favicon: r.favicon,
       })),
       failedResults: response.failedResults.map((r) => ({
         url: r.url,
         error: r.error,
       })),
       responseTime: response.responseTime,
+      usage: response.usage,
     };
   } catch (error: unknown) {
-    if (error instanceof WebSearchError) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    throw new WebSearchError(
-      `Extraction failed: ${message}`,
-      "EXTRACT_FAILED",
-      (error as { response?: { status?: number } }).response?.status,
-    );
+    throw toWebSearchError(error, "Extraction failed", "EXTRACT_FAILED");
   }
 }
 
@@ -190,26 +227,28 @@ export async function crawl(
     throw new WebSearchError("URL cannot be empty", "INVALID_URL");
   }
 
-  // Validate URL
-  try {
-    new URL(url);
-  } catch {
-    throw new WebSearchError(`Invalid URL: ${url}`, "INVALID_URL");
-  }
+  assertValidUrl(url);
 
   try {
     const client = getClient();
     const response = await client.crawl(url, {
       maxDepth: options.maxDepth ?? 1,
-      maxBreadth: options.maxBreadth ?? 10,
-      limit: options.limit ?? 10,
+      maxBreadth: options.maxBreadth ?? 20,
+      limit: options.limit ?? 20,
       instructions: options.instructions,
       extractDepth: options.extractDepth ?? "basic",
       format: options.format ?? "markdown",
+      chunksPerSource: options.chunksPerSource,
       includeImages: options.includeImages ?? false,
       selectPaths: options.selectPaths,
+      selectDomains: options.selectDomains,
       excludePaths: options.excludePaths,
+      excludeDomains: options.excludeDomains,
       allowExternal: options.allowExternal ?? false,
+      timeout: options.timeout,
+      includeFavicon: options.includeFavicon,
+      includeUsage: options.includeUsage,
+      sessionId: options.sessionId,
     });
 
     return {
@@ -218,18 +257,61 @@ export async function crawl(
         url: r.url,
         rawContent: r.rawContent,
         images: r.images,
+        favicon: r.favicon,
       })),
       responseTime: response.responseTime,
+      usage: response.usage,
     };
   } catch (error: unknown) {
-    if (error instanceof WebSearchError) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    throw new WebSearchError(
-      `Crawl failed: ${message}`,
-      "CRAWL_FAILED",
-      (error as { response?: { status?: number } }).response?.status,
-    );
+    throw toWebSearchError(error, "Crawl failed", "CRAWL_FAILED");
+  }
+}
+
+/**
+ * Map a website's URL structure starting from a URL
+ *
+ * Same traversal controls as `crawl`, but returns only the discovered URLs —
+ * no page content — which makes it the cheap way to answer "what is on this
+ * site?" before deciding what to extract.
+ *
+ * @param url - Starting URL for the map
+ * @param options - Map options
+ * @returns Discovered URLs
+ */
+export async function map(
+  url: string,
+  options: WebMapOptions = {},
+): Promise<WebMapResponse> {
+  if (!url || url.trim().length === 0) {
+    throw new WebSearchError("URL cannot be empty", "INVALID_URL");
+  }
+
+  assertValidUrl(url);
+
+  try {
+    const client = getClient();
+    const response = await client.map(url, {
+      maxDepth: options.maxDepth ?? 1,
+      maxBreadth: options.maxBreadth ?? 20,
+      limit: options.limit ?? 50,
+      instructions: options.instructions,
+      selectPaths: options.selectPaths,
+      selectDomains: options.selectDomains,
+      excludePaths: options.excludePaths,
+      excludeDomains: options.excludeDomains,
+      allowExternal: options.allowExternal ?? false,
+      timeout: options.timeout,
+      includeUsage: options.includeUsage,
+      sessionId: options.sessionId,
+    });
+
+    return {
+      baseUrl: response.baseUrl,
+      results: response.results,
+      responseTime: response.responseTime,
+      usage: response.usage,
+    };
+  } catch (error: unknown) {
+    throw toWebSearchError(error, "Map failed", "MAP_FAILED");
   }
 }

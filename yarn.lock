@@ -1708,13 +1708,6 @@
   resolved "https://registry.yarnpkg.com/@langchain/protocol/-/protocol-0.0.18.tgz#6d96155e7263c958fbce6d4b7241b4725b72fbad"
   integrity sha512-XW1egQtPfsGI41w2AMZNFZrUIwFSQHTjVMZs0OaTpCAvht/QLoaPN8FQcsysMVypOhupG28J29yOorrc70otBQ==
 
-"@langchain/tavily@^1.0.0":
-  version "1.2.0"
-  resolved "https://registry.yarnpkg.com/@langchain/tavily/-/tavily-1.2.0.tgz#17ee4b7c879ab357f7335a65456af2ae05c22c7a"
-  integrity sha512-aPLPgtw8+b/Rnr3H+X8H8z98T/Y7JuCE4B5eqRDHoEWgZvMDUFF7divqwQqCTMq2deQttlVrm5bN5JbKaAR7/w==
-  dependencies:
-    zod "^3.25.76 || ^4"
-
 "@langchain/textsplitters@1.0.1":
   version "1.0.1"
   resolved "https://registry.yarnpkg.com/@langchain/textsplitters/-/textsplitters-1.0.1.tgz#292f9c93239178c248b3338acf7b68aa47aa9830"
@@ -1905,10 +1898,10 @@
   resolved "https://registry.yarnpkg.com/@sveltejs/acorn-typescript/-/acorn-typescript-1.0.11.tgz#a2e9276b3f2ae3f84219d9788c6ab80145e72f8c"
   integrity sha512-LFuZUkjJ9iF7JZye/aG5XM0SFcQ5VyL0oVX4WJ9dc0Va3R3s0OauX1BESVCb+YN/ol8TAfqGDDAQsTG627Y5kw==
 
-"@tavily/core@0.7.7":
-  version "0.7.7"
-  resolved "https://registry.yarnpkg.com/@tavily/core/-/core-0.7.7.tgz#3342c5cec07527f0950fe0a13624643db7eb8f1c"
-  integrity sha512-6Sc+u4nPEdzLB2D7Ubut/sLI2wR3Wc81P1VCJNTsdFtvgLOpVGGGEYAG9VUCLOzVCeEUT5SzHRIMSnsqJ4Pdow==
+"@tavily/core@0.7.9":
+  version "0.7.9"
+  resolved "https://registry.yarnpkg.com/@tavily/core/-/core-0.7.9.tgz#2c35945fd6b07844e2f0842addbe6a1e6bdf5d0a"
+  integrity sha512-ftOhGU0Bmatc4REwmgMyP28BNdEab6iZ1WiVjzrzDdCVxRoNLhVRp+yhEJ6Kl0OIo6wwjP2l4FWIFOakn7J16w==
   dependencies:
     axios "^1.7.7"
     https-proxy-agent "^7.0.6"

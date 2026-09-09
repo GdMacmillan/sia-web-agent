@@ -1,10 +1,11 @@
 # Capability notice: web search is unavailable
 
-No `TAVILY_API_KEY` is configured, so the `web_search` tool is **not**
-registered for this session. It is absent from your tool list, not merely
-failing — there is no call you can make that will reach the internet.
+No `TAVILY_API_KEY` is configured, so the web tools — `web_search`,
+`web_extract`, `web_crawl` and `web_map` — are **not** registered for this
+session. All four are absent from your tool list, not merely failing — there
+is no call you can make that will reach the internet.
 
-You MUST NOT plan around it, promise to look something up, or describe a
+You MUST NOT plan around them, promise to look something up, or describe a
 step that depends on fetching a page. Do not suggest the user retry.
 
 Work from what you can actually reach:
