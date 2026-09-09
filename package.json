@@ -39,7 +39,7 @@
     "dotenv": "17.4.2",
     "estree-walker": "^3.0.3",
     "fast-glob": "3.3.3",
-    "json-schema-to-typescript": "^15.0.4",
+    "json-schema-to-typescript": "^16.0.0",
     "langchain": "1.5.10",
     "langsmith": "0.9.0",
     "magic-string": "^1.2.2",
