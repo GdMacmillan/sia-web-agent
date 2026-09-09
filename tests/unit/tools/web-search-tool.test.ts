@@ -102,11 +102,11 @@ describe("Web Tools", () => {
 
   describe("web_search", () => {
     /**
-     * Regression: these were the exact kwargs the model produced on its first
-     * search of the acceptance run. Under the old single-tool schema the
-     * accompanying `mode: "search"` failed validation, because the enum only
-     * admitted "extract" and "crawl" — search was reachable only by omitting
-     * the mode entirely. A query alone must simply search.
+     * Regression: a query alongside `mode: "search"` is what a model naturally
+     * produces when a tool description advertises three modes and names SEARCH
+     * first. Under the old single-tool schema that failed validation, because
+     * the enum admitted only "extract" and "crawl" — search was reachable
+     * solely by omitting the mode. A query alone must simply search.
      */
     it("should search when given only a query", async () => {
       mockSearch.mockResolvedValueOnce({
