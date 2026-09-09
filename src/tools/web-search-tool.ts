@@ -49,6 +49,67 @@ import type { WebUsage } from "../web-search/types.js";
  * credit count is reported back so the cost of a call is visible.
  */
 
+/**
+ * Models routinely serialize booleans as the strings "true" / "false" — most
+ * often for a field whose JSON Schema is an `anyOf`, where the boolean branch
+ * is only one of several and the model hedges toward a string.
+ *
+ * Coerce instead of rejecting. A rejected tool call costs the model a whole
+ * turn to discover and retry, which is precisely the failure this tool split
+ * exists to remove; there is nothing to be gained by being strict about the
+ * spelling of a boolean.
+ */
+function boolish<T extends z.ZodTypeAny>(inner: T) {
+  return z.preprocess(
+    (v) => (v === "true" ? true : v === "false" ? false : v),
+    inner,
+  );
+}
+
+/**
+ * Coerce a stringified number and clamp it into the API's accepted range.
+ *
+ * Same reasoning as `boolish`: models emit `"5"` as readily as `5`, and a
+ * model that asks for more results than the API allows meant "as many as I can
+ * get" — clamping answers that, while rejecting spends a turn teaching it a
+ * bound the description already states.
+ */
+function intish(min: number, max: number) {
+  return z.preprocess((v) => clampNumeric(v, min, max, true), z.number().int());
+}
+
+/** `intish` for the float-valued timeouts. */
+function numish(min: number, max: number) {
+  return z.preprocess((v) => clampNumeric(v, min, max, false), z.number());
+}
+
+function clampNumeric(
+  value: unknown,
+  min: number,
+  max: number,
+  round: boolean,
+): unknown {
+  const n =
+    typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) return value;
+  return Math.min(max, Math.max(min, round ? Math.round(n) : n));
+}
+
+/**
+ * Accept a bare host (`docs.example.com`) as well as a full URL. Models drop
+ * the scheme routinely, and rejecting one costs the same turn as any other
+ * validation failure.
+ */
+const urlish = z.preprocess(
+  (v) =>
+    typeof v === "string" &&
+    v.trim() !== "" &&
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(v.trim())
+      ? `https://${v.trim()}`
+      : v,
+  z.string().url(),
+);
+
 /** Overall backstop on a tool's output. Per-result clipping normally binds first. */
 const MAX_OUTPUT_CHARS = 32000;
 /** Character budget shared across the results of a single call. */
@@ -324,8 +385,7 @@ const traversalFilterSchema = {
     .array(z.string())
     .optional()
     .describe("Skip URLs whose domain matches one of these regexes"),
-  allowExternal: z
-    .boolean()
+  allowExternal: boolish(z.boolean())
     .optional()
     .default(false)
     .describe(
@@ -358,11 +418,7 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "The search query. Be specific and include relevant context (e.g. 'LangGraph interrupt() resume semantics' rather than 'langgraph').",
         ),
-      maxResults: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
+      maxResults: intish(1, 20)
         .optional()
         .default(5)
         .describe("Number of results to return (1-20)"),
@@ -380,18 +436,15 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "Search index to query. Use 'news' for current events and 'finance' for markets.",
         ),
-      includeAnswer: z
-        .union([z.boolean(), z.enum(["basic", "advanced"])])
+      includeAnswer: boolish(
+        z.union([z.boolean(), z.enum(["basic", "advanced"])]),
+      )
         .optional()
         .default(true)
         .describe(
           "Include an AI-generated answer. 'advanced' produces a longer synthesis; false skips it.",
         ),
-      chunksPerSource: z
-        .number()
-        .int()
-        .min(1)
-        .max(3)
+      chunksPerSource: intish(1, 3)
         .optional()
         .describe(
           "Content snippets returned per result (1-3, default 3). Lower it to keep the output small. Not available at 'ultra-fast' depth.",
@@ -420,17 +473,16 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "Preferred result language — ISO 639-1 code ('en', 'fr', 'zh-cn') or English name ('french'). Boosts that language in the ranking. Write the query in the same language.",
         ),
-      filterByLanguage: z
-        .boolean()
+      filterByLanguage: boolish(z.boolean())
         .optional()
         .describe(
           "Drop results not in 'language' rather than merely boosting them. Ignored unless 'language' is set.",
         ),
       timeRange: z
-        .enum(["day", "week", "month", "year"])
+        .enum(["day", "week", "month", "year", "d", "w", "m", "y"])
         .optional()
         .describe(
-          "Only return results published within this window. The API's 'd'/'w'/'m'/'y' aliases mean the same thing and are intentionally not offered here.",
+          "Only return results published within this window. 'd'/'w'/'m'/'y' are the API's own aliases for the long forms and are accepted too.",
         ),
       startDate: z
         .string()
@@ -450,14 +502,12 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "Boost results from this country, lowercase English name (e.g. 'united kingdom'). Only applies when topic is 'general'.",
         ),
-      exactMatch: z
-        .boolean()
+      exactMatch: boolish(z.boolean())
         .optional()
         .describe(
           "Require the query terms to appear verbatim. Useful for error strings and exact identifiers.",
         ),
-      autoParameters: z
-        .boolean()
+      autoParameters: boolish(z.boolean())
         .optional()
         .describe(
           "Let the API choose search parameters for the query. Costs 2 credits and overrides some of your choices — use only when a plain search has already failed.",
@@ -537,10 +587,13 @@ COST: 'basic' depth costs 1 credit per 5 URLs, 'advanced' costs 2 per 5. 'advanc
 REQUIRES: TAVILY_API_KEY environment variable`,
 
     schema: z.object({
+      // A bare string is accepted and wrapped: the operation reads "one or
+      // more pages", and a model handed a single URL naturally sends it alone.
       urls: z
-        .array(z.string().url())
-        .min(1)
-        .max(20)
+        .preprocess(
+          (v) => (typeof v === "string" ? [v] : v),
+          z.array(urlish).min(1).max(20),
+        )
         .describe("URLs to read (1-20 per call)"),
       query: z
         .string()
@@ -548,11 +601,7 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "What you are looking for on these pages. Supplying it reranks the content and returns matching chunks instead of the whole page.",
         ),
-      chunksPerSource: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
+      chunksPerSource: intish(1, 5)
         .optional()
         .describe(
           "Chunks returned per page (1-5, default 3). Only takes effect when 'query' is supplied.",
@@ -571,10 +620,7 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .describe(
           "'markdown' preserves headings, lists and links; 'text' is plain prose.",
         ),
-      timeout: z
-        .number()
-        .min(1)
-        .max(60)
+      timeout: numish(1, 60)
         .optional()
         .describe(
           "Seconds to wait before giving up (1-60). Defaults to 10 for basic depth, 30 for advanced.",
@@ -612,8 +658,12 @@ REQUIRES: TAVILY_API_KEY environment variable`,
   });
 }
 
-/** Crawl's own timeout ceiling. The API allows 150s, which outlives our tool budgets. */
-const CRAWL_DEFAULT_TIMEOUT_SECONDS = 45;
+/**
+ * Traversal timeout default. The API allows 150s and defaults to it, which
+ * outlives our tool budgets — a crawl or map left on the API default can sit
+ * pending long enough that the run looks hung.
+ */
+const TRAVERSAL_DEFAULT_TIMEOUT_SECONDS = 45;
 
 /**
  * Create the `web_crawl` tool
@@ -634,46 +684,30 @@ COST: 1 credit per 10 pages, or 2 per 10 when 'instructions' are supplied.
 REQUIRES: TAVILY_API_KEY environment variable`,
 
     schema: z.object({
-      url: z.string().url().describe("The URL to start crawling from"),
+      url: urlish.describe("The URL to start crawling from"),
       instructions: z
         .string()
         .optional()
         .describe(
           "Natural-language guidance for which pages matter (e.g. 'Find pages about authentication and rate limits'). Doubles the credit cost but sharply improves relevance.",
         ),
-      maxDepth: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
+      maxDepth: intish(1, 5)
         .optional()
         .default(1)
         .describe(
           "How many links deep to follow from the start URL (1-5). Each level multiplies the pages visited.",
         ),
-      maxBreadth: z
-        .number()
-        .int()
-        .min(1)
-        .max(500)
+      maxBreadth: intish(1, 500)
         .optional()
         .default(20)
         .describe("Maximum links followed per page (1-500)"),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(100)
+      limit: intish(1, 100)
         .optional()
         .default(20)
         .describe(
           "Total pages to visit before stopping (1-100). Kept below the API's own default to bound both cost and output size.",
         ),
-      chunksPerSource: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
+      chunksPerSource: intish(1, 5)
         .optional()
         .describe(
           "Chunks returned per page (1-5, default 3). Only takes effect when 'instructions' are supplied.",
@@ -691,12 +725,9 @@ REQUIRES: TAVILY_API_KEY environment variable`,
         .default("markdown")
         .describe("Output format for page content"),
       ...traversalFilterSchema,
-      timeout: z
-        .number()
-        .min(10)
-        .max(150)
+      timeout: numish(10, 150)
         .optional()
-        .default(CRAWL_DEFAULT_TIMEOUT_SECONDS)
+        .default(TRAVERSAL_DEFAULT_TIMEOUT_SECONDS)
         .describe(
           "Seconds to wait before giving up (10-150). Defaults to 45; the API's own 150s default outlives most tool budgets.",
         ),
@@ -758,46 +789,34 @@ COST: 1 credit per 10 pages, or 2 per 10 when 'instructions' are supplied.
 REQUIRES: TAVILY_API_KEY environment variable`,
 
     schema: z.object({
-      url: z.string().url().describe("The URL to start mapping from"),
+      url: urlish.describe("The URL to start mapping from"),
       instructions: z
         .string()
         .optional()
         .describe(
           "Natural-language guidance for which parts of the site matter (e.g. 'Focus on the API reference'). Doubles the credit cost.",
         ),
-      maxDepth: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
+      maxDepth: intish(1, 5)
         .optional()
         .default(1)
         .describe("How many links deep to follow from the start URL (1-5)"),
-      maxBreadth: z
-        .number()
-        .int()
-        .min(1)
-        .max(500)
+      maxBreadth: intish(1, 500)
         .optional()
         .default(20)
         .describe("Maximum links followed per page (1-500)"),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(500)
+      limit: intish(1, 500)
         .optional()
         .default(50)
         .describe(
           "Total URLs to collect before stopping (1-500). Higher limits are affordable here because no page content is returned.",
         ),
       ...traversalFilterSchema,
-      timeout: z
-        .number()
-        .min(10)
-        .max(150)
+      timeout: numish(10, 150)
         .optional()
-        .describe("Seconds to wait before giving up (10-150, default 150)"),
+        .default(TRAVERSAL_DEFAULT_TIMEOUT_SECONDS)
+        .describe(
+          "Seconds to wait before giving up (10-150). Defaults to 45, matching web_crawl; the API's own 150s default outlives most tool budgets.",
+        ),
     }),
 
     func: async (input, _runManager, config?: RunnableConfig) => {
