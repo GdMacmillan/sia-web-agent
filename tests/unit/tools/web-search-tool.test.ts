@@ -269,6 +269,120 @@ describe("Web Tools", () => {
       );
     });
 
+    /**
+     * Regression: a live model emitted `includeAnswer: "true"` — the string,
+     * not the boolean — and the union rejected it, costing four wasted turns.
+     * A union renders as a JSON Schema `anyOf`, and models hedge toward a
+     * string when the boolean is only one branch of several. These are the
+     * exact kwargs that failed.
+     */
+    it("should accept a stringified boolean for includeAnswer", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "Tavily API /map endpoint documentation",
+        results: [],
+        responseTime: 0.2,
+      });
+
+      const result = await searchTool.invoke({
+        query: "Tavily API /map endpoint documentation",
+        maxResults: 5,
+        searchDepth: "basic",
+        topic: "general",
+        includeAnswer: "true",
+      } as never);
+
+      expect(result).not.toContain("Error");
+      expect(mockSearch).toHaveBeenCalledWith(
+        "Tavily API /map endpoint documentation",
+        expect.objectContaining({ includeAnswer: true }),
+      );
+    });
+
+    it("should coerce a stringified false without turning it truthy", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await searchTool.invoke({ query: "q", includeAnswer: "false" } as never);
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({ includeAnswer: false }),
+      );
+    });
+
+    it("should still honour the answer-depth strings", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await searchTool.invoke({ query: "q", includeAnswer: "advanced" });
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({ includeAnswer: "advanced" }),
+      );
+    });
+
+    it("should coerce stringified booleans on the other flags too", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await searchTool.invoke({
+        query: "q",
+        exactMatch: "true",
+        autoParameters: "false",
+        language: "fr",
+        filterByLanguage: "true",
+      } as never);
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({
+          exactMatch: true,
+          autoParameters: false,
+          filterByLanguage: true,
+        }),
+      );
+    });
+
+    it("should accept the API's shorthand time ranges", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await searchTool.invoke({ query: "q", timeRange: "w" });
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({ timeRange: "w" }),
+      );
+    });
+
+    it("should clamp maxResults above the API ceiling", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "q",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await searchTool.invoke({ query: "q", maxResults: 50 } as never);
+
+      expect(mockSearch).toHaveBeenCalledWith(
+        "q",
+        expect.objectContaining({ maxResults: 20 }),
+      );
+    });
+
     it("should reject a malformed date", async () => {
       await expect(
         searchTool.invoke({ query: "x", startDate: "01/02/2026" }),
@@ -417,6 +531,25 @@ describe("Web Tools", () => {
       expect(result).toContain("Access denied");
     });
 
+    it("should accept a single URL string and stringified numbers", async () => {
+      mockExtract.mockResolvedValueOnce({
+        results: [],
+        failedResults: [],
+        responseTime: 0.1,
+      });
+
+      await extractTool.invoke({
+        urls: "docs.tavily.com",
+        timeout: "30",
+        chunksPerSource: "5",
+      } as never);
+
+      expect(mockExtract).toHaveBeenCalledWith(
+        ["https://docs.tavily.com"],
+        expect.objectContaining({ timeout: 30, chunksPerSource: 5 }),
+      );
+    });
+
     it("should require urls", async () => {
       await expect(extractTool.invoke({} as never)).rejects.toThrow();
       expect(mockExtract).not.toHaveBeenCalled();
@@ -522,6 +655,24 @@ describe("Web Tools", () => {
       );
     });
 
+    it("should coerce a stringified allowExternal", async () => {
+      mockCrawl.mockResolvedValueOnce({
+        baseUrl: "https://example.com",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await crawlTool.invoke({
+        url: "https://example.com",
+        allowExternal: "true",
+      } as never);
+
+      expect(mockCrawl).toHaveBeenCalledWith(
+        "https://example.com",
+        expect.objectContaining({ allowExternal: true }),
+      );
+    });
+
     it("should explain an empty crawl rather than reporting nothing", async () => {
       mockCrawl.mockResolvedValueOnce({
         baseUrl: "https://example.com",
@@ -540,9 +691,33 @@ describe("Web Tools", () => {
       expect(mockCrawl).not.toHaveBeenCalled();
     });
 
-    it("should reject a maxDepth above the API's ceiling", async () => {
+    it("should clamp a maxDepth above the API's ceiling instead of rejecting", async () => {
+      mockCrawl.mockResolvedValueOnce({
+        baseUrl: "https://example.com",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      // Asking for depth 9 means "go deep"; answering with depth 5 serves that,
+      // where a validation error would spend a turn restating a bound the tool
+      // description already gives.
+      await crawlTool.invoke({ url: "https://example.com", maxDepth: 9 });
+
+      expect(mockCrawl).toHaveBeenCalledWith(
+        "https://example.com",
+        expect.objectContaining({ maxDepth: 5 }),
+      );
+    });
+
+    it("should still reject input it cannot interpret", async () => {
       await expect(
-        crawlTool.invoke({ url: "https://example.com", maxDepth: 9 }),
+        crawlTool.invoke({ url: "not a url at all" }),
+      ).rejects.toThrow();
+      await expect(
+        crawlTool.invoke({
+          url: "https://example.com",
+          maxDepth: "deep",
+        } as never),
       ).rejects.toThrow();
       expect(mockCrawl).not.toHaveBeenCalled();
     });
@@ -570,6 +745,9 @@ describe("Web Tools", () => {
           maxBreadth: 20,
           limit: 50,
           allowExternal: false,
+          // Explicit, matching web_crawl — the API's 150s default can leave a
+          // map pending long enough that the run looks hung.
+          timeout: 45,
           includeUsage: true,
         }),
       );

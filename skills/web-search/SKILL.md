@@ -62,7 +62,7 @@ dates, and an AI-generated answer.
 | `includeDomainsMode` | "filter" \| "boost"                             | -         | How `includeDomains` applies; needs `includeDomains`       |
 | `language`           | string                                          | -         | ISO 639-1 code or English name; boosts that language       |
 | `filterByLanguage`   | boolean                                         | false     | Drop other languages instead of boosting; needs `language` |
-| `timeRange`          | "day" \| "week" \| "month" \| "year"            | -         | Recency filter                                             |
+| `timeRange`          | "day" \| "week" \| "month" \| "year"            | -         | Recency filter; `d`/`w`/`m`/`y` aliases too                |
 | `startDate`          | string                                          | -         | Earliest publication date, `YYYY-MM-DD`                    |
 | `endDate`            | string                                          | -         | Latest publication date, `YYYY-MM-DD`                      |
 | `country`            | string                                          | -         | Boost a country's results (`general` topic only)           |
@@ -150,7 +150,21 @@ Follow links from a starting URL and return only the URLs found — no content.
 | `excludePaths`   | string[] | -        | Skip paths matching these regexes              |
 | `excludeDomains` | string[] | -        | Skip domains matching these regexes            |
 | `allowExternal`  | boolean  | false    | Follow links off the starting domain           |
-| `timeout`        | number   | 150      | Seconds to wait (10-150)                       |
+| `timeout`        | number   | 45       | Seconds to wait (10-150)                       |
+
+## Input handling
+
+These tools are deliberately lenient about the _shape_ of an argument, because a
+rejected call costs a whole turn:
+
+- `"5"` is accepted wherever `5` is, and `"true"` wherever `true` is.
+- A number beyond the API's range is clamped to the nearest allowed value rather
+  than rejected — asking for 50 results gets you the maximum 20.
+- `web_extract` accepts a single URL string as well as an array.
+- A bare host (`docs.example.com`) is treated as `https://docs.example.com`.
+
+Input that genuinely cannot be interpreted — a non-numeric string for a number,
+an unparseable URL — is still rejected.
 
 ## Answer Sub-Agent
 
