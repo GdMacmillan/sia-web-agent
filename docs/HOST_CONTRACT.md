@@ -1,10 +1,12 @@
 # Host Contract
 
 The agent is designed to be portable. It depends on the host (the process
-that spawns it) for two things only:
+that spawns it) for three things only:
 
 1. A set of **environment variables** stamped at spawn time.
 2. One **loopback HTTP endpoint** the agent can POST usage events to.
+3. One **loopback RPC endpoint** the graph-memory adapter calls (§3).
+   Optional: without it the agent runs with graph memory unavailable.
 
 Anything beyond that — DB connections, message buses, deployment topology —
 is the host's concern, not the agent's. A host that honors this contract
@@ -85,6 +87,29 @@ The reference implementation mints `SIAD_LOCAL_TOKEN` from 32 bytes of
 registry keyed by `SIA_AGENT_ID` for the lifetime of the child process.
 Tokens are dropped when the child exits.
 
+### 1.5 Component roots (optional)
+
+The agent can assemble versioned code components and remote tool servers
+from disk. Full spec: [`COMPONENTS.md`](./COMPONENTS.md).
+
+| Variable | Purpose | Required |
+|---|---|---|
+| `SIA_COMPONENTS_DIR` | Root directory of host-managed component versions (`<name>/current/component.json`). Shadows the seed components shipped in the agent source. | No — absent means only the shipped seed components load |
+| `SIA_SERVERS_FILE` | Path to the JSON list of remote tool servers. Defaults to `$SIA_COMPONENTS_DIR/servers.json`. Must resolve inside the components root. | No — absent means no remote tools |
+
+Both paths are read by the agent; the host owns their contents. A host
+that stamps `SIA_COMPONENTS_DIR` should expect the agent to write new
+version directories under it (never to touch `current` itself — flipping
+the pointer is the host's act) and should gate a restart on
+`runComponentContract` (exported from `src/graph.ts`) when it does.
+
+### 1.6 Host RPC endpoint (optional)
+
+| Variable | Purpose | Required |
+|---|---|---|
+| `SIA_DAEMON_URL` | Base URL of the host's RPC endpoint. Defaults to `http://127.0.0.1:7700`. | No |
+| `SIA_DAEMON_TOKEN` | Bearer token for `POST {SIA_DAEMON_URL}/rpc/call`. Empty disables graph memory (calls are rejected by the host). | Required iff graph memory should work |
+
 ---
 
 ## 2. Loopback HTTP endpoint (agent → host at invoke)
@@ -156,7 +181,64 @@ the host side after `202` — the agent will not redeliver.
 
 ---
 
-## 3. Security model
+## 3. Host RPC endpoint (agent → host, graph memory)
+
+The graph-memory tools call the host through one adapter,
+`SiadGraphMemoryAdapter` (`src/tools/siad-graph-memory-adapter.ts`), which
+implements the transport-free `IGraphMemoryAdapter` interface. The adapter
+is the only place in the agent that knows about this endpoint; the tools,
+the search-augmentation middleware, and knowledge formation all go through
+the interface. This is the coupling a future `service`-kind component will
+replace (see [`COMPONENTS.md`](./COMPONENTS.md) §5) — until then it is part
+of the host contract.
+
+### 3.1 Request
+
+```http
+POST {SIA_DAEMON_URL}/rpc/call
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+Content-Type: application/json
+
+{
+  "version":        1,
+  "id":             "<UUID per call>",
+  "workspaceId":    "<from SIA_WORKSPACE_ID>",
+  "service":        "graph-memory",
+  "serviceVersion": "v1",
+  "verb":           "<e.g. entities.store>",
+  "schemaHash":     "<pinned hash of the service definition>",
+  "verbHash":       "<pinned hash of this verb's definition>",
+  "replyTo":        "_INBOX.agent",
+  "deadlineUnixMs": <now + 30000>,
+  "payload":        { ... }
+}
+```
+
+`schemaHash` and `verbHash` are compiled into the agent from the vendored
+service definition (`src/vendor/svc-rpc/graph-memory/`). The host compares
+them against the definition it serves and refuses a mismatch.
+
+### 3.2 Response
+
+`200` with a JSON envelope: `{ "ok": true, "payload": … }` or
+`{ "ok": false, "error": { "code": "…", "message": "…" } }`.
+
+### 3.3 Error mapping (agent side)
+
+| Condition | Adapter behaviour |
+|---|---|
+| `SIA_DAEMON_TOKEN` empty | throws before sending |
+| network error / timeout | throws `host network error for <verb>` |
+| non-`200` status | throws `host returned <status> for <verb>` |
+| `200` with non-JSON body | throws |
+| `ok: false` | throws `<verb> failed [<code>]: <message>` |
+
+Every throw surfaces to the tool as a string result; graph-memory
+failures never crash a run. The adapter has no retry.
+
+---
+
+## 4. Security model
 
 - **Loopback only.** The host binds the events endpoint to `127.0.0.1`.
   Other machines cannot reach it.
@@ -174,7 +256,7 @@ host having stamped the right token at spawn time.
 
 ---
 
-## 4. What the agent does NOT depend on
+## 5. What the agent does NOT depend on
 
 Explicitly out of scope of this contract:
 
@@ -187,14 +269,15 @@ Explicitly out of scope of this contract:
 - **No service discovery.** The agent does not look up the host by DNS,
   IP, or registry. The host gives it a URL or it stays silent.
 - **No file-system handshake.** No shared sockets, no PID files, no
-  `~/.siad/`-style state.
+  `~/.siad/`-style state. The one on-disk surface is the component roots
+  of §1.5, and only when the host chooses to stamp them.
 
-A host that satisfies §1 + §2 above is sufficient. Anything more is
-implementation detail.
+A host that satisfies §1 + §2 above is sufficient; §3 adds graph memory.
+Anything more is implementation detail.
 
 ---
 
-## 5. Reference implementation pointers
+## 6. Reference implementation pointers
 
 For implementers studying siad (in the `sia-web` monorepo):
 

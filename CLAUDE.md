@@ -73,7 +73,8 @@ docs/                    # reference documentation
 | File | Purpose |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Runtime, middleware composition order, sub-agent stack |
-| [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md) | Env-var schema + `POST /v1/agent/events/usage` endpoint a host must honor |
+| [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md) | Env-var schema + `POST /v1/agent/events/usage` endpoint a host must honor + the `/rpc/call` graph-memory endpoint |
+| [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | Versioned on-disk components: manifest, dependency-injected entry, contract runner, remote tool servers + scopes |
 | [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | Every env var the agent reads, grounded in `src/config/loader.ts` |
 | [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) | Memory tool surface + REST reference |
 | [`docs/UPDATE_WORKFLOW.md`](docs/UPDATE_WORKFLOW.md) | Playbook for pulling DeepAgents upstream updates |
