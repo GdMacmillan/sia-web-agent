@@ -48,6 +48,7 @@ choice) will pick it up automatically.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — runtime + middleware composition
 - [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md) — env stamping + usage-events endpoint
+- [`docs/COMPONENTS.md`](docs/COMPONENTS.md) — versioned on-disk components, contracts, remote tool servers
 - [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) — every env var the agent reads
 - [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) — memory tool + REST reference
 - [`docs/UPDATE_WORKFLOW.md`](docs/UPDATE_WORKFLOW.md) — DeepAgents upstream-sync playbook

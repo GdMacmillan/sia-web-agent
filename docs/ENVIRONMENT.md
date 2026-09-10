@@ -76,10 +76,25 @@ silently — the agent runs normally without telemetry. Full contract:
 ### Graph memory
 
 Graph memory is reached through the host daemon adapter
-(`SiadGraphMemoryAdapter`), which carries its own endpoint and the agent's
-workspace scope. There are no graph-memory env vars to set — the legacy
+(`SiadGraphMemoryAdapter`), which reads its endpoint directly from
+`process.env` and carries the agent's workspace scope. The legacy
 `GRAPH_MEMORY_API`/`GRAPH_MEMORY_HOST`/`GRAPH_MEMORY_PORT` contract was retired
-in AGI-232.
+in AGI-232. Full endpoint contract: [`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §3.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIA_DAEMON_URL` | `http://127.0.0.1:7700` | Base URL of the host RPC endpoint (`POST /rpc/call`). |
+| `SIA_DAEMON_TOKEN` | `""` | Bearer token for that endpoint. Empty → the host rejects every graph-memory call. |
+
+### Components
+
+Versioned code components and remote tool servers loaded from disk. Full
+spec: [`COMPONENTS.md`](./COMPONENTS.md).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIA_COMPONENTS_DIR` | unset | Host-managed component root (`<name>/current/component.json`). Shadows the seed components in `<projectRoot>/components`. Unset → seed components only. |
+| `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON list of remote tool servers with optional scope tags. Missing → no remote tools. |
 
 ### Web search
 
