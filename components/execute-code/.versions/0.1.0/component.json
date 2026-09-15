@@ -1,0 +1,10 @@
+{
+  "name": "execute-code",
+  "version": "0.1.0",
+  "kind": "middleware",
+  "intent": "Run the TypeScript the agent writes, one fresh process per call in a per-conversation workspace with typed access to the agent's other tools, and hand back stdout, stderr and the exit status as text — including a clear timeout message instead of a silent kill.",
+  "sdk": "^1.0.0",
+  "replaces": "CodeExecutionMiddleware",
+  "depth": 0,
+  "lineage": { "producedBy": "seed" }
+}

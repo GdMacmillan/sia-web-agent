@@ -14,6 +14,7 @@ export {
   type ParseManifestResult,
 } from "./manifest.js";
 export {
+  CURRENT_FILE_PATTERN,
   CURRENT_LINK,
   MANIFEST_FILE,
   MAX_MANIFEST_BYTES,
@@ -64,6 +65,7 @@ export {
   type ActiveComponentsState,
 } from "./registry.js";
 export {
+  MIDDLEWARE_ONLY_TOOL_NAMES,
   MIDDLEWARE_TOOL_NAMES,
   SEED_COMPONENTS_DIRNAME,
   prepareComponentAssembly,

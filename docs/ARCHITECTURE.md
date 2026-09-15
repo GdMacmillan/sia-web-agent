@@ -80,7 +80,7 @@ the source of truth; the order matters.
 | 4 | `todoListMiddleware()` | LangChain built-in. Provides `write_todos` / `update_todo_status` tools for structured task tracking. |
 | 5 | `createFilesystemMiddleware` | Provides `ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep` tools backed by the configured `BackendProtocol`. |
 | 6 | `createSkillsMiddleware` *(if projectRoot set)* | Indexes `/skills/SKILL.md` files, injects their summaries into the system prompt, exposes `load_skill` for on-demand expansion. |
-| 7 | `createCodeExecutionMiddleware` *(if projectRoot set)* | Provides `execute_code` for TypeScript/JavaScript execution via tsx. Max execution time: 120s. |
+| 7 | `createCodeExecutionMiddleware` *(if projectRoot set)* | Provides `execute_code` for TypeScript/JavaScript execution via tsx. Max execution time: 120s. The bundled registration evaluates the in-tree twin of the seed component `components/execute-code`; with the seed root present the loader's instance replaces it by name (see [`COMPONENTS.md`](./COMPONENTS.md)). |
 | 7a | `createCodeInterpreterMiddleware` *(opt-in, `ENABLE_CODE_INTERPRETER=true`)* | Provides the sandboxed QuickJS `eval` tool with in-REPL `task()` subagent fan-out. Lazily loaded. See [Code interpreter (QuickJS)](#code-interpreter-quickjs). |
 | 8 | `createSubAgentMiddleware` | Provides the `task` tool. Delegates work to sub-agents (see [Sub-agents](#sub-agents)). |
 | 9 | `summarizationMiddleware` | LangChain built-in. Compresses conversation history when token usage approaches a configured threshold. |
@@ -217,8 +217,9 @@ Additional tools come from middleware (not from `createStandardTools`):
 - **Todos** — `write_todos`, `update_todo_status` (via `todoListMiddleware`).
 - **Skills** — `load_skill` (via `createSkillsMiddleware`, only when
   `projectRoot` is set).
-- **Code execution** — `execute_code` (via `createCodeExecutionMiddleware`,
-  only when `projectRoot` is set).
+- **Code execution** — `execute_code` (via the seed component
+  `components/execute-code`, or its bundled twin
+  `createCodeExecutionMiddleware`; only when `projectRoot` is set).
 - **Sub-agent delegation** — `task` (via `createSubAgentMiddleware`).
 
 ## Backends

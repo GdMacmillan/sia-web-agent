@@ -11,20 +11,25 @@
 import { createMiddleware, tool } from "langchain";
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { z } from "zod/v4";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createAgentLogger } from "../utils/logger.js";
 import {
   ToolEnabledExecutor,
   validateCode,
   formatCodePreview,
-} from "../code-execution/index.js";
-import {
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
-} from "../middleware/code-execution.js";
+} from "../code-execution/index.js";
 import type { ComponentManifest } from "./manifest.js";
+import { MIDDLEWARE_ONLY_TOOL_NAMES } from "./names.js";
+import { getActiveToolPool } from "./registry.js";
 
-/** The SDK version a manifest's `sdk` range is checked against. */
-export const SDK_VERSION = "1.0.0";
+/**
+ * The SDK version a manifest's `sdk` range is checked against.
+ *
+ * 1.1.0: `internals.codeExecution.getExposableTools`.
+ */
+export const SDK_VERSION = "1.1.0";
 
 /** Per-agent configuration handed to every component. */
 export interface ComponentConfig {
@@ -47,7 +52,21 @@ export interface ComponentInternals {
     formatCodePreview: typeof formatCodePreview;
     DEFAULT_TIMEOUT_MS: number;
     MAX_TIMEOUT_MS: number;
+    /**
+     * The tools a code-execution session may call through its generated
+     * tool API: the assembled agent's pool minus the middleware-only tools
+     * (`MIDDLEWARE_ONLY_TOOL_NAMES`). Available after assembly; empty
+     * before. Since SDK 1.1.0.
+     */
+    getExposableTools: () => StructuredToolInterface[];
   };
+}
+
+/** The active pool minus the middleware-only tools. */
+export function getExposableTools(): StructuredToolInterface[] {
+  return getActiveToolPool().filter(
+    (tool) => !MIDDLEWARE_ONLY_TOOL_NAMES.has(tool.name),
+  );
 }
 
 export interface ComponentDeps {
@@ -106,6 +125,7 @@ export function buildInternals(): ComponentInternals {
       formatCodePreview,
       DEFAULT_TIMEOUT_MS,
       MAX_TIMEOUT_MS,
+      getExposableTools,
     },
   };
 }

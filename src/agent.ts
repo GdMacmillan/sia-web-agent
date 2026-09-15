@@ -381,7 +381,6 @@ export async function createDeepAgent<
           createCodeExecutionMiddleware({
             projectRoot,
             tools: [...tools, ...filesystemTools],
-            maxExecutionTime: 120000,
           }),
         ]
       : []),
@@ -436,7 +435,6 @@ export async function createDeepAgent<
           createCodeExecutionMiddleware({
             projectRoot,
             tools: [...tools, ...filesystemTools],
-            maxExecutionTime: 120000,
           }),
         ]
       : []),
