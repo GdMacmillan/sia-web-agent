@@ -379,11 +379,53 @@ export function getPathDiagnostics(): {
 }
 
 /**
+ * Additional directories that file operations may reach besides the project
+ * root — the component roots (`docs/COMPONENTS.md`), so the agent can read
+ * and author component versions that live outside its own source tree.
+ *
+ * Process-global by design: the set is filled once at assembly and the
+ * filesystem tools consult it on every call for the life of the process.
+ */
+const allowedPathRoots = new Set<string>();
+
+/**
+ * Allow file operations under `dir` in addition to the project root.
+ * Idempotent; the directory is stored as given (callers pass both the
+ * resolved and the realpath'd form when they differ).
+ */
+export function allowPathRoot(dir: string): void {
+  if (dir && typeof dir === "string") {
+    allowedPathRoots.add(path.resolve(dir));
+  }
+}
+
+/** Forget every extra root registered with {@link allowPathRoot}. Test hook. */
+export function clearAllowedPathRoots(): void {
+  allowedPathRoots.clear();
+}
+
+/** Snapshot of the extra roots registered with {@link allowPathRoot}. */
+export function getAllowedPathRoots(): string[] {
+  return [...allowedPathRoots];
+}
+
+/** `resolved` is `root` itself or a path beneath it. */
+function isWithinRoot(root: string, resolved: string): boolean {
+  const relative = path.relative(root, resolved);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+/**
  * Validate that a path is within the project boundary.
  * Throws a detailed security error if the path is outside the project.
  *
  * This function ensures that file operations are restricted to the project directory,
  * preventing access to sensitive system files or directories outside the project.
+ * Directories registered with {@link allowPathRoot} are accepted as well,
+ * with the same resolve-then-contain semantics.
  *
  * @param targetPath - The path to validate (absolute or relative)
  * @throws Error with detailed message if path is outside project boundary
@@ -409,22 +451,27 @@ export function validatePathInProject(targetPath: string): void {
   // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- this function resolves then enforces project containment below (throws if outside root).
   const resolved = path.resolve(targetPath);
 
-  // Check if resolved path is within project root
-  // Using path.relative to determine if target is inside or outside project
-  const relative = path.relative(projectRoot, resolved);
-
-  // If relative path starts with '..' or is absolute, it's outside the project
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(
-      `Security Error: Path access denied.\n` +
-        `Attempted to access: ${targetPath}\n` +
-        `Resolved to: ${resolved}\n` +
-        `Project boundary: ${projectRoot}\n` +
-        `All file operations must be within the project directory.`,
-    );
+  // Check if resolved path is within the project root or an allowed root.
+  // Using path.relative to determine if target is inside or outside.
+  if (isWithinRoot(projectRoot, resolved)) {
+    return;
+  }
+  for (const root of allowedPathRoots) {
+    if (isWithinRoot(root, resolved)) {
+      return;
+    }
   }
 
-  // Path is within project boundary
+  throw new Error(
+    `Security Error: Path access denied.\n` +
+      `Attempted to access: ${targetPath}\n` +
+      `Resolved to: ${resolved}\n` +
+      `Project boundary: ${projectRoot}\n` +
+      (allowedPathRoots.size > 0
+        ? `Additional allowed roots: ${[...allowedPathRoots].join(", ")}\n`
+        : "") +
+      `All file operations must be within the project directory.`,
+  );
 }
 
 /**

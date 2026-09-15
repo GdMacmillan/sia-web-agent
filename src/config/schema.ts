@@ -246,6 +246,14 @@ export interface RuntimeConfig {
    * undefined resolves by model string. See `src/profiles/`.
    */
   harnessProfile: string | undefined;
+  /**
+   * Host-managed component root (`SIA_COMPONENTS_DIR`).
+   *
+   * Consulted before the shipped `<projectRoot>/components` seed root; a
+   * component name found here shadows the seed. Undefined means only the
+   * seed root is read. See `docs/COMPONENTS.md`.
+   */
+  componentsDir: string | undefined;
   /** Unique agent identifier (default: "self-improving-agent") */
   agentId: string;
   /** Human-friendly agent name (default: "Self-Improving Agent") */

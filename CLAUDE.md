@@ -54,6 +54,7 @@ src/                     # agent source
 ├── backends/            # filesystem backend implementations
 ├── clients/             # HTTP clients (graph-memory)
 ├── code-execution/      # TS/JS execution sandbox
+├── components/          # on-disk component loader, SDK, contract runner
 ├── config/              # env-driven config loader + model factories
 ├── middleware/          # all middleware
 ├── schemas/             # zod schemas
@@ -188,6 +189,19 @@ The agent's runtime behavior is defined by:
   `mergeMiddlewareStack` — same-name custom middleware replaces a
   default in place; novel names insert between the core and tail
   segments. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#harness-profiles).
+- **Components** (`src/components/`) — versioned units of agent code
+  loaded from disk at assembly, from `SIA_COMPONENTS_DIR` and then
+  `<projectRoot>/components`. Each version ships a strict `component.json`
+  manifest, a dependency-injected `entry.ts` factory (it imports nothing;
+  everything arrives on `ComponentDeps`, `SDK_VERSION = "1.0.0"`) and a
+  `contract.ts` the agent runs in-process (`runComponentContract`,
+  exported from `src/graph.ts` beside `graph`). A `kind: middleware`
+  component with `replaces` swaps a bundled middleware by name at both
+  the main and the sub-agent site; `kind: tools` appends tools after the
+  built-ins; `kind: service` publishes a value for other components. A
+  bad component is skipped with a warning, never fatal; with no component
+  root present the stack assembles exactly as before. See
+  [`docs/COMPONENTS.md`](docs/COMPONENTS.md).
 
 Both are first-class self-modification surfaces. When the agent is
 asked to improve itself or repurpose for a new role, it modifies these

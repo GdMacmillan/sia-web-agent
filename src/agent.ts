@@ -42,8 +42,13 @@ import { mergeMiddlewareStack } from "./middleware/utils.js";
 import { createToolExclusionMiddleware } from "./middleware/tool_exclusion.js";
 import {
   resolveHarnessProfile,
+  mergeHarnessProfile,
   REQUIRED_MIDDLEWARE_NAMES,
+  type HarnessProfile,
 } from "./profiles/index.js";
+import { readReplaces } from "./components/replaces-tag.js";
+import { COMPONENTS_MIDDLEWARE_NAME } from "./components/names.js";
+import { logger } from "./utils/logger.js";
 import type { BackendProtocol } from "./backends/index.js";
 import { InteropZodObject } from "@langchain/core/utils/types";
 import { AnnotationRoot } from "@langchain/langgraph";
@@ -105,7 +110,39 @@ export interface CreateDeepAgentParams<
   name?: string;
   /** Optional project root directory for skills loading */
   projectRoot?: string;
+  /**
+   * Harness-profile overlays folded into the resolved profile at assembly,
+   * in order. Component manifests supply these (`docs/COMPONENTS.md` §3).
+   */
+  profileOverlays?: HarnessProfile[];
 }
+
+/** The `subAgentMiddleware` name, as registered by `createSubAgentMiddleware`. */
+const SUBAGENT_MIDDLEWARE_NAME = "subAgentMiddleware";
+
+/**
+ * Every middleware name `createDeepAgent` can register, across both the main
+ * and the sub-agent stack and every feature gate. The component loader uses
+ * it as a coarse pre-check of a manifest's `replaces`; the precise check —
+ * against the stack actually assembled — happens in `createDeepAgent`.
+ */
+export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
+  "autoContinueMiddleware",
+  "capExhaustionMiddleware",
+  "usageEventsMiddleware",
+  "todoListMiddleware",
+  "FilesystemMiddleware",
+  "memoryAugmentationMiddleware",
+  "skillsMiddleware",
+  "CodeExecutionMiddleware",
+  "CodeInterpreterMiddleware",
+  SUBAGENT_MIDDLEWARE_NAME,
+  "SummarizationMiddleware",
+  "patchToolCallsMiddleware",
+  "PromptCachingMiddleware",
+  "knowledgeFormationMiddleware",
+  "HumanInTheLoopMiddleware",
+]);
 
 /**
  * Structured system-prompt configuration.
@@ -209,6 +246,7 @@ export async function createDeepAgent<
     interruptOn,
     name,
     projectRoot,
+    profileOverlays = [],
   } = params;
 
   // Use MessagesAnnotation by default for proper message deduplication in multi-turn conversations
@@ -225,9 +263,13 @@ export async function createDeepAgent<
     runtimeConfig.llm,
     "orchestrator",
   ).model;
-  const harnessProfile = resolveHarnessProfile(
-    orchestratorModel,
-    runtimeConfig.runtime.harnessProfile,
+  // Component manifests may carry profile overlays; fold them in, in order.
+  const harnessProfile = profileOverlays.reduce(
+    (profile, overlay) => mergeHarnessProfile(profile, overlay),
+    resolveHarnessProfile(
+      orchestratorModel,
+      runtimeConfig.runtime.harnessProfile,
+    ),
   );
 
   // Compose the system prompt from prefix / base / suffix, then append the
@@ -308,7 +350,8 @@ export async function createDeepAgent<
         .createCodeInterpreterMiddleware
     : null;
 
-  const middleware: AgentMiddleware[] = [
+  // Core segment, up to (not including) the sub-agent middleware.
+  const coreBeforeSubagents: AgentMiddleware[] = [
     // Retry transient LLM errors (first so retries are invisible to cost tracking)
     autoContinueMiddleware,
     // Detect OR cap exhaustion (429+key_limit) and dispatch cap_exhausted
@@ -347,68 +390,10 @@ export async function createDeepAgent<
     ...(makeCodeInterpreterMiddleware
       ? [makeCodeInterpreterMiddleware()]
       : []),
-    // Enables delegation to specialized subagents for complex tasks
-    createSubAgentMiddleware({
-      defaultModel: model,
-      defaultTools: tools,
-      defaultMiddleware: [
-        // Subagent middleware: Retry transient LLM errors before cost tracking
-        autoContinueMiddleware,
-        // Subagent middleware: Detect OR cap exhaustion
-        capExhaustionMiddleware,
-        // Subagent middleware: Emit raw token-usage events to siad (AGI-268)
-        usageEventsMiddleware,
-        // Subagent middleware: Todo list management
-        todoListMiddleware(),
-        // Subagent middleware: Filesystem operations
-        createFilesystemMiddleware({
-          backend: filesystemBackend,
-          tools: filesystemTools,
-        }),
-        // Attach related graph-memory entries to search-type tool results
-        createMemoryAugmentationMiddleware(),
-        // Subagent middleware: Skills system for sub-agents (allows reading skill files)
-        ...(projectRoot
-          ? [
-              createSkillsMiddleware({
-                skillsDir: `${projectRoot}/skills`,
-              }),
-            ]
-          : []),
-        // Subagent middleware: Code execution with tool API access
-        ...(projectRoot
-          ? [
-              createCodeExecutionMiddleware({
-                projectRoot,
-                tools: [...tools, ...filesystemTools],
-                maxExecutionTime: 120000,
-              }),
-            ]
-          : []),
-        // Subagent middleware: opt-in sandboxed `eval` interpreter
-        ...(makeCodeInterpreterMiddleware
-          ? [makeCodeInterpreterMiddleware()]
-          : []),
-        // Subagent middleware: Automatic conversation summarization when token limits are approached
-        summarizationMiddleware({
-          model: summarizationModel,
-          trigger: { tokens: summarizationConfig.triggerTokens },
-          keep: { messages: summarizationConfig.keepMessages },
-        }),
-        // Subagent middleware: Patches tool calls for compatibility
-        createPatchToolCallsMiddleware(),
-        // Subagent middleware: Anthropic prompt caching — kept last to mirror
-        // the main stack's caching-in-tail order (upstream PR #331).
-        anthropicPromptCachingMiddleware({
-          unsupportedModelBehavior: "ignore",
-        }),
-      ],
-      defaultInterruptOn: interruptOn,
-      subagents,
-      generalPurposeAgent: true,
-      // Profile override for the `task` tool description, when provided.
-      taskDescription: harnessProfile.toolDescriptionOverrides.task,
-    }),
+  ];
+
+  // Core segment after the sub-agent middleware.
+  const coreAfterSubagents: AgentMiddleware[] = [
     // Automatically summarizes conversation history when token limits are approached
     summarizationMiddleware({
       model,
@@ -418,7 +403,61 @@ export async function createDeepAgent<
     // Patches tool calls to ensure compatibility across different model providers
     createPatchToolCallsMiddleware(),
   ];
-  // ^ `middleware` is now the CORE segment.
+
+  // The sub-agent stack. Same shape as the main core minus delegation, with
+  // its own caching entry kept last (upstream PR #331 ordering).
+  const subagentCoreMiddleware: AgentMiddleware[] = [
+    // Subagent middleware: Retry transient LLM errors before cost tracking
+    autoContinueMiddleware,
+    // Subagent middleware: Detect OR cap exhaustion
+    capExhaustionMiddleware,
+    // Subagent middleware: Emit raw token-usage events to siad (AGI-268)
+    usageEventsMiddleware,
+    // Subagent middleware: Todo list management
+    todoListMiddleware(),
+    // Subagent middleware: Filesystem operations
+    createFilesystemMiddleware({
+      backend: filesystemBackend,
+      tools: filesystemTools,
+    }),
+    // Attach related graph-memory entries to search-type tool results
+    createMemoryAugmentationMiddleware(),
+    // Subagent middleware: Skills system for sub-agents (allows reading skill files)
+    ...(projectRoot
+      ? [
+          createSkillsMiddleware({
+            skillsDir: `${projectRoot}/skills`,
+          }),
+        ]
+      : []),
+    // Subagent middleware: Code execution with tool API access
+    ...(projectRoot
+      ? [
+          createCodeExecutionMiddleware({
+            projectRoot,
+            tools: [...tools, ...filesystemTools],
+            maxExecutionTime: 120000,
+          }),
+        ]
+      : []),
+    // Subagent middleware: opt-in sandboxed `eval` interpreter
+    ...(makeCodeInterpreterMiddleware
+      ? [makeCodeInterpreterMiddleware()]
+      : []),
+    // Subagent middleware: Automatic conversation summarization when token limits are approached
+    summarizationMiddleware({
+      model: summarizationModel,
+      trigger: { tokens: summarizationConfig.triggerTokens },
+      keep: { messages: summarizationConfig.keepMessages },
+    }),
+    // Subagent middleware: Patches tool calls for compatibility
+    createPatchToolCallsMiddleware(),
+    // Subagent middleware: Anthropic prompt caching — kept last to mirror
+    // the main stack's caching-in-tail order (upstream PR #331).
+    anthropicPromptCachingMiddleware({
+      unsupportedModelBehavior: "ignore",
+    }),
+  ];
 
   // Tail segment. Order per upstream deepagents PR #331: prompt caching, then
   // knowledge formation, then human-in-the-loop. Caching is inert under
@@ -435,13 +474,73 @@ export async function createDeepAgent<
     ...(interruptOn ? [humanInTheLoopMiddleware({ interruptOn })] : []),
   ];
 
+  // The names the main stack will actually carry. The sub-agent middleware
+  // itself is constructed below, once its custom list is known.
+  const mainNames = new Set(
+    [...coreBeforeSubagents, ...coreAfterSubagents, ...tailMiddleware].map(
+      (m) => m.name,
+    ),
+  ).add(SUBAGENT_MIDDLEWARE_NAME);
+
+  // A component replacement is re-validated against the stack actually
+  // assembled: a target that is absent here (a feature-gated middleware that
+  // is off, say) would otherwise merge as an addition instead of a swap.
+  const effectiveCustom = customMiddleware.filter((entry) => {
+    const target = readReplaces(entry);
+    if (target !== undefined && !mainNames.has(target)) {
+      logger.warn(
+        { middleware: entry.name, replaces: target },
+        "custom middleware dropped: its replacement target is not in the assembled stack",
+      );
+      return false;
+    }
+    return true;
+  });
+
+  // Custom entries reach the sub-agent stack too, except those whose name
+  // exists only in the main stack (delegation, knowledge formation, the tail)
+  // and the components manifest refresher — `mergeMiddlewareStack` would
+  // append those as novel entries the sub-agents never had.
+  const subagentNames = new Set(subagentCoreMiddleware.map((m) => m.name));
+  const mainOnlyNames = new Set(
+    [...mainNames].filter((entryName) => !subagentNames.has(entryName)),
+  );
+  const subagentCustom = effectiveCustom.filter(
+    (entry) =>
+      !mainOnlyNames.has(entry.name) &&
+      entry.name !== COMPONENTS_MIDDLEWARE_NAME,
+  );
+
+  // Enables delegation to specialized subagents for complex tasks
+  const subAgentMiddleware = createSubAgentMiddleware({
+    defaultModel: model,
+    defaultTools: tools,
+    defaultMiddleware: mergeMiddlewareStack(
+      subagentCoreMiddleware,
+      subagentCustom,
+      [],
+    ),
+    defaultInterruptOn: interruptOn,
+    subagents,
+    generalPurposeAgent: true,
+    // Profile override for the `task` tool description, when provided.
+    taskDescription: harnessProfile.toolDescriptionOverrides.task,
+  });
+
+  // The CORE segment.
+  const middleware: AgentMiddleware[] = [
+    ...coreBeforeSubagents,
+    subAgentMiddleware,
+    ...coreAfterSubagents,
+  ];
+
   // Merge custom middleware by name: same-name entries replace the matching
   // default/tail entry in place; novel entries insert between the core and tail
   // segments. This name-addressable stack is what the genome operators
   // (swap/toggle/add/remove) build on.
   let mergedMiddleware = mergeMiddlewareStack(
     middleware,
-    customMiddleware,
+    effectiveCustom,
     tailMiddleware,
   );
 

@@ -90,7 +90,9 @@ Tokens are dropped when the child exits.
 ### 1.5 Component roots (optional)
 
 The agent can assemble versioned code components and remote tool servers
-from disk. Full spec: [`COMPONENTS.md`](./COMPONENTS.md).
+from disk. Full spec: [`COMPONENTS.md`](./COMPONENTS.md); the loader and
+contract runner live in `src/components/` (remote tool servers are not
+built yet).
 
 | Variable | Purpose | Required |
 |---|---|---|

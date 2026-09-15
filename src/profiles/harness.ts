@@ -10,8 +10,10 @@
  * shape, `createHarnessProfile`, the required-middleware guard, and the full zod
  * serialization surface (config schema + poisoned-key rejection) — the latter is
  * what lets profiles serve as genome snapshots/blueprints. Dropped from upstream:
- * the global-symbol registry, the merge machinery, `extraMiddleware`, and the
- * general-purpose-subagent config (not needed by this fork's slim usage).
+ * the global-symbol registry, `extraMiddleware`, and the general-purpose-
+ * subagent config (not needed by this fork's slim usage). A slim
+ * `mergeHarnessProfile` folds component-supplied overlays into the resolved
+ * profile at assembly (see `docs/COMPONENTS.md`).
  */
 import { z } from "zod/v4";
 
@@ -114,6 +116,37 @@ export function createHarnessProfile(
 
 /** An empty no-op profile used as the default when nothing matches. */
 export const EMPTY_HARNESS_PROFILE: HarnessProfile = createHarnessProfile();
+
+/**
+ * Fold `overlay` into `base`, producing a new frozen profile.
+ *
+ * Total for validated inputs (both sides came out of
+ * {@link createHarnessProfile}, so no name re-validation is needed):
+ * `excludedTools` / `excludedMiddleware` are unioned; `systemPromptSuffix`
+ * is joined with a blank line; `toolDescriptionOverrides` and
+ * `baseSystemPrompt` are overlay-wins when the overlay sets them.
+ */
+export function mergeHarnessProfile(
+  base: HarnessProfile,
+  overlay: HarnessProfile,
+): HarnessProfile {
+  const suffixParts = [base.systemPromptSuffix, overlay.systemPromptSuffix]
+    .filter((part): part is string => !!part && part.length > 0);
+  return createHarnessProfile({
+    baseSystemPrompt: overlay.baseSystemPrompt ?? base.baseSystemPrompt,
+    systemPromptSuffix:
+      suffixParts.length > 0 ? suffixParts.join("\n\n") : undefined,
+    toolDescriptionOverrides: {
+      ...base.toolDescriptionOverrides,
+      ...overlay.toolDescriptionOverrides,
+    },
+    excludedTools: [...base.excludedTools, ...overlay.excludedTools],
+    excludedMiddleware: [
+      ...base.excludedMiddleware,
+      ...overlay.excludedMiddleware,
+    ],
+  });
+}
 
 // ============================================================================
 // Serialization (genome snapshots / blueprints)

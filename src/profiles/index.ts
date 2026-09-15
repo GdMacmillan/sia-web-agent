@@ -3,6 +3,7 @@
  */
 export {
   createHarnessProfile,
+  mergeHarnessProfile,
   parseHarnessProfileConfig,
   serializeProfile,
   harnessProfileConfigSchema,
