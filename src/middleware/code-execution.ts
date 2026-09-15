@@ -21,10 +21,10 @@ import {
 } from "../code-execution/index.js";
 
 /** Default timeout for code execution (60 seconds) */
-const DEFAULT_TIMEOUT_MS = 60000;
+export const DEFAULT_TIMEOUT_MS = 60000;
 
 /** Maximum timeout for code execution (5 minutes) */
-const MAX_TIMEOUT_MS = 300000;
+export const MAX_TIMEOUT_MS = 300000;
 
 // System prompt removed - skill provides guidance via skills middleware
 

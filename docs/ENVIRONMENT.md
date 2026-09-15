@@ -93,7 +93,7 @@ spec: [`COMPONENTS.md`](./COMPONENTS.md).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SIA_COMPONENTS_DIR` | unset | Host-managed component root (`<name>/current/component.json`). Shadows the seed components in `<projectRoot>/components`. Unset → seed components only. |
+| `SIA_COMPONENTS_DIR` | unset | Host-managed component root (`<name>/current/component.json`). Shadows the seed components in `<projectRoot>/components`. Unset → seed components only. Read once at assembly by `src/components/assemble.ts` (`getConfig().runtime.componentsDir`); see [`COMPONENTS.md`](./COMPONENTS.md). |
 | `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON list of remote tool servers with optional scope tags. Missing → no remote tools. |
 
 ### Web search

@@ -1,4 +1,5 @@
-export { createDeepAgent } from "./agent.js";
+export { createDeepAgent, KNOWN_MIDDLEWARE_NAMES } from "./agent.js";
+export * from "./components/index.js";
 export {
   createDeepAgentWithDefaults,
   createDeepAgentComponents,

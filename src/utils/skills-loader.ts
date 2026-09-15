@@ -36,7 +36,7 @@ const skillsCache: Map<string, SkillMetadata[]> = new Map();
  * @param baseDir - The base directory that should contain the path
  * @returns True if the path is safely within baseDir, false otherwise
  */
-function isSafePath(path: string, baseDir: string): boolean {
+export function isSafePath(path: string, baseDir: string): boolean {
   try {
     // Use realpathSync to resolve all symlinks to canonical paths
     // This ensures /var and /private/var are treated as the same path on macOS

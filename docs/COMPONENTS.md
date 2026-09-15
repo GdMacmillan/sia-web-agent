@@ -6,8 +6,9 @@ component ships with a **manifest** that describes it, a **contract** that
 proves a version works, and an **entry** that builds the thing it contributes.
 
 This document is the spec for the component loader and for the runtime
-registration of remote tools. It is written to be implementable without
-further decisions; the rejected alternatives are recorded so they are not
+registration of remote tools. The loader, SDK and contract runner are
+implemented in `src/components/`; the remote-tool registrar (§7) is not
+built yet. The rejected alternatives are recorded so they are not
 re-litigated.
 
 Vocabulary used here: *component*, *version*, *manifest*, *contract*,
@@ -80,8 +81,16 @@ pointer flip back.
 **Containment.** Every path the loader touches is resolved with
 `realpathSync` and must remain inside the root (`relative(root, real)` must
 not start with `..`). This is the same check `isSafePath` applies to skills
-(`src/utils/skills-loader.ts`). A `current` link that escapes the root is
+(`src/utils/skills-loader.ts`, exported for this purpose). A `current` link
+that escapes the root, or that lands anywhere but inside `.versions/`, is
 skipped with a warning. Manifests over 10 MB are skipped.
+
+**Reaching the roots from the agent.** The filesystem tools are bounded to
+the project root (`validatePathInProject`, `src/utils/path-utils.ts`). At
+assembly each component root that exists is added to the allowed roots
+(`allowPathRoot`), both as given and fully resolved, so the agent can read
+and author component versions that live outside its own source tree. The
+allow-list is process-global by design.
 
 ---
 
@@ -125,11 +134,16 @@ export const ComponentManifestSchema = z
         producedBy: z.string().min(1),
       })
       .strict(),
-    /** Optional assembly tuning, same shape as `HarnessProfileOptions`. */
-    profile: HarnessProfileOptionsSchema.optional(),
+    /** Optional assembly tuning: the harness-profile config shape. */
+    profile: harnessProfileConfigSchema.optional(),
   })
   .strict();
 ```
+
+(`harnessProfileConfigSchema` is the strict zod/v4 schema in
+`src/profiles/harness.ts`; `HarnessProfileOptions` is the matching TS
+interface. `entry` and `contract` must be relative and may not contain
+`..`.)
 
 Rules the loader enforces beyond the schema:
 
@@ -137,13 +151,25 @@ Rules the loader enforces beyond the schema:
   `.versions/<version>` directory the `current` link resolves to.
 - `replaces` must name a middleware that exists in the assembled default
   stack and must not name one in `REQUIRED_MIDDLEWARE_NAMES`
-  (`src/profiles/harness.ts`). Replacing scaffolding is refused.
+  (`src/profiles/harness.ts`). Replacing scaffolding is refused. It is
+  only valid on `kind: middleware`. The loader pre-checks it against
+  `KNOWN_MIDDLEWARE_NAMES` (`src/agent.ts`, every name the stack can
+  carry); the assembly site re-checks it against the stack it actually
+  builds (§4).
+- A `kind: middleware` component **without** `replaces` whose returned
+  middleware carries the name of a bundled one is refused: a replacement
+  is always declared, never inferred from `.name`.
 - `depth` is recorded, not inferred. A parent may have been pruned; the
   tree shape is carried by every node so the whole tree can be listed
   without walking lineage.
-- `profile`, when present, is validated by the existing harness-profile
-  schema (`src/profiles/harness.ts`) and applied at assembly like any other
-  profile input.
+- `profile`, when present, is validated through `parseHarnessProfileConfig`
+  (`src/profiles/harness.ts`) at parse time, so a required-middleware
+  exclusion is a manifest failure rather than an assembly failure. It is
+  applied at assembly (restart-gated, see §4) by folding it into the
+  resolved harness profile with `mergeHarnessProfile`: excluded sets are
+  unioned, prompt suffixes are joined, overrides are overlay-wins. A
+  component's `excludedTools` applies at the main agent only — the
+  tool-exclusion middleware is appended to the main stack alone.
 
 Example — the seed `execute_code` component:
 
@@ -169,14 +195,26 @@ rejected: any registry or marketplace identity field, and inferring
 
 ## 4. Loading and activation
 
-The loader runs once at assembly (`createDeepAgentWithDefaults`,
-`src/deep-agent-setup.ts`) and yields three things:
+The loader runs once at assembly (`prepareComponentAssembly`,
+`src/components/assemble.ts`, called from `createDeepAgentWithDefaults`)
+and yields four things:
 
-- `customMiddleware: AgentMiddleware[]` — from `kind: middleware` entries.
-- `tools: StructuredTool[]` — from `kind: tools` entries, handed to the same
-  registrar that carries remote tools (§7).
+- `middleware: AgentMiddleware[]` — from `kind: middleware` entries, plus
+  `componentsMiddleware`, which re-reads the active manifests each turn.
+- `tools: StructuredTool[]` — from `kind: tools` entries, appended after
+  the built-in tools (built-ins first). They reach the main agent, the
+  general-purpose sub-agent and the `execute_code` tool API; the named
+  sub-agents select tools by fixed name lists (`src/tools/tool-sets.ts`)
+  and do not see them. A component tool whose name collides with a
+  built-in **or middleware-provided** tool (`read_file`, `execute_code`,
+  `task`, `load_skill`, …) is skipped with a warning.
 - `services: Record<string, unknown>` — from `kind: service` entries,
   published under `deps.services[name]` for other components to use.
+  Services load **first**, so `deps.services` is populated for every later
+  entry; each component receives a frozen snapshot, so no component can
+  alter another's view.
+- `profiles: HarnessProfile[]` — the `profile` of every loaded component,
+  folded into the resolved harness profile in load order.
 
 **Middleware replacement is name-based.** `mergeMiddlewareStack`
 (`src/middleware/utils.ts`) already replaces a default middleware in place
@@ -188,6 +226,18 @@ once. The loader asserts that the middleware an entry returns has
 `.name === manifest.replaces`; a mismatch is a load failure for that
 component.
 
+Two things happen at the assembly site before the merge:
+
+- `replaces` is re-validated against the stack actually built. A target
+  that is absent there (a feature-gated middleware that is off, say) would
+  otherwise merge as an addition; such an entry is dropped with a warning
+  at both sites.
+- At the sub-agent site, custom entries whose name exists only in the main
+  stack (delegation, knowledge formation, the tail, `componentsMiddleware`)
+  are filtered out first. Otherwise `mergeMiddlewareStack` would append
+  them as novel entries and a "replacement" would become an addition the
+  sub-agents never had.
+
 **Rejected:** a `resolveComponent(name) ?? bundledDefault` call at each
 registration site. It is a second primitive beside `mergeMiddlewareStack`,
 has to be repeated per site, and cannot express `kind: tools`.
@@ -198,8 +248,14 @@ Two different things change at two different speeds:
 
 | What | When it is read | Effect of a change |
 |---|---|---|
-| Manifest fields: `intent`, `profile`, `depth`, `lineage` | every agent turn (`beforeAgent`, like skills) | visible on the next turn |
-| Code: `entry`, `contract` | once, at assembly | visible after restart |
+| Manifest fields: `intent`, `depth`, `lineage`, `version` | every agent turn (`componentsMiddleware`, `beforeAgent`, like skills) | visible on the next turn |
+| Code: `entry`, `contract`; manifest `profile` | once, at assembly | visible after restart |
+
+`profile` is restart-gated because every point at which a profile is
+applied lives inside `createDeepAgent`. The active set
+(`src/components/registry.ts`) records each component's loaded version
+beside its live manifest, so a flipped pointer is described immediately
+while the loaded version stays what it was.
 
 The code is loaded with a cache-busted dynamic `import()` so a restart
 always sees the current pointer; there is no in-process module reload.
@@ -234,17 +290,24 @@ export interface ComponentDeps {
   config: Readonly<{ agentId: string; agentName: string; projectRoot: string }>;
   manifest: ComponentManifest;        // this component's parsed manifest
   componentDir: string;               // the resolved version directory
-  services: Record<string, unknown>;  // published by `kind: service` components
+  services: Readonly<Record<string, unknown>>;  // frozen snapshot, see §4
   /** Bundled internals exposed for specific components. Unstable. */
   internals: {
     codeExecution: {
-      createExecutor: typeof createToolEnabledExecutor;
-      sessionManager: SessionManager;
-      // …whatever the execute-code wrapper needs, and nothing else
+      ToolEnabledExecutor: typeof ToolEnabledExecutor;
+      validateCode: typeof validateCode;
+      formatCodePreview: typeof formatCodePreview;
+      DEFAULT_TIMEOUT_MS: number;
+      MAX_TIMEOUT_MS: number;
     };
   };
 }
 ```
+
+`internals.codeExecution` carries exactly the symbols the bundled
+`execute_code` wrapper imports (`src/middleware/code-execution.ts`), so the
+wrapper can be ported to a component without reaching past the SDK.
+`logger` is a child of the agent's pino logger named `component:<name>`.
 
 `entry.ts` is:
 
@@ -279,10 +342,23 @@ export default async function (deps: ContractDeps): Promise<void>;
 export type ContractDeps = ComponentDeps & {
   /** The value `entry.ts` returned for this version. */
   component: unknown;
-  /** Invoke a tool by name through the assembled agent, in a scratch thread. */
-  invoke: (toolName: string, args: unknown) => Promise<string>;
+  /** Invoke a tool by name; runs in a scratch thread unless one is named. */
+  invoke: (
+    toolName: string,
+    args: unknown,
+    opts?: { threadId?: string },
+  ) => Promise<string>;
 };
 ```
+
+`invoke` resolves the name against the component's own tools first (the
+tools of a `kind: tools` entry, or a middleware's `tools`), then the
+assembled agent's full pool — so a candidate version is what gets
+exercised even when an older version of it is active. The default thread
+id is `contract-<name>-<uuid>`, minted once per run; passing `threadId`
+lets a contract prove thread isolation. Results are flattened to a string
+the way the `execute_code` tool API flattens them. An unknown name throws
+(and so fails the contract) with the available names in the message.
 
 Any throw is a failure. Any normal return is a pass. There is no test
 framework: assertions are plain `if (…) throw new Error(…)`.
@@ -292,7 +368,10 @@ framework: assertions are plain `if (…) throw new Error(…)`.
 ```ts
 export async function runComponentContract(
   name: string,
-  opts?: { timeoutMs?: number },   // default 30_000
+  opts?: {
+    version?: string;     // target `.versions/<version>` instead of `current`
+    timeoutMs?: number,   // default 30_000
+  },
 ): Promise<{
   ok: boolean;
   durationMs: number;
@@ -302,10 +381,16 @@ export async function runComponentContract(
 }>;
 ```
 
-Exported from `src/graph.ts` beside `graph`. A host that only knows about
-`graph` never sees it; a host that does can call it. The same function is
-used in-process by the agent (before it announces a candidate version) and
-by a host at boot (to gate a restart).
+Implemented in `src/components/contract.ts` and exported from
+`src/graph.ts` beside `graph`. A host that only knows about `graph` never
+sees it; a host that does can call it. The same function is used
+in-process by the agent (before it announces a candidate version) and by a
+host at boot (to gate a restart). With `version` set, the runner targets
+`<root>/<name>/.versions/<version>/` directly under the first root that
+carries the component, so a version that has just been written can be
+checked before its pointer is flipped. The entry and the contract are
+imported fresh (cache-busted) on every run; the timer is unreferenced so a
+pending contract never keeps the process alive.
 
 **Fail-closed invariants** — every one of these is `ok: false`, never a
 throw:
@@ -315,6 +400,7 @@ throw:
 - unknown component name, or no `current` pointer
 - SDK range mismatch
 - the contract throws for any reason
+- the requested `version` does not exist, or is not a valid version
 
 The runner never throws. Anything that cannot be classified is
 `ok: false` with the error text.

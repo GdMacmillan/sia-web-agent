@@ -10,12 +10,25 @@
  */
 
 import type { BaseLanguageModel } from "@langchain/core/language_models/base";
-import type { StructuredTool } from "@langchain/core/tools";
+import type {
+  StructuredTool,
+  StructuredToolInterface,
+} from "@langchain/core/tools";
 import type { ReactAgent } from "langchain";
 import type { AnnotationRoot } from "@langchain/langgraph";
 import { MemorySaver } from "@langchain/langgraph";
 
-import { createDeepAgent, type CreateDeepAgentParams } from "./agent.js";
+import {
+  createDeepAgent,
+  KNOWN_MIDDLEWARE_NAMES,
+  type CreateDeepAgentParams,
+} from "./agent.js";
+import {
+  buildInternals,
+  isToolLike,
+  prepareComponentAssembly,
+  setActiveToolPool,
+} from "./components/index.js";
 import { createChatModel } from "./config/model-config.js";
 import { getConfig, resolveModelEndpoint } from "./config/index.js";
 import {
@@ -167,16 +180,78 @@ export async function createDeepAgentWithDefaults<
   // Create checkpointer for persisting conversation state between requests
   const checkpointer = new MemorySaver();
 
-  // Create the agent with resolved configuration
-  return createDeepAgent<ContextSchema>({
-    model,
+  // Load on-disk components (docs/COMPONENTS.md). With no component roots
+  // present this is a no-op and the stack assembles exactly as before.
+  const runtime = getConfig().runtime;
+  const assembly = await prepareComponentAssembly({
+    projectRoot,
+    componentsDir: runtime.componentsDir,
     tools,
+    knownMiddlewareNames: KNOWN_MIDDLEWARE_NAMES,
+    config: {
+      agentId: runtime.agentId,
+      agentName: runtime.agentName,
+      projectRoot,
+    },
+    internals: buildInternals(),
+  });
+
+  // Create the agent with resolved configuration. Caller-supplied
+  // `agentConfig.tools` / `middleware` / `profileOverlays` merge after the
+  // component-provided ones rather than replacing them.
+  const agent = await createDeepAgent<ContextSchema>({
+    model,
     systemPrompt: config?.systemPrompt,
     subagents: [planSubAgent, researchSubAgent, answerSubAgent],
     checkpointer,
     projectRoot,
     ...config?.agentConfig,
+    tools: [...assembly.tools, ...(config?.agentConfig?.tools ?? [])],
+    middleware: [
+      ...assembly.middleware,
+      ...(config?.agentConfig?.middleware ?? []),
+    ],
+    profileOverlays: [
+      ...assembly.profileOverlays,
+      ...(config?.agentConfig?.profileOverlays ?? []),
+    ],
   });
+
+  // Record the full tool pool (built-ins plus every middleware-provided tool)
+  // so component contracts can invoke tools by name.
+  setActiveToolPool(collectToolPool(agent));
+
+  return agent;
+}
+
+/**
+ * Every tool the assembled agent carries: the `tools` it was created with
+ * plus the `tools` each middleware contributes.
+ */
+export function collectToolPool(agent: ReactAgent): StructuredToolInterface[] {
+  const options = (
+    agent as unknown as {
+      options?: { tools?: unknown; middleware?: unknown };
+    }
+  ).options;
+  const pool: StructuredToolInterface[] = [];
+  const pushAll = (list: unknown): void => {
+    if (!Array.isArray(list)) {
+      return;
+    }
+    for (const candidate of list) {
+      if (isToolLike(candidate)) {
+        pool.push(candidate);
+      }
+    }
+  };
+  pushAll(options?.tools);
+  if (Array.isArray(options?.middleware)) {
+    for (const entry of options.middleware) {
+      pushAll((entry as { tools?: unknown } | null)?.tools);
+    }
+  }
+  return pool;
 }
 
 /**

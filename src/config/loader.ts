@@ -347,6 +347,7 @@ function loadRuntimeConfig(): RuntimeConfig {
     siaProjectRoot: env("SIA_PROJECT_ROOT") || undefined,
     siaCliSocketPath: env("SIA_CLI_SOCKET_PATH") || undefined,
     harnessProfile: env("HARNESS_PROFILE") || undefined,
+    componentsDir: env("SIA_COMPONENTS_DIR") || undefined,
     agentId: env("SIA_AGENT_ID") || "self-improving-agent",
     agentName: env("SIA_AGENT_NAME") || "Self-Improving Agent",
     workspaceId: env("SIA_WORKSPACE_ID") || undefined,

@@ -18,3 +18,8 @@ const agent = await createDeepAgentWithDefaults({ projectRoot });
 // https://langchain-ai.github.io/langgraph/cloud/reference/api/api_ref.html
 
 export const graph: any = agent.graph;
+
+// The in-process contract runner for on-disk components (docs/COMPONENTS.md
+// §6). A host that only knows about `graph` never sees it; one that does can
+// gate a component version on it.
+export { runComponentContract } from "./components/contract.js";

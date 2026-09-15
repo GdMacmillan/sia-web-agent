@@ -84,6 +84,12 @@ export default {
       functions: 60,
       lines: 60,
     },
+    "./src/components/": {
+      statements: 60,
+      branches: 60,
+      functions: 60,
+      lines: 60,
+    },
   },
   globalTeardown: "./tests/integration/global-teardown.ts",
   verbose: true,
