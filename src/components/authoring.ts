@@ -340,15 +340,32 @@ export function planComponentVersion(
   }
   const { component } = found;
   const previousVersion = component.manifest.version;
-  const nextVersion = bumpVersion(previousVersion, bump);
+  const componentDir = path.join(authoringRoot, name);
+
+  // The next number follows the highest version already present under the
+  // authoring copy — candidates still awaiting activation included — and
+  // never falls below the current one, so back-to-back candidates number
+  // 0.1.1, 0.1.2, … The parent stays the version the code is copied from.
+  const highestPresent = existsSync(componentDir)
+    ? listComponentVersions(componentDir)
+        .filter((v) => semver.valid(v) !== null)
+        .reduce<string | null>(
+          (acc, v) => (acc === null || semver.gt(v, acc) ? v : acc),
+          null,
+        )
+    : null;
+  const base =
+    highestPresent !== null && semver.gt(highestPresent, previousVersion)
+      ? highestPresent
+      : previousVersion;
+  const nextVersion = bumpVersion(base, bump);
   if (nextVersion === null) {
     return {
       ok: false,
-      reason: `cannot bump version "${previousVersion}" (${bump})`,
+      reason: `cannot bump version "${base}" (${bump})`,
     };
   }
 
-  const componentDir = path.join(authoringRoot, name);
   const versionDir = path.join(componentDir, VERSIONS_DIR, nextVersion);
   if (existsSync(versionDir)) {
     return {

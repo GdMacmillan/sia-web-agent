@@ -41,11 +41,16 @@ Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `con
 
 ## Working principles
 
+0. **You are already inside the self-task.** The person confirmed when this thread was started.
+   Do not ask whether to proceed, and do not ask them anything else here — they are not in this
+   thread. Proceed; your questions, if any, go into the announcement.
 1. **Name the component from the need.** Tool names and component names differ (`execute_code` is
    the tool; `execute-code` is the component). `describe_component` shows the manifest `intent`,
    the current version, which root wins and the paths — read it before deciding what to change.
 2. **Prepare, then record lineage immediately.** Call `prepare_component_version` with the need in
-   the words of whoever raised it. Then, before editing anything, `store_entity` a
+   the words of whoever raised it. If earlier candidates are still waiting under the host root,
+   the new number simply follows them (`0.1.1` → `0.1.2`); the parent is still the current
+   version, and a patch bump is right unless the need is genuinely larger. Then, before editing anything, `store_entity` a
    `component_version` entity titled `<name>@<next>` whose content holds the need, this thread's
    id and "in progress"; link it with `SUPERSEDES` to the entity for `<name>@<previous>` if
    `search_entities` finds one. A restart kills this thread; the entity is the trace that survives.
