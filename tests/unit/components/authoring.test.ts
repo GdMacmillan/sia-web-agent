@@ -201,12 +201,31 @@ describe("planComponentVersion", () => {
     expect(result).toMatchObject({ ok: false, reason: 'unknown component "nope"' });
   });
 
-  it("refuses when the next version already exists", () => {
-    expect(plan().ok).toBe(true);
+  it("numbers past candidates already waiting under the host copy", () => {
+    // current stays 0.1.0 while 0.1.1 waits for activation: the next patch
+    // is 0.1.2, and the parent is still the version the code came from.
+    expect(plan()).toMatchObject({ ok: true, plan: { nextVersion: "0.1.1" } });
     const again = plan();
-    expect(again).toMatchObject({ ok: false });
-    if (again.ok) return;
-    expect(again.reason).toMatch(/already exists/);
+    expect(again).toMatchObject({
+      ok: true,
+      plan: { previousVersion: "0.1.0", nextVersion: "0.1.2", copied: false },
+    });
+    if (!again.ok) return;
+    const manifest = JSON.parse(readFileSync(again.plan.manifestPath, "utf-8"));
+    expect(manifest.lineage.parent).toBe("hello@0.1.0");
+    expect(readFileSync(path.join(host, "hello", "current"), "utf-8").trim()).toBe("0.1.0");
+    expect(listComponentVersions(path.join(host, "hello"))).toEqual(["0.1.0", "0.1.1", "0.1.2"]);
+  });
+
+  it("does not number below the current version when older candidates are present", () => {
+    // A host copy carrying an old leftover (0.0.9) and a current of 0.1.0.
+    writeComponent(host, "hello", "0.1.0", {
+      entry: SERVICE_ENTRY,
+      contract: PASSING_CONTRACT,
+      currentFile: true,
+    });
+    writeComponent(host, "hello", "0.0.9", { entry: SERVICE_ENTRY, current: false });
+    expect(plan()).toMatchObject({ ok: true, plan: { previousVersion: "0.1.0", nextVersion: "0.1.1" } });
   });
 
   it("refuses invalid and traversing names before touching the filesystem", () => {

@@ -493,11 +493,15 @@ unreviewed until it did). With no host-managed root configured,
 **Layout.** On the first iteration the whole component directory is
 copied from the root that currently wins into the host-managed root —
 `current` (still naming the previous version) and `.versions/<previous>/`
-travel with it — and then `.versions/<next>/` is written from the previous
+travel with it — and then `.versions/<next>/` is written from the current
 version with its manifest rewritten: `version`, `lineage.parent =
-"<name>@<previous>"`, `lineage.need`, `lineage.producedBy`; everything else
+"<name>@<current>"`, `lineage.need`, `lineage.producedBy`; everything else
 (intent, kind, `replaces`, `depth`, profile) is carried over untouched for
-the author to edit. The copy is self-contained on purpose: the runner and
+the author to edit. `<next>` bumps the **highest version already present
+under the host copy** (candidates still awaiting activation included),
+never below the current one, so back-to-back candidates number `0.1.1`,
+`0.1.2`, … while every one of them records `current` as its parent — the
+version its code actually came from. The copy is self-contained on purpose: the runner and
 the loader stop at the first root that carries `<name>/`, so a host copy
 holding only the new version would hide the previous one from both. The
 seed then shows up as *shadowed* — the intended precedence.
