@@ -104,7 +104,9 @@ the project root (`validatePathInProject`, `src/utils/path-utils.ts`). At
 assembly each component root that exists is added to the allowed roots
 (`allowPathRoot`), both as given and fully resolved, so the agent can read
 and author component versions that live outside its own source tree. The
-allow-list is process-global by design.
+allow-list is process-global by design; `prepare_component_version` admits
+a host-managed root that appeared after assembly the same way (§6,
+*Authoring a version*).
 
 ### The seed and its in-tree twin
 
@@ -464,6 +466,70 @@ The runner never throws. Anything that cannot be classified is
 **Rejected:** running the contract over the agent's chat endpoint (a
 contract is not a conversation), and shipping a test runner to production
 installs.
+
+**Which roots the runner searches.** In precedence order: the host-managed
+root as configured at the time of the call, then the roots recorded at
+assembly, then whatever else exists on disk now — deduplicated by real
+path. A host-managed root that appeared after assembly is therefore
+searched first, which is what lets a version written during this process
+be checked (see *Authoring a version* below).
+
+### Authoring a version
+
+The agent can write the next version of one of its components itself. The
+pure part is `src/components/authoring.ts`; four tools
+(`src/tools/component-tools.ts`) put it in the agent's hands, and the
+`iterate-component` skill (`skills/iterate-component/SKILL.md`) is the
+procedure. A version is authored in a thread of the agent's own — see
+`start_self_task` (`src/tools/self-task-tool.ts`), which opens a thread on
+the agent's own server and starts a run in it.
+
+**Host-managed root only.** A new version is written under
+`SIA_COMPONENTS_DIR`, never under the seed root shipped with the source
+tree (the host re-stages that tree, and anything written there would run
+unreviewed until it did). With no host-managed root configured,
+`prepare_component_version` refuses; there is nowhere to write.
+
+**Layout.** On the first iteration the whole component directory is
+copied from the root that currently wins into the host-managed root —
+`current` (still naming the previous version) and `.versions/<previous>/`
+travel with it — and then `.versions/<next>/` is written from the previous
+version with its manifest rewritten: `version`, `lineage.parent =
+"<name>@<previous>"`, `lineage.need`, `lineage.producedBy`; everything else
+(intent, kind, `replaces`, `depth`, profile) is carried over untouched for
+the author to edit. The copy is self-contained on purpose: the runner and
+the loader stop at the first root that carries `<name>/`, so a host copy
+holding only the new version would hide the previous one from both. The
+seed then shows up as *shadowed* — the intended precedence.
+
+```
+$SIA_COMPONENTS_DIR/
+  execute-code/
+    current                 # copied; still names 0.1.0
+    .versions/
+      0.1.0/                # copied from the seed
+      0.1.1/                # the candidate: entry.ts, contract.ts, component.json
+```
+
+**`current` is never written by the agent.** Activating a version is the
+host's deliberate, separate step, after which the agent restarts. The
+version is described now and runs after activation and restart; a passing
+contract ran it out-of-process and proves behaviour, not liveness.
+
+**The tools.**
+
+| Tool | What it does |
+|---|---|
+| `describe_component({ name })` | Read-only: which root wins and why, the current version, the versions present, the manifest and the paths. Root precedence is not visible through `read_file`. |
+| `prepare_component_version({ name, need, bump? })` | The layout above under the host-managed root (created if missing), then admits that root for the filesystem tools. Returns the paths and the next step. |
+| `run_component_contract({ name, version? })` | `runComponentContract` on the named version; `contract passed for …` / `contract FAILED for …: <error>`. |
+| `announce_component_version({ name, version, summary, outcome?, channel? })` | Tells the host about the candidate and posts one message with a link to the thread (`HOST_CONTRACT.md` §3.4). Best-effort: a host without those endpoints is reported, never thrown. |
+
+Lineage lives in two places: `manifest.lineage` on disk, and a
+`component_version` entity the skill stores in memory as soon as the
+version directory exists (linked with `SUPERSEDES` to its parent). The
+entity is written early on purpose: a self-task thread lives only as long
+as the process, and a restart mid-iteration must still leave a trace.
 
 ---
 

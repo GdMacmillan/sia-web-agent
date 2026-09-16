@@ -30,6 +30,12 @@ import {
   createDeepAgentComponents,
 } from "../../src/deep-agent-setup.js";
 import { getProjectRoot } from "../../src/backend-config.js";
+import {
+  getAnswerTools,
+  getPlannerTools,
+  getResearcherTools,
+  getSubagentTools,
+} from "../../src/tools/tool-sets.js";
 import { resetConfig } from "../../src/config/index.js";
 
 const EXPECTED_TOOL_NAMES = [
@@ -54,6 +60,20 @@ const EXPECTED_TOOL_NAMES = [
   "set_dependencies",
   "get_ready_items",
   "delete_checklist",
+  "start_self_task",
+  "describe_component",
+  "prepare_component_version",
+  "run_component_contract",
+  "announce_component_version",
+];
+
+/** Tools that must stay out of the read-only sub-agents' fixed tool sets. */
+const SELF_ITERATION_TOOL_NAMES = [
+  "start_self_task",
+  "describe_component",
+  "prepare_component_version",
+  "run_component_contract",
+  "announce_component_version",
 ];
 
 /** The four Tavily-backed tools, registered together behind one key gate. */
@@ -119,6 +139,21 @@ describe("Deep Agent Setup", () => {
       const names = tools.map((t) => t.name);
       const uniqueNames = new Set(names);
       expect(uniqueNames.size).toBe(names.length);
+    });
+
+    it("keeps the self-iteration tools out of the plan, research and answer sets", () => {
+      const tools = createStandardTools("/test/project");
+      for (const pick of [getPlannerTools, getResearcherTools, getAnswerTools]) {
+        const names = pick(tools).map((t) => t.name);
+        for (const name of SELF_ITERATION_TOOL_NAMES) {
+          expect(names).not.toContain(name);
+        }
+      }
+      // The general-purpose sub-agent sees the full pool.
+      const general = getSubagentTools("general-purpose", tools).map((t) => t.name);
+      for (const name of SELF_ITERATION_TOOL_NAMES) {
+        expect(general).toContain(name);
+      }
     });
   });
 

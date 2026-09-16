@@ -134,6 +134,17 @@ the orchestrator:
   name (progressive disclosure)
 - **Checklists** (`tools/checklist-tools.ts`): `create_checklist`,
   `check_item`, `get_checklist`, and others
+- **Self-task** (`tools/self-task-tool.ts`): `start_self_task` — open a
+  thread on the agent's own server and start a run in it (background
+  work; one per conversation, no nesting). The server URL comes from
+  `SIA_SERVER_URL`, else the agent's own `--port`, else `:2024`.
+- **Component authoring** (`tools/component-tools.ts`, pure part in
+  `components/authoring.ts`): `describe_component`,
+  `prepare_component_version`, `run_component_contract`,
+  `announce_component_version` — iterate a component version under
+  `SIA_COMPONENTS_DIR` (never the seed root, never `current`); the
+  `iterate-component` skill is the procedure. See
+  [`docs/COMPONENTS.md`](docs/COMPONENTS.md) §6 *Authoring a version*.
 - **Code Execution** (`components/execute-code`, the seed component;
   `code-execution.ts` is its bundled twin): `execute_code` —
   TypeScript/JavaScript via `tsx` (the default surface)
@@ -249,11 +260,12 @@ the agent via the `load_skill` tool — the progressive-disclosure
 pattern keeps token usage bounded while exposing a wide capability
 surface.
 
-Current skills (16): `bash-usage`, `checklist`, `code-execution`,
-`codebase-navigation`, `find-replace`, `memory-management`,
-`meta-awareness`, `planning`, `prompt-engineering`, `rapids-research`,
-`research`, `solid`, `system-prompt-review`, `task-delegation`,
-`task-management`, `web-search`. Plus `skills/README.md` for orientation.
+Current skills (17): `bash-usage`, `checklist`, `code-execution`,
+`codebase-navigation`, `find-replace`, `iterate-component`,
+`memory-management`, `meta-awareness`, `planning`, `prompt-engineering`,
+`rapids-research`, `research`, `solid`, `system-prompt-review`,
+`task-delegation`, `task-management`, `web-search`. Plus
+`skills/README.md` for orientation.
 
 To add a skill: create `skills/<name>/SKILL.md` with the required
 frontmatter (see existing skills for the schema). The agent will

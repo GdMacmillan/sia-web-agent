@@ -44,6 +44,8 @@ import {
   promoteEntitiesTool,
   traverseGraphTool,
   createChecklistTools,
+  createSelfTaskTool,
+  createComponentTools,
 } from "./tools/index.js";
 import { isConfigured as isWebSearchConfigured } from "./web-search/tavily-client.js";
 import { getProjectRoot } from "./backend-config.js";
@@ -100,6 +102,9 @@ export interface DeepAgentConfig<
  * - set_dependencies: Set or update dependencies for a checklist item
  * - get_ready_items: Get all items ready to work on (not blocked or completed)
  * - delete_checklist: Delete a checklist
+ * - start_self_task: Start background work in a new thread of your own
+ * - describe_component / prepare_component_version / run_component_contract /
+ *   announce_component_version: Iterate a component version (see docs/COMPONENTS.md)
  *
  * NOTE: Memory tools require the Graph-Memory API to be running:
  * - yarn graph-db:compile (build Go backend)
@@ -132,6 +137,10 @@ export function createStandardTools(projectRoot: string): StructuredTool[] {
     traverseGraphTool,
     // Dependency-aware checklist tools for workflow coordination
     ...createChecklistTools(),
+    // Start a thread on yourself (background work), and the component
+    // authoring tools that thread uses to iterate a component version.
+    createSelfTaskTool(),
+    ...createComponentTools(),
   ];
 }
 

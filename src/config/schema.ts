@@ -254,6 +254,13 @@ export interface RuntimeConfig {
    * seed root is read. See `docs/COMPONENTS.md`.
    */
   componentsDir: string | undefined;
+  /**
+   * Base URL of the server this agent runs inside (`SIA_SERVER_URL`).
+   *
+   * Used by the agent to open threads on itself. Optional: when unset the
+   * agent derives it from its own `--port` argument, else `:2024`.
+   */
+  serverUrl: string | undefined;
   /** Unique agent identifier (default: "self-improving-agent") */
   agentId: string;
   /** Human-friendly agent name (default: "Self-Improving Agent") */

@@ -96,6 +96,19 @@ spec: [`COMPONENTS.md`](./COMPONENTS.md).
 | `SIA_COMPONENTS_DIR` | unset | Host-managed component root (`<name>/current/component.json`). Shadows the seed components in `<projectRoot>/components`. Unset → seed components only. Read once at assembly by `src/components/assemble.ts` (`getConfig().runtime.componentsDir`); see [`COMPONENTS.md`](./COMPONENTS.md). |
 | `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON list of remote tool servers with optional scope tags. Missing → no remote tools. |
 
+New component versions (`prepare_component_version`) are written under
+`SIA_COMPONENTS_DIR` only; with it unset the tool refuses. The
+`announce_component_version` tool posts to `{SIA_DAEMON_URL}/chat/publish`
+and `{SIA_DAEMON_URL}/chat/component-version` with `SIA_DAEMON_TOKEN`
+(see [`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §3.4); with either unset the
+summary stays in the thread.
+
+### Own server
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIA_SERVER_URL` | derived from `--port`, else `http://127.0.0.1:2024` | Base URL of the server the agent runs inside. `start_self_task` opens threads on it. Read by `src/tools/self-task-tool.ts` (`resolveOwnServerUrl`); also `getConfig().runtime.serverUrl`. |
+
 ### Web search
 
 | Variable | Default | Purpose |

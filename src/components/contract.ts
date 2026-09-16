@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import semver from "semver";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -19,12 +19,8 @@ import {
   normalizeToolResult,
 } from "../code-execution/ipc-bridge.js";
 import { resolveComponentRoots } from "./assemble.js";
-import {
-  VERSIONS_DIR,
-  describeComponentVersion,
-  discoverComponents,
-  type DiscoveredComponent,
-} from "./discovery.js";
+import { readComponentVersion } from "./authoring.js";
+import { discoverComponents, type DiscoveredComponent } from "./discovery.js";
 import {
   defaultImportModule,
   isMiddlewareLike,
@@ -76,16 +72,39 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The roots to search: the active set's, else whatever exists on disk now. */
+/**
+ * The roots to search, in precedence order: the host-managed root as
+ * configured now (so one that appeared after assembly is searched, and a
+ * version written into it during this process can be checked), then the
+ * roots recorded at assembly, then whatever else exists on disk now.
+ * Deduplicated by real path.
+ */
 function contractRoots(): string[] {
-  const active = getActiveComponents().roots;
-  if (active.length > 0) {
-    return [...active];
-  }
-  return resolveComponentRoots({
+  const componentsDir = getConfig().runtime.componentsDir;
+  const now = resolveComponentRoots({
     projectRoot: getProjectRoot(),
-    componentsDir: getConfig().runtime.componentsDir,
+    componentsDir,
   });
+  const host =
+    componentsDir === undefined
+      ? []
+      : now.filter((root) => root === path.resolve(componentsDir));
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const root of [...host, ...getActiveComponents().roots, ...now]) {
+    let key: string;
+    try {
+      key = realpathSync(root);
+    } catch (_error) {
+      key = path.resolve(root);
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    roots.push(root);
+  }
+  return roots;
 }
 
 /** Resolve `name` (and optionally `version`) to a described component. */
@@ -107,46 +126,7 @@ function resolveTarget(
     return { ok: false, reason: `unknown component "${name}"` };
   }
 
-  if (semver.valid(version) === null) {
-    return { ok: false, reason: `invalid version "${version}"` };
-  }
-  for (const rawRoot of roots) {
-    const root = path.resolve(rawRoot);
-    const componentDir = path.join(root, name);
-    if (!existsSync(componentDir)) {
-      continue;
-    }
-    if (!isSafePath(componentDir, root)) {
-      return {
-        ok: false,
-        reason: "component directory resolves outside the component root",
-      };
-    }
-    const target = path.join(componentDir, VERSIONS_DIR, version);
-    if (!existsSync(target)) {
-      return {
-        ok: false,
-        reason: `version "${version}" of "${name}" not found`,
-      };
-    }
-    if (!isSafePath(target, root)) {
-      return {
-        ok: false,
-        reason: `version "${version}" resolves outside the component root`,
-      };
-    }
-    let versionDir: string;
-    try {
-      versionDir = realpathSync(target);
-      if (!statSync(versionDir).isDirectory()) {
-        return { ok: false, reason: `version "${version}" is not a directory` };
-      }
-    } catch (error: unknown) {
-      return { ok: false, reason: errorMessage(error) };
-    }
-    return describeComponentVersion(root, name, versionDir, version);
-  }
-  return { ok: false, reason: `unknown component "${name}"` };
+  return readComponentVersion({ name, version, roots });
 }
 
 /** The tools a component value itself contributes, by kind. */
