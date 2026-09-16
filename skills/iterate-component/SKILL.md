@@ -22,7 +22,7 @@ do here changes what is live.
 | `describe_component`         | Which root wins, the current version, the versions present, the manifest, the paths         |
 | `prepare_component_version`  | Lay out `.versions/<next>/` under the host-managed root with the manifest already rewritten |
 | `run_component_contract`     | Run a version's contract out-of-process; pass/fail with the error text                      |
-| `announce_component_version` | Tell the host about the candidate and post one message with a link to this thread           |
+| `announce_component_version` | Tell the host about the candidate (and, when enabled, post one message linking this thread) |
 
 Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `contract.ts`, and
 `search_entities` / `store_entity` / `update_entity` for lineage.

@@ -33,6 +33,17 @@ import { resolveOwnServerUrl } from "./self-task-tool.js";
 export const DEFAULT_ANNOUNCE_TIMEOUT_MS = 10_000;
 /** Where a room message goes when the thread carries no channel of its own. */
 export const DEFAULT_ANNOUNCE_CHANNEL = "general";
+/**
+ * Env switch for the room message. Off unless set to a truthy value: an
+ * announcement in a shared room reaches every participant, each of whom
+ * decides whether to answer it, so it stays opt-in. The host event is
+ * always sent.
+ */
+export const ANNOUNCE_TO_CHAT_ENV = "SIA_ANNOUNCE_TO_CHAT";
+
+function isTruthy(value: string | undefined): boolean {
+  return /^(1|true|yes|on)$/i.test((value ?? "").trim());
+}
 
 export interface ComponentToolsOptions {
   /** The source tree root (default: the resolved project root). */
@@ -47,6 +58,8 @@ export interface ComponentToolsOptions {
   /** Overrides `SIA_DAEMON_URL` / `SIA_DAEMON_TOKEN`. */
   daemonUrl?: string;
   daemonToken?: string;
+  /** Overrides `SIA_ANNOUNCE_TO_CHAT` (default: off). */
+  announceToChat?: boolean;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   /** Overrides the resolved own-server URL (used to read the current thread). */
@@ -267,9 +280,10 @@ export function createComponentTools(
     name: "announce_component_version",
     description:
       "Announce the outcome of a component iteration: tells the host about " +
-      "a candidate version and posts one message to the room the work came " +
-      "from (or the default room) with a link to this thread. Call it once, " +
-      "after the contract ran. outcome is \"candidate\" (default) or \"failed\".",
+      "a candidate version and, when room announcements are enabled, posts " +
+      "one message to the room the work came from (or the default room) with " +
+      "a link to this thread. Call it once, after the contract ran. outcome " +
+      "is \"candidate\" (default) or \"failed\".",
     schema: z.object({
       name: z.string().describe("The component name."),
       version: z.string().describe("The version this thread produced."),
@@ -394,6 +408,14 @@ export function createComponentTools(
         }
       } else {
         report.push("candidate event: skipped (outcome is failed).");
+      }
+
+      const chatEnabled = opts.announceToChat ?? isTruthy(env[ANNOUNCE_TO_CHAT_ENV]);
+      if (!chatEnabled) {
+        report.push(
+          `room message: off (${ANNOUNCE_TO_CHAT_ENV} is not set); the summary stays in this thread.`,
+        );
+        return `${report.join("\n")}\n\n${text}`;
       }
 
       try {
