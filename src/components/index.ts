@@ -74,6 +74,24 @@ export {
   type PrepareComponentAssemblyOptions,
 } from "./assemble.js";
 export {
+  VERSION_BUMPS,
+  bumpVersion,
+  describeComponent,
+  isVersionBump,
+  listComponentVersions,
+  planComponentVersion,
+  readComponentVersion,
+  type ComponentDescription,
+  type DescribeComponentInput,
+  type DescribeComponentResult,
+  type PlanComponentVersionInput,
+  type PlanComponentVersionResult,
+  type PlannedComponentVersion,
+  type ReadComponentVersionInput,
+  type ReadComponentVersionResult,
+  type VersionBump,
+} from "./authoring.js";
+export {
   DEFAULT_CONTRACT_TIMEOUT_MS,
   runComponentContract,
   type ContractResult,

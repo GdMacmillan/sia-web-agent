@@ -1,0 +1,428 @@
+/**
+ * Component tools — the four small operations behind authoring a new
+ * component version: describe a component as the loader sees it, lay out
+ * the next version under the host-managed root, run a version's contract,
+ * and announce the outcome. See `docs/COMPONENTS.md` §Authoring a version.
+ *
+ * The filesystem work is `src/components/authoring.ts`; these tools add
+ * the configuration (which roots, which agent) and turn results into text.
+ * Every failure is a result string, never a throw.
+ */
+
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import { z } from "zod/v4";
+import { getConfig } from "../config/index.js";
+import {
+  SEED_COMPONENTS_DIRNAME,
+  describeComponent,
+  isVersionBump,
+  planComponentVersion,
+  readComponentVersion,
+  resolveComponentRoots,
+  runComponentContract,
+  type RunContractOptions,
+  type VersionBump,
+} from "../components/index.js";
+import { allowPathRoot, getProjectRoot } from "../utils/path-utils.js";
+import { resolveOwnServerUrl } from "./self-task-tool.js";
+
+/** Longest any single call to the host may take. */
+export const DEFAULT_ANNOUNCE_TIMEOUT_MS = 10_000;
+/** Where a room message goes when the thread carries no channel of its own. */
+export const DEFAULT_ANNOUNCE_CHANNEL = "general";
+
+export interface ComponentToolsOptions {
+  /** The source tree root (default: the resolved project root). */
+  projectRoot?: string;
+  /**
+   * The host-managed component root. When the key is present it replaces
+   * the configured `SIA_COMPONENTS_DIR` (explicitly `undefined` = none).
+   */
+  componentsDir?: string | undefined;
+  agentId?: string;
+  agentName?: string;
+  /** Overrides `SIA_DAEMON_URL` / `SIA_DAEMON_TOKEN`. */
+  daemonUrl?: string;
+  daemonToken?: string;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  /** Overrides the resolved own-server URL (used to read the current thread). */
+  serverUrl?: string;
+  argv?: readonly string[];
+  timeoutMs?: number;
+  /** Runner options handed through to `runComponentContract`. */
+  contract?: Pick<RunContractOptions, "importModule" | "config" | "timeoutMs">;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function threadIdFrom(config?: RunnableConfig): string | undefined {
+  const threadId = config?.configurable?.thread_id;
+  return typeof threadId === "string" && threadId.length > 0 ? threadId : undefined;
+}
+
+function coerceBump(value: unknown): VersionBump | null {
+  if (value === undefined || value === null || value === "") {
+    return "patch";
+  }
+  const lowered = String(value).trim().toLowerCase();
+  return isVersionBump(lowered) ? lowered : null;
+}
+
+function coerceOutcome(value: unknown): "candidate" | "failed" {
+  return String(value ?? "").trim().toLowerCase() === "failed" ? "failed" : "candidate";
+}
+
+function realpathOr(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch (_error) {
+    return path.resolve(dir);
+  }
+}
+
+/** Build the announcement text posted to the room. */
+export function buildAnnouncementText(input: {
+  name: string;
+  version: string;
+  summary: string;
+  outcome: "candidate" | "failed";
+  agentId: string;
+  threadId?: string;
+}): string {
+  const head =
+    input.outcome === "failed"
+      ? `**${input.name}@${input.version}** — could not produce a passing version. ${input.summary}`
+      : `**${input.name}@${input.version}** — ${input.summary}`;
+  if (!input.threadId) {
+    return head;
+  }
+  const link = `/chat?agentId=${encodeURIComponent(input.agentId)}&threadId=${encodeURIComponent(input.threadId)}`;
+  return `${head}\n\n[Open the thread](${link})`;
+}
+
+/** Create the four component tools. Every option is injectable for tests. */
+export function createComponentTools(
+  opts: ComponentToolsOptions = {},
+): DynamicStructuredTool[] {
+  const env = opts.env ?? process.env;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_ANNOUNCE_TIMEOUT_MS;
+
+  const projectRoot = (): string => opts.projectRoot ?? getProjectRoot();
+  const hostRoot = (): string | undefined =>
+    Object.hasOwn(opts, "componentsDir")
+      ? opts.componentsDir
+      : getConfig().runtime.componentsDir;
+  const seedRoot = (): string => path.join(projectRoot(), SEED_COMPONENTS_DIRNAME);
+  const roots = (): string[] =>
+    resolveComponentRoots({ projectRoot: projectRoot(), componentsDir: hostRoot() });
+  const agentId = (): string => opts.agentId ?? getConfig().runtime.agentId;
+  const agentName = (): string => opts.agentName ?? getConfig().runtime.agentName;
+
+  const rootLabel = (root: string): string => {
+    const host = hostRoot();
+    if (host !== undefined && realpathOr(root) === realpathOr(host)) {
+      return "host-managed root";
+    }
+    if (realpathOr(root) === realpathOr(seedRoot())) {
+      return "seed root shipped with the source tree (read-only for authoring)";
+    }
+    return "root";
+  };
+
+  const describeTool = new DynamicStructuredTool({
+    name: "describe_component",
+    description:
+      "Describe one of your components as the loader sees it: which root " +
+      "wins, the current version, the versions present, the manifest " +
+      "(intent, kind, lineage) and the entry/contract paths. Read-only. " +
+      "Use it before iterating a component.",
+    schema: z.object({
+      name: z.string().describe('The component name (directory name, e.g. "execute-code").'),
+    }),
+    func: async ({ name }: { name: string }): Promise<string> => {
+      const result = describeComponent({ name, roots: roots() });
+      if (!result.ok) {
+        return `Cannot describe component: ${result.reason}`;
+      }
+      const d = result.description;
+      const host = hostRoot();
+      const lines = [
+        `Component "${d.name}"`,
+        `  current version: ${d.currentVersion} (kind ${d.manifest.kind}${d.manifest.replaces ? `, replaces ${d.manifest.replaces}` : ""})`,
+        `  intent: ${d.manifest.intent}`,
+        `  winning root: ${d.root} (${rootLabel(d.root)}; the first root in precedence order that carries the component wins)`,
+        `  shadowed roots: ${d.shadowedRoots.length > 0 ? d.shadowedRoots.join(", ") : "none"}`,
+        `  versions present: ${d.versions.join(", ") || "none"}`,
+        `  version directory: ${d.versionDir}`,
+        `  entry: ${d.entryPath}`,
+        `  contract: ${d.contractPath}`,
+        `  manifest: ${JSON.stringify(d.manifest)}`,
+      ];
+      if (host === undefined) {
+        lines.push(
+          "  note: no host-managed component root is configured (SIA_COMPONENTS_DIR); a new version cannot be written until one is.",
+        );
+      } else {
+        lines.push(`  host-managed root: ${host} (new versions are written there, never here: ${seedRoot()})`);
+      }
+      return lines.join("\n");
+    },
+  });
+
+  const prepareTool = new DynamicStructuredTool({
+    name: "prepare_component_version",
+    description:
+      "Lay out the next version of a component under the host-managed " +
+      "component root: copies the component there if needed, creates " +
+      ".versions/<next>/ from the current version, and writes its manifest " +
+      "(version, lineage.parent, lineage.need). Never touches `current`. " +
+      "Returns the paths to edit next.",
+    schema: z.object({
+      name: z.string().describe("The component name."),
+      need: z
+        .string()
+        .describe("The need this version answers, in the words of whoever raised it."),
+      bump: z
+        .string()
+        .optional()
+        .describe('How far to move the version: "patch" (default), "minor" or "major".'),
+    }),
+    func: async ({
+      name,
+      need,
+      bump,
+    }: {
+      name: string;
+      need: string;
+      bump?: string;
+    }): Promise<string> => {
+      const coercedBump = coerceBump(bump);
+      if (coercedBump === null) {
+        return `Cannot prepare a version: bump must be "patch", "minor" or "major" (got ${JSON.stringify(bump)}).`;
+      }
+      const result = planComponentVersion({
+        name,
+        roots: roots(),
+        authoringRoot: hostRoot(),
+        seedRoot: seedRoot(),
+        bump: coercedBump,
+        need,
+        producedBy: agentId(),
+      });
+      if (!result.ok) {
+        return `Cannot prepare a version: ${result.reason}`;
+      }
+      const p = result.plan;
+      // The filesystem tools are bounded to known roots; a host root that
+      // appeared after assembly must be admitted (both spellings) so the
+      // new version can be edited.
+      allowPathRoot(p.root);
+      allowPathRoot(realpathOr(p.root));
+      return [
+        `Prepared ${p.name}@${p.nextVersion} from ${p.name}@${p.previousVersion} under ${p.root}${p.copied ? " (the component was copied there first)" : ""}.`,
+        `  version directory: ${p.versionDir}`,
+        `  manifest: ${p.manifestPath} (version, lineage.parent and lineage.need are set)`,
+        `  entry: ${p.entryPath}`,
+        `  contract: ${p.contractPath}`,
+        `\`current\` still names ${p.previousVersion}; do not change it — activating a version is the host's step, after which the agent restarts.`,
+        `Next: store the lineage entity, edit ${p.entryPath} (and add a contract case for the need), then run_component_contract({ name: "${p.name}", version: "${p.nextVersion}" }).`,
+      ].join("\n");
+    },
+  });
+
+  const runTool = new DynamicStructuredTool({
+    name: "run_component_contract",
+    description:
+      "Run a component's contract out-of-process against a specific " +
+      "version (or the current one) and report pass/fail with the error " +
+      "text. A pass proves the version behaves; it does not activate it.",
+    schema: z.object({
+      name: z.string().describe("The component name."),
+      version: z
+        .string()
+        .optional()
+        .describe("The version to check (default: the current version)."),
+    }),
+    func: async ({ name, version }: { name: string; version?: string }): Promise<string> => {
+      const target = version?.trim() || undefined;
+      const result = await runComponentContract(name, {
+        ...(opts.contract ?? {}),
+        ...(target !== undefined ? { version: target } : {}),
+      });
+      const label = `${name}@${result.version ?? target ?? "current"}`;
+      if (result.ok) {
+        return `contract passed for ${label} in ${result.durationMs} ms (SDK ${result.sdkVersion})`;
+      }
+      return `contract FAILED for ${label}: ${result.error ?? "unknown error"}`;
+    },
+  });
+
+  const announceTool = new DynamicStructuredTool({
+    name: "announce_component_version",
+    description:
+      "Announce the outcome of a component iteration: tells the host about " +
+      "a candidate version and posts one message to the room the work came " +
+      "from (or the default room) with a link to this thread. Call it once, " +
+      "after the contract ran. outcome is \"candidate\" (default) or \"failed\".",
+    schema: z.object({
+      name: z.string().describe("The component name."),
+      version: z.string().describe("The version this thread produced."),
+      summary: z
+        .string()
+        .describe("What changed and why, in one or two sentences, for a person."),
+      outcome: z
+        .string()
+        .optional()
+        .describe('"candidate" when the contract passed (default), "failed" when it could not.'),
+      channel: z
+        .string()
+        .optional()
+        .describe("Room to post to (default: the room this thread came from, else the default room)."),
+    }),
+    func: async (
+      {
+        name,
+        version,
+        summary,
+        outcome,
+        channel,
+      }: {
+        name: string;
+        version: string;
+        summary: string;
+        outcome?: string;
+        channel?: string;
+      },
+      _runManager?: unknown,
+      config?: RunnableConfig,
+    ): Promise<string> => {
+      const kind = coerceOutcome(outcome);
+      const trimmedSummary = (summary ?? "").trim();
+      if (!trimmedSummary) {
+        return "Cannot announce: the summary is empty.";
+      }
+
+      const manifest = readComponentVersion({ name, version, roots: roots() });
+      if (!manifest.ok && kind === "candidate") {
+        return `Cannot announce a candidate: ${manifest.reason}`;
+      }
+      const parentVersion = manifest.ok ? manifest.component.manifest.lineage.parent : undefined;
+      const need = manifest.ok ? manifest.component.manifest.lineage.need : undefined;
+
+      const id = agentId();
+      const threadId = threadIdFrom(config);
+      const fetchImpl = opts.fetchImpl ?? fetch;
+      const report: string[] = [];
+
+      // The thread's own metadata says which room the work came from.
+      let inheritedChannel: string | undefined;
+      if (threadId !== undefined) {
+        const serverUrl = (
+          opts.serverUrl ?? resolveOwnServerUrl({ env, argv: opts.argv })
+        ).replace(/\/+$/, "");
+        try {
+          const res = await fetchImpl(`${serverUrl}/threads/${encodeURIComponent(threadId)}`, {
+            method: "GET",
+            headers: { "X-SIA-Agent-Id": id },
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+          if (res.ok) {
+            const thread = (await res.json()) as { metadata?: Record<string, unknown> };
+            const value = thread?.metadata?.channel;
+            if (typeof value === "string" && value) {
+              inheritedChannel = value;
+            }
+          }
+        } catch (_error) {
+          // The room falls back to the default below.
+        }
+      }
+      const room = channel?.trim() || inheritedChannel || DEFAULT_ANNOUNCE_CHANNEL;
+      const text = buildAnnouncementText({
+        name,
+        version,
+        summary: trimmedSummary,
+        outcome: kind,
+        agentId: id,
+        threadId,
+      });
+
+      const daemonUrl = (opts.daemonUrl ?? env.SIA_DAEMON_URL ?? "").trim().replace(/\/+$/, "");
+      const daemonToken = (opts.daemonToken ?? env.SIA_DAEMON_TOKEN ?? "").trim();
+      if (!daemonUrl || !daemonToken) {
+        return `host chat endpoint not configured; the summary stays in this thread:\n${text}`;
+      }
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${daemonToken}`,
+      };
+
+      if (kind === "candidate") {
+        try {
+          const res = await fetchImpl(`${daemonUrl}/chat/component-version`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              agentId: id,
+              name,
+              version,
+              parentVersion,
+              need,
+              summary: trimmedSummary,
+              threadId,
+              timestamp: new Date().toISOString(),
+            }),
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+          if (res.ok) {
+            report.push(`candidate event: accepted by the host (${res.status}).`);
+          } else if (res.status === 404) {
+            report.push(
+              "candidate event: the host does not accept component-version events yet (404); the version is described on disk and the message below still goes out.",
+            );
+          } else {
+            report.push(`candidate event: rejected by the host (${res.status}).`);
+          }
+        } catch (error: unknown) {
+          report.push(`candidate event: failed (${errorMessage(error)}).`);
+        }
+      } else {
+        report.push("candidate event: skipped (outcome is failed).");
+      }
+
+      try {
+        const res = await fetchImpl(`${daemonUrl}/chat/publish`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            agentId: id,
+            channel: room,
+            sender: agentName(),
+            isAgent: true,
+            ...(threadId !== undefined ? { threadId } : {}),
+            text,
+            timestamp: new Date().toISOString(),
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (res.ok) {
+          report.push(`message posted to "${room}" (${res.status}).`);
+        } else {
+          report.push(`message to "${room}" rejected by the host (${res.status}); the summary stays in this thread.`);
+        }
+      } catch (error: unknown) {
+        report.push(`message to "${room}" failed (${errorMessage(error)}); the summary stays in this thread.`);
+      }
+
+      return `${report.join("\n")}\n\n${text}`;
+    },
+  });
+
+  return [describeTool, prepareTool, runTool, announceTool];
+}

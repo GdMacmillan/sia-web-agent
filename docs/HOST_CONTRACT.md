@@ -112,6 +112,24 @@ the pointer is the host's act) and should gate a restart on
 | `SIA_DAEMON_URL` | Base URL of the host's RPC endpoint. Defaults to `http://127.0.0.1:7700`. | No |
 | `SIA_DAEMON_TOKEN` | Bearer token for `POST {SIA_DAEMON_URL}/rpc/call`. Empty disables graph memory (calls are rejected by the host). | Required iff graph memory should work |
 
+The same base URL and token are used for the optional chat endpoints of §3.4.
+
+### 1.7 Own server (optional)
+
+| Variable | Purpose | Required |
+|---|---|---|
+| `SIA_SERVER_URL` | Base URL of the server the agent runs inside. `start_self_task` opens threads there (`POST /threads`, `POST /threads/{id}/runs/stream`) and the component tools read the current thread's metadata from it. | No — when unset the agent uses the `--port` its server was started with (`--port <n>`, `--port=<n>`, `-p <n>`), else `http://127.0.0.1:2024` |
+
+Threads the agent opens on itself carry `X-SIA-Agent-Id: {SIA_AGENT_ID}`
+and `metadata.self_task = true` (plus `agent_id`, `sia_agent_id`,
+`parent_thread_id`, `task`, and `channel` / `skill` when known). A host
+that attributes threads by that header or by `metadata.agent_id` sees them
+as the agent's own. A self-task run lives only as long as the agent
+process: the agent reads the run's stream to its end in the background,
+and a restart mid-run leaves the thread without a persisted result — which
+is why the `iterate-component` skill records lineage in memory before it
+edits anything.
+
 ---
 
 ## 2. Loopback HTTP endpoint (agent → host at invoke)
@@ -238,6 +256,56 @@ them against the definition it serves and refuses a mismatch.
 Every throw surfaces to the tool as a string result; graph-memory
 failures never crash a run. The adapter has no retry.
 
+### 3.4 Chat endpoints (agent → host, optional)
+
+`announce_component_version` (see [`COMPONENTS.md`](./COMPONENTS.md) §6,
+*Authoring a version*) uses the same base URL and bearer as §3. Both calls
+are best-effort: any failure is reported in the tool result, never
+thrown, and with `SIA_DAEMON_URL` or `SIA_DAEMON_TOKEN` unset neither is
+attempted.
+
+**Room message** — an endpoint the host implements:
+
+```
+POST {SIA_DAEMON_URL}/chat/publish
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+Content-Type: application/json
+
+{
+  "agentId": "<SIA_AGENT_ID>",
+  "channel": "<room>",            // the thread's channel, else "general"
+  "sender": "<SIA_AGENT_NAME>",
+  "isAgent": true,
+  "threadId": "<thread id>",       // the self-task thread; lets the host link the sender
+  "text": "**<name>@<version>** — <summary>\n\n[Open the thread](/chat?agentId=<id>&threadId=<thread id>)",
+  "timestamp": "<ISO 8601>"
+}
+```
+
+**Candidate version event** — an endpoint the host *may* implement. A
+`404` is expected from a host that does not, and is reported as such:
+
+```
+POST {SIA_DAEMON_URL}/chat/component-version
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+Content-Type: application/json
+
+{
+  "agentId": "<SIA_AGENT_ID>",
+  "name": "execute-code",
+  "version": "0.1.1",
+  "parentVersion": "execute-code@0.1.0",
+  "need": "<lineage.need>",
+  "summary": "<what changed and why>",
+  "threadId": "<thread id>",
+  "timestamp": "<ISO 8601>"
+}
+```
+
+The event is sent only for a candidate (a version whose contract passed);
+a failed outcome posts the room message alone. Activating the version
+remains the host's step (§1.5).
+
 ---
 
 ## 4. Security model
@@ -274,7 +342,8 @@ Explicitly out of scope of this contract:
   `~/.siad/`-style state. The one on-disk surface is the component roots
   of §1.5, and only when the host chooses to stamp them.
 
-A host that satisfies §1 + §2 above is sufficient; §3 adds graph memory.
+A host that satisfies §1 + §2 above is sufficient; §3 adds graph memory
+and, with §3.4, the announcements of authored component versions.
 Anything more is implementation detail.
 
 ---
