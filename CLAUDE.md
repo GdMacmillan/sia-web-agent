@@ -63,6 +63,7 @@ src/                     # agent source
 ├── types/               # shared types
 ├── utils/               # shared utilities
 └── web-search/          # Tavily backend
+components/              # seed component versions (execute-code)
 prompts/                 # manager / planner / researcher / answer system prompts
 skills/                  # extended capabilities loaded on demand
 tests/                   # unit, integration, debugging
@@ -133,7 +134,8 @@ the orchestrator:
   name (progressive disclosure)
 - **Checklists** (`tools/checklist-tools.ts`): `create_checklist`,
   `check_item`, `get_checklist`, and others
-- **Code Execution** (`code-execution.ts`): `execute_code` —
+- **Code Execution** (`components/execute-code`, the seed component;
+  `code-execution.ts` is its bundled twin): `execute_code` —
   TypeScript/JavaScript via `tsx` (the default surface)
 - **Code Interpreter** (`src/code-interpreter/`, opt-in via
   `ENABLE_CODE_INTERPRETER=true`): `eval` — JavaScript in a sandboxed
@@ -192,16 +194,22 @@ The agent's runtime behavior is defined by:
 - **Components** (`src/components/`) — versioned units of agent code
   loaded from disk at assembly, from `SIA_COMPONENTS_DIR` and then
   `<projectRoot>/components`. Each version ships a strict `component.json`
-  manifest, a dependency-injected `entry.ts` factory (it imports nothing;
-  everything arrives on `ComponentDeps`, `SDK_VERSION = "1.0.0"`) and a
-  `contract.ts` the agent runs in-process (`runComponentContract`,
-  exported from `src/graph.ts` beside `graph`). A `kind: middleware`
-  component with `replaces` swaps a bundled middleware by name at both
-  the main and the sub-agent site; `kind: tools` appends tools after the
-  built-ins; `kind: service` publishes a value for other components. A
-  bad component is skipped with a warning, never fatal; with no component
-  root present the stack assembles exactly as before. See
-  [`docs/COMPONENTS.md`](docs/COMPONENTS.md).
+  manifest, a dependency-injected `entry.ts` factory (it imports nothing
+  at runtime; everything arrives on `ComponentDeps`,
+  `SDK_VERSION = "1.1.0"`) and a `contract.ts` the agent runs in-process
+  (`runComponentContract`, exported from `src/graph.ts` beside `graph`).
+  A `kind: middleware` component with `replaces` swaps a bundled
+  middleware by name at both the main and the sub-agent site;
+  `kind: tools` appends tools after the built-ins; `kind: service`
+  publishes a value for other components. A bad component is skipped
+  with a warning, never fatal; with no component root present the stack
+  assembles exactly as before. The first component ships as the **seed**
+  `components/execute-code` (the `execute_code` wrapper, with a six-case
+  black-box contract); its bundled registration
+  (`src/middleware/code-execution.ts`) evaluates a byte-identical in-tree
+  twin (`src/components/seed/`, refreshed by `yarn sync:seed`, pinned by
+  `tests/unit/components/seed-parity.test.ts`) so a broken seed can never
+  remove the tool. See [`docs/COMPONENTS.md`](docs/COMPONENTS.md).
 
 Both are first-class self-modification surfaces. When the agent is
 asked to improve itself or repurpose for a new role, it modifies these
@@ -267,9 +275,19 @@ Standalone use needs neither — only an LLM API key.
 ## Code execution
 
 The `execute_code` tool runs TypeScript/JavaScript via `tsx`.
-TypeScript only — Python will fail. Default timeout 60s, max 5 min.
-Sessions are thread-isolated at `.code-workspace/{thread_id}/`. See
+TypeScript only — Python will fail. Default timeout 60s, max 5 min; a
+timed-out run returns `Execution timed out after <n> ms`. Sessions are
+thread-isolated at `.code-workspace/{thread_id}/`. See
 `skills/code-execution/SKILL.md` for the full guide.
+
+The tool's wrapper is the seed component
+`components/execute-code/.versions/<version>/entry.ts`; the heavy
+internals (session manager, IPC bridge, tool-API generator) stay in
+`src/code-execution/` and reach it through `deps.internals.codeExecution`.
+Change the wrapper by adding a new version directory and running its
+contract, not by editing `src/middleware/code-execution.ts` — that file
+only evaluates the in-tree twin. After editing the seed's current entry,
+run `yarn sync:seed`.
 
 ## Implementation patterns
 

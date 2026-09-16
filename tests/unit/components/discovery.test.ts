@@ -102,6 +102,82 @@ describe("discoverComponents", () => {
     expect(skipped[0].reason).toMatch(/inside ".versions"/);
   });
 
+  describe("current as a one-line file", () => {
+    it("accepts a regular file naming the version directory", () => {
+      writeComponent(root, "hello", "0.1.0", {
+        entry: SERVICE_ENTRY,
+        currentFile: true,
+      });
+      const { found, skipped } = discoverComponents([root]);
+      expect(skipped).toEqual([]);
+      expect(found).toHaveLength(1);
+      expect(found[0].manifest.version).toBe("0.1.0");
+      expect(found[0].versionDir).toBe(
+        realpathSync(path.join(root, "hello", ".versions", "0.1.0")),
+      );
+    });
+
+    it("tolerates surrounding whitespace in the file", () => {
+      writeComponent(root, "hello", "0.1.0", {
+        entry: SERVICE_ENTRY,
+        currentFile: true,
+        currentText: "  0.1.0 \r\n",
+      });
+      const { found, skipped } = discoverComponents([root]);
+      expect(skipped).toEqual([]);
+      expect(found).toHaveLength(1);
+    });
+
+    it("skips a file whose content is not a version name", () => {
+      writeComponent(root, "hello", "0.1.0", {
+        entry: SERVICE_ENTRY,
+        currentFile: true,
+        currentText: "0.1.0 or maybe 0.2.0\n",
+      });
+      const { found, skipped } = discoverComponents([root]);
+      expect(found).toEqual([]);
+      expect(skipped[0].reason).toMatch(/"current" file must name a version/);
+    });
+
+    it("skips an empty file", () => {
+      writeComponent(root, "hello", "0.1.0", {
+        entry: SERVICE_ENTRY,
+        currentFile: true,
+        currentText: "\n",
+      });
+      const { found, skipped } = discoverComponents([root]);
+      expect(found).toEqual([]);
+      expect(skipped[0].reason).toMatch(/"current" file must name a version/);
+    });
+
+    it("skips a file that attempts path traversal", () => {
+      for (const text of ["../../other", "..", ".", "a/b"]) {
+        const dir = makeRoot("components-trav-");
+        writeComponent(dir, "hello", "0.1.0", {
+          entry: SERVICE_ENTRY,
+          currentFile: true,
+          currentText: `${text}\n`,
+        });
+        const { found, skipped } = discoverComponents([dir]);
+        expect(found).toEqual([]);
+        expect(skipped).toHaveLength(1);
+        expect(skipped[0].reason).toMatch(/"current" file must name a version/);
+        removeRoot(dir);
+      }
+    });
+
+    it("skips a file naming a version that does not exist", () => {
+      writeComponent(root, "hello", "0.1.0", {
+        entry: SERVICE_ENTRY,
+        currentFile: true,
+        currentText: "9.9.9\n",
+      });
+      const { found, skipped } = discoverComponents([root]);
+      expect(found).toEqual([]);
+      expect(skipped[0].reason).toMatch(/dangling/);
+    });
+  });
+
   it("skips a manifest that is not valid JSON, with the reason", () => {
     writeComponent(root, "hello", "0.1.0", {
       entry: SERVICE_ENTRY,

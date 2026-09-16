@@ -36,10 +36,15 @@ Three things drive the design:
   the same process, on demand.
 
 The first component is the `execute_code` wrapper: the middleware that
-defines the tool, formats results, and manages the executor lifecycle
-(`src/middleware/code-execution.ts`, registered as `CodeExecutionMiddleware`).
-The heavy internals (session manager, IPC bridge, tool-API generator) stay
-in the source tree and reach the component through the SDK.
+defines the tool, formats results, and manages the executor lifecycle. It
+ships as the seed `components/execute-code` (registered as
+`CodeExecutionMiddleware`, with a six-case black-box contract), and the
+bundled registration in `src/middleware/code-execution.ts` evaluates a
+byte-identical in-tree twin of the same entry (see §2, *The seed and its
+in-tree twin*). The heavy internals (session manager, IPC bridge, tool-API
+generator) stay in the source tree and reach the component through the
+SDK. The next change to the wrapper is a new `.versions/<version>/`
+directory, not a source edit.
 
 ---
 
@@ -63,7 +68,8 @@ Inside a root:
 ```
 <root>/
   <name>/
-    current -> .versions/<version>       # symlink (or junction); the pointer
+    current -> .versions/<version>       # the pointer: a link, a junction, or
+                                         # a one-line file naming the version
     .versions/
       0.1.0/
         component.json                   # manifest
@@ -78,6 +84,14 @@ The loader lists `<root>/*/current/component.json`. It never reads
 versions; old versions are never deleted by the loader, so a revert is a
 pointer flip back.
 
+**Two pointer forms.** `current` is either a link (or junction) to the
+version directory, or a regular file whose single line names the
+`.versions/<version>` directory (`0.1.0\n`). The file form exists for
+source trees that ship through archives to platforms where creating a
+link needs a privilege; the seed root uses it. Its content must match
+`^[0-9A-Za-z][0-9A-Za-z.+-]*$` — no separators, never `.` or `..` — and it
+resolves under exactly the containment rules a link does.
+
 **Containment.** Every path the loader touches is resolved with
 `realpathSync` and must remain inside the root (`relative(root, real)` must
 not start with `..`). This is the same check `isSafePath` applies to skills
@@ -91,6 +105,33 @@ assembly each component root that exists is added to the allowed roots
 (`allowPathRoot`), both as given and fully resolved, so the agent can read
 and author component versions that live outside its own source tree. The
 allow-list is process-global by design.
+
+### The seed and its in-tree twin
+
+The seed root ships `components/execute-code/.versions/0.1.0/` with a
+one-line `current` file. The bundled `CodeExecutionMiddleware`
+registration stays at both assembly sites: it is the `replaces` target and
+the fallback that keeps the tool available when the seed is absent, fails
+to load, or is shadowed by a broken host-managed version. To keep that
+fallback from becoming a second, divergent wrapper, the bundled module
+(`src/middleware/code-execution.ts`) does not carry the wrapper itself: it
+evaluates `src/components/seed/execute-code/entry.ts` — a byte-for-byte
+copy of the seed's current entry — with an in-tree dependency bundle whose
+`getExposableTools` returns the call-site tools.
+
+- `yarn sync:seed` (`scripts/sync-seed-components.mjs`) copies each seed's
+  current `entry.ts` to its twin; `--check` reports drift without writing.
+- `tests/unit/components/seed-parity.test.ts` fails when a twin differs
+  from its seed, or the bundled version constant differs from `current`.
+- The bundled module does not `import()` the seed at runtime on purpose:
+  a seed that throws would then break boot, which §4 forbids.
+- A source-tree TypeScript build cannot compile files under `components/`
+  (they sit outside `rootDir`), which is the other reason the twin lives
+  under `src/`.
+
+With the seed root present, the loader's instance replaces the bundled one
+by name at both sites and the bundled instance never runs; a host-managed
+root shadows the seed by name.
 
 ---
 
@@ -178,9 +219,10 @@ Example — the seed `execute_code` component:
   "name": "execute-code",
   "version": "0.1.0",
   "kind": "middleware",
-  "intent": "Run TypeScript the agent writes, in an isolated session per thread, and return stdout, stderr and the final value as text.",
+  "intent": "Run the TypeScript the agent writes, one fresh process per call in a per-conversation workspace with typed access to the agent's other tools, and hand back stdout, stderr and the exit status as text — including a clear timeout message instead of a silent kill.",
   "sdk": "^1.0.0",
   "replaces": "CodeExecutionMiddleware",
+  "depth": 0,
   "lineage": { "producedBy": "seed" }
 }
 ```
@@ -278,7 +320,7 @@ present at all, the agent behaves exactly as it does today.
 `src/components/sdk.ts` defines the only surface component code sees.
 
 ```ts
-export const SDK_VERSION = "1.0.0";
+export const SDK_VERSION = "1.1.0";
 
 export interface ComponentDeps {
   sdkVersion: string;                 // SDK_VERSION
@@ -299,21 +341,34 @@ export interface ComponentDeps {
       formatCodePreview: typeof formatCodePreview;
       DEFAULT_TIMEOUT_MS: number;
       MAX_TIMEOUT_MS: number;
+      /** The assembled pool minus the middleware-only tools. Since 1.1.0. */
+      getExposableTools: () => StructuredToolInterface[];
     };
   };
 }
 ```
 
-`internals.codeExecution` carries exactly the symbols the bundled
-`execute_code` wrapper imports (`src/middleware/code-execution.ts`), so the
-wrapper can be ported to a component without reaching past the SDK.
-`logger` is a child of the agent's pino logger named `component:<name>`.
+`internals.codeExecution` carries exactly the symbols the `execute_code`
+wrapper uses, so it needs nothing past the SDK. `getExposableTools()`
+returns the tools a code-execution session may call through its generated
+tool API: the assembled agent's pool (`getActiveToolPool`) minus
+`MIDDLEWARE_ONLY_TOOL_NAMES` (`write_todos`, `load_skill`, `task`,
+`execute_code`, `eval`) — a script cannot delegate, load a skill, or nest
+another execution. It is empty before assembly and populated after, which
+is why the wrapper creates its executor lazily on first call. `logger` is
+a child of the agent's pino logger named `component:<name>`.
 
 `entry.ts` is:
 
 ```ts
 export default function (deps: ComponentDeps): AgentMiddleware | StructuredTool[] | unknown;
 ```
+
+An entry may carry a **type-only** import of the SDK types for editors and
+type checkers (`import type { ComponentDeps } from "<path to>/src/components/sdk.js"`).
+Type-only imports are erased before execution, so the rule that an entry
+imports nothing at runtime still holds; the path only has to resolve where
+the file is type-checked. A value import of anything is still an error.
 
 The return type follows `kind`: `middleware` → one `AgentMiddleware`;
 `tools` → `StructuredTool[]`; `service` → any value, published as-is.
@@ -324,7 +379,8 @@ removals or signature changes bump the major. `internals` is the one
 unstable namespace and is documented as such — a component that reaches
 into it accepts that a minor SDK bump may break it. The manifest's `sdk`
 range is checked against `SDK_VERSION` at load; a mismatch skips the
-component with a warning (§4).
+component with a warning (§4). History: 1.0.0 the initial surface; 1.1.0
+added `internals.codeExecution.getExposableTools`.
 
 **Component-to-component use** goes only through `deps.services`. There is
 no import path between components.

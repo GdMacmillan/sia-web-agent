@@ -18,7 +18,8 @@
     "test:interpreter": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.interpreter.js",
     "test:integration": "RUN_INTEGRATION=true jest tests/integration --forceExit",
     "lint": "eslint src",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sync:seed": "node scripts/sync-seed-components.mjs"
   },
   "dependencies": {
     "@huggingface/inference": "4.13.28",
