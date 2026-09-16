@@ -257,6 +257,51 @@ describe("component tools", () => {
       expect(text).toContain("Prepared hello@0.1.1");
     };
 
+    it("sends the host event but no room message by default", async () => {
+      const { fetchImpl, captured } = fakeHost({ event: 200 });
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        daemonUrl: "http://127.0.0.1:7700",
+        daemonToken: "t",
+        serverUrl: "http://127.0.0.1:2024",
+        env: {},
+        fetchImpl,
+      });
+      await prepare(tools);
+      const text = await byName(tools, "announce_component_version").invoke(
+        { name: "hello", version: "0.1.1", summary: "s" },
+        config,
+      );
+      expect(text).toContain("candidate event: accepted by the host (200).");
+      expect(text).toContain("room message: off (SIA_ANNOUNCE_TO_CHAT is not set); the summary stays in this thread.");
+      expect(text).toContain("**hello@0.1.1** — s");
+      expect(captured.some((c) => c.url.endsWith("/chat/publish"))).toBe(false);
+      expect(captured.some((c) => c.url.endsWith("/chat/component-version"))).toBe(true);
+    });
+
+    it("posts the room message when the env switch is on", async () => {
+      const { fetchImpl, captured } = fakeHost();
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        daemonUrl: "http://127.0.0.1:7700",
+        daemonToken: "t",
+        serverUrl: "http://127.0.0.1:2024",
+        env: { SIA_ANNOUNCE_TO_CHAT: "true" },
+        fetchImpl,
+      });
+      await prepare(tools);
+      const text = await byName(tools, "announce_component_version").invoke(
+        { name: "hello", version: "0.1.1", summary: "s" },
+        config,
+      );
+      expect(text).toContain('message posted to "dev" (200).');
+      expect(captured.some((c) => c.url.endsWith("/chat/publish"))).toBe(true);
+    });
+
     it("posts the candidate event and the room message, tolerating a 404 on the event", async () => {
       const { fetchImpl, captured } = fakeHost({ event: 404 });
       const tools = createComponentTools({
@@ -267,6 +312,7 @@ describe("component tools", () => {
         daemonUrl: "http://127.0.0.1:7700/",
         daemonToken: "daemon-token",
         serverUrl: "http://127.0.0.1:2024",
+        announceToChat: true,
         fetchImpl,
       });
       await prepare(tools);
@@ -316,6 +362,7 @@ describe("component tools", () => {
         daemonUrl: "http://127.0.0.1:7700",
         daemonToken: "t",
         serverUrl: "http://127.0.0.1:2024",
+        announceToChat: true,
         fetchImpl: noThread.fetchImpl,
       });
       await prepare(tools);
@@ -341,6 +388,7 @@ describe("component tools", () => {
         daemonUrl: "http://127.0.0.1:7700",
         daemonToken: "t",
         serverUrl: "http://127.0.0.1:2024",
+        announceToChat: true,
         fetchImpl,
       });
       await prepare(tools);
@@ -382,6 +430,7 @@ describe("component tools", () => {
         daemonUrl: "http://127.0.0.1:7700",
         daemonToken: "t",
         serverUrl: "http://127.0.0.1:2024",
+        announceToChat: true,
         fetchImpl: rejected.fetchImpl,
       });
       const missing = await byName(tools, "announce_component_version").invoke(

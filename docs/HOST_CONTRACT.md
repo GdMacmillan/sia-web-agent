@@ -264,7 +264,11 @@ are best-effort: any failure is reported in the tool result, never
 thrown, and with `SIA_DAEMON_URL` or `SIA_DAEMON_TOKEN` unset neither is
 attempted.
 
-**Room message** — an endpoint the host implements:
+**Room message** — an endpoint the host implements. Sent **only when
+`SIA_ANNOUNCE_TO_CHAT` is truthy** (`1`, `true`, `yes`, `on`); off by
+default, because a message in a shared room reaches every participant and
+each one decides whether to answer it. The candidate event below is sent
+regardless:
 
 ```
 POST {SIA_DAEMON_URL}/chat/publish

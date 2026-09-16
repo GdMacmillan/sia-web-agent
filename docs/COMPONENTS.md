@@ -523,7 +523,7 @@ contract ran it out-of-process and proves behaviour, not liveness.
 | `describe_component({ name })` | Read-only: which root wins and why, the current version, the versions present, the manifest and the paths. Root precedence is not visible through `read_file`. |
 | `prepare_component_version({ name, need, bump? })` | The layout above under the host-managed root (created if missing), then admits that root for the filesystem tools. Returns the paths and the next step. |
 | `run_component_contract({ name, version? })` | `runComponentContract` on the named version; `contract passed for …` / `contract FAILED for …: <error>`. |
-| `announce_component_version({ name, version, summary, outcome?, channel? })` | Tells the host about the candidate and posts one message with a link to the thread (`HOST_CONTRACT.md` §3.4). Best-effort: a host without those endpoints is reported, never thrown. |
+| `announce_component_version({ name, version, summary, outcome?, channel? })` | Tells the host about the candidate and, when `SIA_ANNOUNCE_TO_CHAT` is on, posts one message with a link to the thread (`HOST_CONTRACT.md` §3.4). Best-effort: a host without those endpoints is reported, never thrown. |
 
 Lineage lives in two places: `manifest.lineage` on disk, and a
 `component_version` entity the skill stores in memory as soon as the

@@ -98,10 +98,15 @@ spec: [`COMPONENTS.md`](./COMPONENTS.md).
 
 New component versions (`prepare_component_version`) are written under
 `SIA_COMPONENTS_DIR` only; with it unset the tool refuses. The
-`announce_component_version` tool posts to `{SIA_DAEMON_URL}/chat/publish`
-and `{SIA_DAEMON_URL}/chat/component-version` with `SIA_DAEMON_TOKEN`
-(see [`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §3.4); with either unset the
+`announce_component_version` tool posts to
+`{SIA_DAEMON_URL}/chat/component-version` and, when enabled, to
+`{SIA_DAEMON_URL}/chat/publish` with `SIA_DAEMON_TOKEN` (see
+[`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §3.4); with either unset the
 summary stays in the thread.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIA_ANNOUNCE_TO_CHAT` | unset (off) | Truthy (`1`/`true`/`yes`/`on`) lets `announce_component_version` also post one message to the room the work came from (else the default room). Off keeps announcements to the host event and the thread. |
 
 ### Own server
 
