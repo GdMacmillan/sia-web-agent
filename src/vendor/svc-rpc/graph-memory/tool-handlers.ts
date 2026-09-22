@@ -89,18 +89,35 @@ export interface ListEntitiesFilters {
  * wrap the handler with query enrichment) need to attach the same hint.
  */
 
+/**
+ * Entity type of a component version's lineage record. The convention
+ * (title `<name>@<version>`, a `SUPERSEDES` edge to the parent version)
+ * is documented in `docs/GRAPH_MEMORY.md`; the handler only knows
+ * enough of it to point a store with no parent link at the fix.
+ */
+export const COMPONENT_VERSION_ENTITY_TYPE = "component_version";
+export const SUPERSEDES_RELATIONSHIP = "SUPERSEDES";
+
 export function nextStepForStore(opts: {
   id: string;
   linkedCount: number;
   failedCount: number;
+  entityType?: string;
+  relationshipTypes?: string[];
 }): string {
   if (opts.failedCount > 0) {
-    return `Next: ${opts.failedCount} relationship(s) failed — retry the ids listed in edge_errors via update_entity({entity_id: '${opts.id}'}) once the targets exist, or store_entity them first.`;
+    return `Next: ${opts.failedCount} relationship(s) failed — retry the ids listed in edge_errors via update_entity({entity_id: '${opts.id}', related_entity_ids: [...], relationship_types: [...]}) once the targets exist, or store_entity them first.`;
+  }
+  if (
+    opts.entityType === COMPONENT_VERSION_ENTITY_TYPE &&
+    !(opts.relationshipTypes ?? []).includes(SUPERSEDES_RELATIONSHIP)
+  ) {
+    return `Next: this version has no parent link — update_entity({entity_id: '${opts.id}', related_entity_ids: ['<parent id>'], relationship_types: ['${SUPERSEDES_RELATIONSHIP}']}) once '<name>@<parent version>' exists (search_entities by that exact title, entity_type: '${COMPONENT_VERSION_ENTITY_TYPE}'), or store_entity the parent first.`;
   }
   if (opts.linkedCount > 0) {
     return `Next: traverse_graph({node_id: '${opts.id}'}) to verify the ${opts.linkedCount} link(s) landed, or update_entity to refine content/tags.`;
   }
-  return `Next: search_entities to find related entities, then update_entity({entity_id: '${opts.id}'}) or store_entity with related_entity_ids to link them into the graph.`;
+  return `Next: search_entities to find related entities, then update_entity({entity_id: '${opts.id}', related_entity_ids: [...], relationship_types: [...]}) or store_entity with related_entity_ids to link them into the graph.`;
 }
 
 export function nextStepForSearch(count: number): string {
@@ -156,9 +173,9 @@ export function nextStepForTraverse(opts: {
   count: number;
 }): string {
   if (opts.count === 0) {
-    return `Next: '${opts.id}' has no connections in this direction — update_entity or store_entity with related_entity_ids to link it, or retry with direction: 'both'.`;
+    return `Next: '${opts.id}' has no connections in this direction — update_entity({entity_id: '${opts.id}', related_entity_ids: [...], relationship_types: [...]}) or store_entity with related_entity_ids to link it, or retry with direction: 'both'.`;
   }
-  return "Next: update_entity to record any new relationships you discovered, or store_entity to capture an insight from this neighbourhood.";
+  return "Next: update_entity({entity_id, related_entity_ids, relationship_types}) to record any new relationships you discovered, or store_entity to capture an insight from this neighbourhood.";
 }
 
 /* ------------------------------------------------------------------------- */
@@ -233,26 +250,7 @@ export async function storeEntity(
 
   const related = input.related_entity_ids ?? [];
   const relTypes = input.relationship_types ?? [];
-  const edgeErrors: EdgeError[] = [];
-
-  for (let i = 0; i < related.length; i++) {
-    const targetId = related[i]!;
-    const edgeType = relTypes[i] ?? "RELATED_TO";
-    try {
-      await adapter.graphEdges({
-        fromNodeId: stored.id,
-        toNodeId: targetId,
-        type: edgeType,
-        properties: { created_at: new Date().toISOString() },
-      });
-    } catch (err) {
-      edgeErrors.push({
-        target_id: targetId,
-        relationship_type: edgeType,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  const edgeErrors = await createEdges(adapter, stored.id, related, relTypes);
 
   const result: StoreEntityResult = {
     id: stored.id,
@@ -270,6 +268,10 @@ export async function storeEntity(
       id: stored.id,
       linkedCount: related.length - edgeErrors.length,
       failedCount: edgeErrors.length,
+      entityType: stored.entity_type,
+      relationshipTypes: related
+        .map((_, i) => relTypes[i] ?? "RELATED_TO")
+        .filter((_, i) => !edgeErrors.some((e) => e.target_id === related[i])),
     }),
   };
 
@@ -514,6 +516,16 @@ export interface UpdateEntityInput {
   context?: string;
   status?: string;
   notes?: string;
+  /**
+   * Keys merged (shallow) into the entity's stored `metadata`. The
+   * responder replaces the whole map, so the handler reads the entity
+   * first and writes back the merge — a key set to `undefined` is left
+   * as stored; use an explicit `null` to clear one.
+   */
+  metadata?: Record<string, unknown>;
+  /** New edges from this entity, paired with `relationship_types`. */
+  related_entity_ids?: string[];
+  relationship_types?: string[];
 }
 
 export interface UpdateEntityResult {
@@ -526,6 +538,10 @@ export interface UpdateEntityResult {
   };
   changed_fields: string[];
   updated_at: string;
+  /** Edges created by this call (only when `related_entity_ids` was given). */
+  linked_count?: number;
+  edge_errors?: EdgeError[];
+  edge_warning?: string;
   message: string;
   next_step: string;
 }
@@ -553,15 +569,44 @@ export async function updateEntity(
     modes,
     input.notes,
   );
+  const patch: Record<string, unknown> = { ...properties.metadata };
 
-  const wireResp = await adapter.updateEntity({
-    nodeId: input.entity_id,
-    properties: properties.metadata,
-    modes: modeMap,
-  });
-  const decoded = decodeUpdateResponse(wireResp);
+  if (input.metadata !== undefined) {
+    const current = decodeRetrieveResponse(
+      await adapter.retrieveEntity({ nodeId: input.entity_id }),
+    );
+    if (!current) {
+      throw new Error(`Entity with ID ${input.entity_id} not found`);
+    }
+    const merged: Record<string, unknown> = { ...current.metadata };
+    for (const [key, value] of Object.entries(input.metadata)) {
+      if (value === undefined) continue;
+      merged[key] = value;
+    }
+    patch.custom_metadata = merged;
+  }
 
-  return {
+  let decoded: ReturnType<typeof decodeUpdateResponse>;
+  if (Object.keys(patch).length > 0) {
+    const wireResp = await adapter.updateEntity({
+      nodeId: input.entity_id,
+      properties: patch,
+      modes: modeMap,
+    });
+    decoded = decodeUpdateResponse(wireResp);
+  } else {
+    // Nothing to write on the node itself (edges only): read it so the
+    // result still describes the entity the edges hang off.
+    const current = decodeRetrieveResponse(
+      await adapter.retrieveEntity({ nodeId: input.entity_id }),
+    );
+    if (!current) {
+      throw new Error(`Entity with ID ${input.entity_id} not found`);
+    }
+    decoded = { ...current, version: 0, changed_fields: [] };
+  }
+
+  const result: UpdateEntityResult = {
     entity: {
       id: decoded.id,
       entity_type: decoded.entity_type,
@@ -574,6 +619,23 @@ export async function updateEntity(
     message: `Entity updated to version ${decoded.version}`,
     next_step: nextStepForUpdate(decoded.id),
   };
+
+  const related = input.related_entity_ids ?? [];
+  if (related.length > 0) {
+    const edgeErrors = await createEdges(
+      adapter,
+      input.entity_id,
+      related,
+      input.relationship_types ?? [],
+    );
+    result.linked_count = related.length - edgeErrors.length;
+    if (edgeErrors.length > 0) {
+      result.edge_errors = edgeErrors;
+      result.edge_warning = `${edgeErrors.length} of ${related.length} relationship(s) could not be stored. Check edge_errors for details.`;
+    }
+  }
+
+  return result;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -762,6 +824,39 @@ export async function traverseGraph(
 /* ------------------------------------------------------------------------- */
 /* Helpers                                                                   */
 /* ------------------------------------------------------------------------- */
+
+/**
+ * Create one edge per `relatedIds[i]` (type `relationshipTypes[i]`,
+ * default `RELATED_TO`). Failures are collected, never thrown — the
+ * node write that preceded this has already happened.
+ */
+async function createEdges(
+  adapter: IGraphMemoryAdapter,
+  fromNodeId: string,
+  relatedIds: string[],
+  relationshipTypes: string[],
+): Promise<EdgeError[]> {
+  const edgeErrors: EdgeError[] = [];
+  for (let i = 0; i < relatedIds.length; i++) {
+    const targetId = relatedIds[i]!;
+    const edgeType = relationshipTypes[i] ?? "RELATED_TO";
+    try {
+      await adapter.graphEdges({
+        fromNodeId,
+        toNodeId: targetId,
+        type: edgeType,
+        properties: { created_at: new Date().toISOString() },
+      });
+    } catch (err) {
+      edgeErrors.push({
+        target_id: targetId,
+        relationship_type: edgeType,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return edgeErrors;
+}
 
 function applyFilters(
   entities: StoredEntityShape[],

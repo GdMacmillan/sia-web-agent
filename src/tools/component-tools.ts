@@ -26,7 +26,18 @@ import {
   type RunContractOptions,
   type VersionBump,
 } from "../components/index.js";
+import { lineageTitle } from "../components/lineage.js";
+import { getLineageReconciler, type LineageReconciler } from "../components/lineage-reconcile.js";
+import {
+  ensureParentEntity,
+  findLineageEntity,
+  markLineageAnnounced,
+  settleLineageEntity,
+  storeLineageEntity,
+} from "../components/lineage-store.js";
 import { allowPathRoot, getProjectRoot } from "../utils/path-utils.js";
+import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
+import { getMemoryAdapter } from "./memory-adapter.js";
 import { resolveOwnServerUrl } from "./self-task-tool.js";
 
 /** Longest any single call to the host may take. */
@@ -68,6 +79,12 @@ export interface ComponentToolsOptions {
   timeoutMs?: number;
   /** Runner options handed through to `runComponentContract`. */
   contract?: Pick<RunContractOptions, "importModule" | "config" | "timeoutMs">;
+  /** Graph memory, where lineage is recorded (default: the shared adapter). */
+  adapter?: () => IGraphMemoryAdapter;
+  /** Watches prepared versions for their verdict (default: the shared reconciler). */
+  reconciler?: LineageReconciler;
+  /** Clock for the timestamps lineage records. */
+  now?: () => Date;
 }
 
 function errorMessage(error: unknown): string {
@@ -136,6 +153,97 @@ export function createComponentTools(
     resolveComponentRoots({ projectRoot: projectRoot(), componentsDir: hostRoot() });
   const agentId = (): string => opts.agentId ?? getConfig().runtime.agentId;
   const agentName = (): string => opts.agentName ?? getConfig().runtime.agentName;
+  const memory = (): IGraphMemoryAdapter => (opts.adapter ?? getMemoryAdapter)();
+  const reconciler = (): LineageReconciler => opts.reconciler ?? getLineageReconciler();
+  const nowIso = (): string => (opts.now ?? (() => new Date()))().toISOString();
+
+  /**
+   * Record a prepared version in graph memory: the parent gets an entity
+   * if it has none, the child is stored as a candidate superseding it,
+   * and the reconciler watches for the verdict. Returns the line the
+   * tool result carries; never throws.
+   */
+  const recordLineage = async (input: {
+    name: string;
+    previousVersion: string;
+    nextVersion: string;
+    need: string;
+    threadId?: string;
+  }): Promise<string> => {
+    const { name, previousVersion, nextVersion } = input;
+    try {
+      const adapter = memory();
+      const parent = readComponentVersion({ name, version: previousVersion, roots: roots() });
+      if (!parent.ok) {
+        return `lineage: not recorded — parent ${lineageTitle(name, previousVersion)} unreadable (${parent.reason})`;
+      }
+      const child = readComponentVersion({ name, version: nextVersion, roots: roots() });
+      const depth = child.ok ? child.component.manifest.depth : parent.component.manifest.depth;
+      const parentEntity = await ensureParentEntity(adapter, parent.component.manifest, {
+        agentId: agentId(),
+      });
+      const stored = await storeLineageEntity(
+        adapter,
+        {
+          name,
+          version: nextVersion,
+          depth,
+          need: input.need,
+          parent: lineageTitle(name, previousVersion),
+          producedBy: agentId(),
+          threadId: input.threadId,
+          outcome: "candidate",
+        },
+        { agentId: agentId(), parentId: parentEntity.id },
+      );
+      reconciler().track(stored.id, name, nextVersion);
+      const notes = [
+        `supersedes ${lineageTitle(name, previousVersion)}`,
+        ...(parentEntity.created ? ["parent entity created"] : []),
+        ...(stored.edgeError ? [`parent link failed: ${stored.edgeError}`] : []),
+      ];
+      return `lineage: recorded (id ${stored.id}; ${notes.join("; ")})`;
+    } catch (error: unknown) {
+      return `lineage: not recorded — ${errorMessage(error)}`;
+    }
+  };
+
+  /**
+   * Bring the version's entity up to date with an announcement: a
+   * candidate is marked announced, a failure settles it. Returns the line
+   * the tool result carries; never throws.
+   */
+  const recordAnnouncement = async (input: {
+    name: string;
+    version: string;
+    outcome: "candidate" | "failed";
+    summary: string;
+  }): Promise<string> => {
+    const title = lineageTitle(input.name, input.version);
+    try {
+      const adapter = memory();
+      const entity = await findLineageEntity(adapter, title);
+      if (!entity) {
+        return `lineage: no entity for ${title}; nothing updated`;
+      }
+      if (input.outcome === "failed") {
+        reconciler().untrack(input.name, input.version);
+        const result = await settleLineageEntity(
+          adapter,
+          entity.id,
+          { outcome: "failed", reason: input.summary },
+          nowIso,
+        );
+        return result === "settled"
+          ? `lineage: settled as failed (id ${entity.id})`
+          : `lineage: already settled (id ${entity.id})`;
+      }
+      await markLineageAnnounced(adapter, entity.id, nowIso());
+      return `lineage: announced (id ${entity.id})`;
+    } catch (error: unknown) {
+      return `lineage: not updated — ${errorMessage(error)}`;
+    }
+  };
 
   const rootLabel = (root: string): string => {
     const host = hostRoot();
@@ -206,15 +314,19 @@ export function createComponentTools(
         .optional()
         .describe('How far to move the version: "patch" (default), "minor" or "major".'),
     }),
-    func: async ({
-      name,
-      need,
-      bump,
-    }: {
-      name: string;
-      need: string;
-      bump?: string;
-    }): Promise<string> => {
+    func: async (
+      {
+        name,
+        need,
+        bump,
+      }: {
+        name: string;
+        need: string;
+        bump?: string;
+      },
+      _runManager?: unknown,
+      config?: RunnableConfig,
+    ): Promise<string> => {
       const coercedBump = coerceBump(bump);
       if (coercedBump === null) {
         return `Cannot prepare a version: bump must be "patch", "minor" or "major" (got ${JSON.stringify(bump)}).`;
@@ -237,14 +349,22 @@ export function createComponentTools(
       // new version can be edited.
       allowPathRoot(p.root);
       allowPathRoot(realpathOr(p.root));
+      const lineage = await recordLineage({
+        name: p.name,
+        previousVersion: p.previousVersion,
+        nextVersion: p.nextVersion,
+        need,
+        threadId: threadIdFrom(config),
+      });
       return [
         `Prepared ${p.name}@${p.nextVersion} from ${p.name}@${p.previousVersion} under ${p.root}${p.copied ? " (the component was copied there first)" : ""}.`,
         `  version directory: ${p.versionDir}`,
         `  manifest: ${p.manifestPath} (version, lineage.parent and lineage.need are set)`,
         `  entry: ${p.entryPath}`,
         `  contract: ${p.contractPath}`,
+        `  ${lineage}`,
         `\`current\` still names ${p.previousVersion}; do not change it — activating a version is the host's step, after which the agent restarts.`,
-        `Next: store the lineage entity, edit ${p.entryPath} (and add a contract case for the need), then run_component_contract({ name: "${p.name}", version: "${p.nextVersion}" }).`,
+        `Next: edit ${p.entryPath} (and add a contract case for the need), then run_component_contract({ name: "${p.name}", version: "${p.nextVersion}" }).`,
       ].join("\n");
     },
   });
@@ -332,7 +452,9 @@ export function createComponentTools(
       const id = agentId();
       const threadId = threadIdFrom(config);
       const fetchImpl = opts.fetchImpl ?? fetch;
-      const report: string[] = [];
+      const report: string[] = [
+        await recordAnnouncement({ name, version, outcome: kind, summary: trimmedSummary }),
+      ];
 
       // The thread's own metadata says which room the work came from.
       let inheritedChannel: string | undefined;
@@ -370,7 +492,8 @@ export function createComponentTools(
       const daemonUrl = (opts.daemonUrl ?? env.SIA_DAEMON_URL ?? "").trim().replace(/\/+$/, "");
       const daemonToken = (opts.daemonToken ?? env.SIA_DAEMON_TOKEN ?? "").trim();
       if (!daemonUrl || !daemonToken) {
-        return `host chat endpoint not configured; the summary stays in this thread:\n${text}`;
+        report.push("host chat endpoint not configured; the summary stays in this thread:");
+        return `${report.join("\n")}\n${text}`;
       }
       const headers = {
         "Content-Type": "application/json",

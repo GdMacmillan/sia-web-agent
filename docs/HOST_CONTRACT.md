@@ -103,7 +103,11 @@ Both paths are read by the agent; the host owns their contents. A host
 that stamps `SIA_COMPONENTS_DIR` should expect the agent to write new
 version directories under it (never to touch `current` itself — flipping
 the pointer is the host's act) and should gate a restart on
-`runComponentContract` (exported from `src/graph.ts`) when it does.
+`runComponentContract` (exported from `src/graph.ts`) when it does. Once
+it has a verdict on a version it should tell the agent through
+`recordComponentOutcome` (same module; §3.6), and it should answer
+`GET /status` (§3.5) so an agent that was off when the verdict landed can
+find it.
 
 ### 1.6 Host RPC endpoint (optional)
 
@@ -127,8 +131,8 @@ that attributes threads by that header or by `metadata.agent_id` sees them
 as the agent's own. A self-task run lives only as long as the agent
 process: the agent reads the run's stream to its end in the background,
 and a restart mid-run leaves the thread without a persisted result — which
-is why the `iterate-component` skill records lineage in memory before it
-edits anything.
+is why `prepare_component_version` records lineage in graph memory before
+anything is edited (`COMPONENTS.md` §6).
 
 ---
 
@@ -309,6 +313,69 @@ Content-Type: application/json
 The event is sent only for a candidate (a version whose contract passed);
 a failed outcome posts the room message alone. Activating the version
 remains the host's step (§1.5).
+
+### 3.5 Component status (agent → host, optional)
+
+The agent reads the host's view of its components to learn what became of
+the versions it prepared (`COMPONENTS.md` §6, *Lineage*). No bearer: the
+endpoint is loopback and read-only.
+
+```
+GET {SIA_DAEMON_URL}/status
+```
+
+The agent looks only at `node.components.components[]`, one entry per
+component:
+
+```json
+{
+  "name": "execute-code",
+  "active": "0.1.0",
+  "previous": "0.0.9",
+  "candidate": { "version": "0.1.1", "threadId": "…", "announcedAt": "…" },
+  "lastOutcome": { "version": "0.1.1", "result": "activated", "at": "…", "error": "…" },
+  "versions": ["0.0.9", "0.1.0", "0.1.1"]
+}
+```
+
+`lastOutcome.result` is `activated`, `reverted` or `failed`; `error` is the
+reason when it is not `activated`. Everything else in the response is
+ignored, a missing `components` array means the host does not report them
+(the agent stops polling), and any transport or non-2xx failure is treated
+as "no answer yet". The read runs every 3 s for up to 120 s after the agent
+starts and at most once a minute during turns, only while a version of this
+agent's is unsettled.
+
+### 3.6 Component outcome (host → agent, optional)
+
+When the host decides a version — the swap converged, was reverted, failed,
+or the person rejected it — it tells the agent's own server, and the agent
+settles the version's lineage entity at once. This is the same seam as the
+contract gate: the graph module exports `recordComponentOutcome(frame)`,
+and the server the agent runs inside serves it.
+
+```
+POST {SIA_SERVER_URL}/components/outcome
+Authorization: Bearer <the token the host gates agent-side routes with>
+Content-Type: application/json
+
+{
+  "kind": "converged" | "reverted" | "failed" | "rejected",
+  "agentId": "<SIA_AGENT_ID>",
+  "component": "execute-code",
+  "version": "0.1.1",
+  "reason": "<why, when not converged>",
+  "at": "<ISO 8601>",
+  "threadId": "<thread id>",
+  "parentVersion": "execute-code@0.1.0"
+}
+```
+
+`agentId` must equal the agent's own `SIA_AGENT_ID`; a frame for anyone
+else is ignored, never applied. The push is best-effort on the host's side:
+the agent may be off (a swap restarts it), and §3.5 exists so the verdict is
+found anyway. A push and a poll that both carry the verdict settle the
+entity once — the second finds it already settled.
 
 ---
 
