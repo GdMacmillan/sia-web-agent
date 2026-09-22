@@ -29,6 +29,7 @@ import {
   prepareComponentAssembly,
   setActiveToolPool,
 } from "./components/index.js";
+import { getLineageReconciler } from "./components/lineage-reconcile.js";
 import { createChatModel } from "./config/model-config.js";
 import { getConfig, resolveModelEndpoint } from "./config/index.js";
 import {
@@ -204,6 +205,10 @@ export async function createDeepAgentWithDefaults<
     },
     internals: buildInternals(),
   });
+
+  // Versions this agent prepared may have been decided while it was down
+  // (a swap restarts it). Ask the host, in the background; boot never waits.
+  void getLineageReconciler().onBoot();
 
   // Create the agent with resolved configuration. Caller-supplied
   // `agentConfig.tools` / `middleware` / `profileOverlays` merge after the

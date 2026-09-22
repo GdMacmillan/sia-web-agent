@@ -9,6 +9,8 @@ import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createComponentTools, buildAnnouncementText } from "../../../src/tools/component-tools.js";
+import { createLineageReconciler } from "../../../src/components/lineage-reconcile.js";
+import type { IGraphMemoryAdapter } from "../../../src/vendor/svc-rpc/graph-memory/adapter-interface.js";
 import {
   _resetComponentsForTests,
   setActiveComponents,
@@ -150,9 +152,9 @@ describe("component tools", () => {
       expect(text).toContain(`Prepared hello@0.1.1 from hello@0.1.0 under ${host} (the component was copied there first).`);
       expect(text).toContain(`version directory: ${versionDir}`);
       expect(text).toContain("`current` still names 0.1.0");
-      expect(text).toContain(
-        `Next: store the lineage entity, edit ${path.join(versionDir, "entry.ts")}`,
-      );
+      expect(text).toContain(`Next: edit ${path.join(versionDir, "entry.ts")}`);
+      // No graph memory is configured here; the prepare still succeeds and says so.
+      expect(text).toContain("lineage: not recorded — ");
       expect(text).toContain('run_component_contract({ name: "hello", version: "0.1.1" })');
 
       const manifest = JSON.parse(readFileSync(path.join(versionDir, "component.json"), "utf-8"));
@@ -417,7 +419,7 @@ describe("component tools", () => {
         { name: "hello", version: "0.1.1", summary: "s" },
         config,
       );
-      expect(text).toMatch(/^host chat endpoint not configured; the summary stays in this thread:\n\*\*hello@0\.1\.1\*\*/);
+      expect(text).toMatch(/host chat endpoint not configured; the summary stays in this thread:\n\*\*hello@0\.1\.1\*\*/);
       expect(captured.filter((c) => c.method === "POST")).toHaveLength(0);
     });
 
@@ -447,6 +449,259 @@ describe("component tools", () => {
       expect(text).toContain("candidate event: accepted by the host (200).");
       expect(text).toContain('message to "dev" rejected by the host (500); the summary stays in this thread.');
     });
+  });
+});
+
+/**
+ * An in-memory graph holding nodes in the wire shape the vendored handlers
+ * decode. Updates merge the flat patch into the node's metadata the way
+ * the server does.
+ */
+function memoryGraph() {
+  const nodes = new Map<string, { id: string; properties: Record<string, unknown> }>();
+  const edges: Array<{ fromNodeId: string; toNodeId: string; type: string }> = [];
+  const updates: Array<{ nodeId: string; properties: Record<string, unknown> }> = [];
+  let seq = 0;
+  const adapter = {
+    workspaceId: "ws",
+    storeEntity: jest.fn(async (req: { agent_id: string; metadata: Record<string, unknown> }) => {
+      seq += 1;
+      const id = `n-${seq}`;
+      nodes.set(id, { id, properties: { agent_id: req.agent_id, metadata: req.metadata } });
+      return { id, agent_id: req.agent_id, timestamp: "t", metadata: req.metadata };
+    }),
+    searchEntities: jest.fn(async () => ({
+      results: [...nodes.values()],
+      level_used: "raw",
+      levels_tried: ["raw"],
+    })),
+    graphQuery: jest.fn(async () => ({ nodes: [...nodes.values()], edges: [] })),
+    graphEdges: jest.fn(async (req: { fromNodeId: string; toNodeId: string; type: string }) => {
+      edges.push({ fromNodeId: req.fromNodeId, toNodeId: req.toNodeId, type: req.type });
+      return { id: `e-${edges.length}`, ...req };
+    }),
+    retrieveEntity: jest.fn(async ({ nodeId }: { nodeId: string }) => nodes.get(nodeId) ?? null),
+    updateEntity: jest.fn(async (req: { nodeId: string; properties: Record<string, unknown> }) => {
+      updates.push(req);
+      const node = nodes.get(req.nodeId);
+      if (node) {
+        const meta = node.properties.metadata as Record<string, unknown>;
+        node.properties.metadata = { ...meta, ...req.properties };
+      }
+      return { id: req.nodeId, properties: node?.properties ?? {}, version: 2, changed_fields: [] };
+    }),
+  };
+  const entity = (id: string) => {
+    const meta = nodes.get(id)?.properties.metadata as Record<string, unknown>;
+    return { ...meta, custom: meta.custom_metadata as Record<string, unknown> };
+  };
+  return { adapter: adapter as unknown as IGraphMemoryAdapter, nodes, edges, updates, entity };
+}
+
+describe("component lineage", () => {
+  let project: string;
+  let seed: string;
+  let host: string;
+  const NOW = "2026-09-22T10:00:00.000Z";
+
+  const byName = (tools: ReturnType<typeof createComponentTools>, name: string) => {
+    const tool = tools.find((t) => t.name === name);
+    if (tool === undefined) throw new Error(`no tool ${name}`);
+    return tool;
+  };
+
+  beforeEach(() => {
+    project = makeRoot("project-");
+    seed = path.join(project, "components");
+    mkdirSync(seed);
+    host = path.join(makeRoot("host-"), "components");
+    writeComponent(seed, "hello", "0.1.0", {
+      entry: SERVICE_ENTRY,
+      contract: PASSING_CONTRACT,
+      currentFile: true,
+      manifest: { intent: "Say hello.", lineage: { producedBy: "seed" } },
+    });
+  });
+
+  afterEach(() => {
+    _resetComponentsForTests();
+    clearAllowedPathRoots();
+    resetConfig();
+    removeRoot(project);
+    removeRoot(path.dirname(host));
+  });
+
+  const build = (graph: ReturnType<typeof memoryGraph>) => {
+    const reconciler = createLineageReconciler({
+      agentId: "agent-1",
+      daemonUrl: undefined,
+      getAdapter: () => graph.adapter,
+      discoverLocalVersions: async () => [],
+    });
+    const tools = createComponentTools({
+      projectRoot: project,
+      componentsDir: host,
+      agentId: "agent-1",
+      adapter: () => graph.adapter,
+      reconciler,
+      now: () => new Date(NOW),
+      env: {},
+      serverUrl: "http://127.0.0.1:2024",
+      fetchImpl: fakeHost().fetchImpl,
+    });
+    return { tools, reconciler };
+  };
+
+  const prepare = (tools: ReturnType<typeof createComponentTools>, need = "say it louder") =>
+    byName(tools, "prepare_component_version").invoke({ name: "hello", need }, config);
+
+  it("prepare creates the parent entity when it is missing and links the child to it", async () => {
+    const graph = memoryGraph();
+    const { tools, reconciler } = build(graph);
+    const text = await prepare(tools);
+    expect(text).toContain("Prepared hello@0.1.1 from hello@0.1.0");
+    expect(text).toContain("lineage: recorded (id n-2; supersedes hello@0.1.0; parent entity created)");
+
+    const parent = graph.entity("n-1");
+    expect(parent.title).toBe("hello@0.1.0");
+    expect(parent.entity_type).toBe("component_version");
+    expect(parent.status).toBe("completed");
+    expect(parent.tags).toEqual(expect.arrayContaining(["outcome:converged", "produced-by:seed"]));
+    expect(parent.custom).toMatchObject({
+      component: "hello",
+      version: "0.1.0",
+      outcome: "converged",
+      provenance: { produced_by: "seed" },
+    });
+
+    const child = graph.entity("n-2");
+    expect(child.title).toBe("hello@0.1.1");
+    expect(child.status).toBe("active");
+    expect(child.tags).toEqual(
+      expect.arrayContaining([
+        "component_version",
+        "component:hello",
+        "version:0.1.1",
+        "outcome:candidate",
+        "produced-by:agent-1",
+      ]),
+    );
+    expect(child.custom).toMatchObject({
+      component: "hello",
+      version: "0.1.1",
+      need: "say it louder",
+      thread_id: THREAD,
+      depth: 0,
+      provenance: { produced_by: "agent-1", parent: "hello@0.1.0" },
+      outcome: "candidate",
+    });
+    expect(graph.edges).toEqual([{ fromNodeId: "n-2", toNodeId: "n-1", type: "SUPERSEDES" }]);
+    expect(reconciler.pending()).toEqual([{ name: "hello", version: "0.1.1", entityId: "n-2" }]);
+  });
+
+  it("prepare links to an existing parent entity instead of creating one", async () => {
+    const graph = memoryGraph();
+    await graph.adapter.storeEntity({
+      agent_id: "seed",
+      user_input: "[component_version] hello@0.1.0",
+      agent_output: "the seed",
+      context: "component_version hello",
+      metadata: {
+        entity_type: "component_version",
+        title: "hello@0.1.0",
+        tags: ["component_version"],
+        status: "completed",
+        custom_metadata: { outcome: "converged" },
+      },
+    });
+    const { tools } = build(graph);
+    const text = await prepare(tools);
+    expect(text).toContain("lineage: recorded (id n-2; supersedes hello@0.1.0)");
+    expect(text).not.toContain("parent entity created");
+    expect(graph.edges).toEqual([{ fromNodeId: "n-2", toNodeId: "n-1", type: "SUPERSEDES" }]);
+  });
+
+  it("prepare still succeeds when graph memory is unreachable, and says so", async () => {
+    const graph = memoryGraph();
+    const down = async () => {
+      throw new Error("nats: no responders");
+    };
+    (graph.adapter.searchEntities as jest.Mock).mockImplementation(down);
+    (graph.adapter.graphQuery as jest.Mock).mockImplementation(down);
+    const { tools, reconciler } = build(graph);
+    const text = await prepare(tools);
+    expect(text).toContain("Prepared hello@0.1.1 from hello@0.1.0");
+    expect(text).toContain("lineage: not recorded — nats: no responders");
+    expect(existsSync(path.join(host, "hello", ".versions", "0.1.1", "component.json"))).toBe(true);
+    expect(graph.adapter.storeEntity).not.toHaveBeenCalled();
+    expect(reconciler.pending()).toEqual([]);
+  });
+
+  it("announce marks a candidate announced", async () => {
+    const graph = memoryGraph();
+    const { tools } = build(graph);
+    await prepare(tools);
+    const text = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Louder now." },
+      config,
+    );
+    expect(text).toContain("lineage: announced (id n-2)");
+    const child = graph.entity("n-2");
+    expect(child.custom.provenance).toEqual({
+      produced_by: "agent-1",
+      parent: "hello@0.1.0",
+      announced_at: NOW,
+    });
+    expect(child.custom.outcome).toBe("candidate");
+    expect(graph.updates[0]?.properties).toMatchObject({ tags: ["announced"] });
+    expect(graph.updates[0]?.modes).toMatchObject({ tags: "merge" });
+  });
+
+  it("announce settles a failed outcome with the summary as the reason, once", async () => {
+    const graph = memoryGraph();
+    const { tools, reconciler } = build(graph);
+    await prepare(tools);
+    const text = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Three rounds, still failing.", outcome: "failed" },
+      config,
+    );
+    expect(text).toContain("lineage: settled as failed (id n-2)");
+    const child = graph.entity("n-2");
+    expect(child.custom).toMatchObject({
+      outcome: "failed",
+      reason: "Three rounds, still failing.",
+      settled_at: NOW,
+    });
+    expect(child.status).toBe("completed");
+    expect(child.tags).toContain("outcome:failed");
+    expect(child.tags).not.toContain("outcome:candidate");
+    expect(reconciler.pending()).toEqual([]);
+
+    const again = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Still.", outcome: "failed" },
+      config,
+    );
+    expect(again).toContain("lineage: already settled (id n-2)");
+    expect(graph.updates).toHaveLength(1);
+  });
+
+  it("announce says when a version has no entity and carries on", async () => {
+    const graph = memoryGraph();
+    const { tools } = build(graph);
+    writeComponent(host, "hello", "0.1.1", {
+      entry: SERVICE_ENTRY,
+      contract: PASSING_CONTRACT,
+      manifest: {
+        intent: "Say hello.",
+        lineage: { producedBy: "agent-1", parent: "hello@0.1.0", need: "n" },
+      },
+    });
+    const text = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "s" },
+      config,
+    );
+    expect(text).toContain("lineage: no entity for hello@0.1.1; nothing updated");
+    expect(text).toContain("**hello@0.1.1** — s");
   });
 });
 

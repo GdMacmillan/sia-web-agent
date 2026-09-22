@@ -22,6 +22,7 @@ import {
 } from "./loader.js";
 import type { ComponentConfig, ComponentInternals } from "./sdk.js";
 import { MIDDLEWARE_ONLY_TOOL_NAMES, MIDDLEWARE_TOOL_NAMES } from "./names.js";
+import { getLineageReconciler } from "./lineage-reconcile.js";
 import { createComponentsMiddleware, setActiveComponents } from "./registry.js";
 
 export { MIDDLEWARE_ONLY_TOOL_NAMES, MIDDLEWARE_TOOL_NAMES };
@@ -80,6 +81,11 @@ export interface PrepareComponentAssemblyOptions {
   config: ComponentConfig;
   internals: ComponentInternals;
   importModule?: ImportModule;
+  /**
+   * Runs before each agent turn once components are loaded (default: the
+   * lineage reconciler's turn check). Injectable for tests.
+   */
+  beforeTurn?: () => Promise<void> | void;
 }
 
 export interface ComponentAssembly {
@@ -172,7 +178,9 @@ export async function prepareComponentAssembly(
     loaded.components.length > 0
       ? [
           ...loaded.middleware.map((entry) => entry.middleware),
-          createComponentsMiddleware(),
+          createComponentsMiddleware({
+            beforeTurn: options.beforeTurn ?? (() => getLineageReconciler().onTurn()),
+          }),
         ]
       : [];
 

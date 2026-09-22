@@ -97,3 +97,41 @@ export {
   type ContractResult,
   type RunContractOptions,
 } from "./contract.js";
+export {
+  LINEAGE_ENTITY_TYPE,
+  OUTCOMES,
+  SUPERSEDES,
+  buildLineageEntity,
+  buildParentEntity,
+  decideReconcile,
+  lineageTitle,
+  outcomeFromHostResult,
+  parseLineageRef,
+  settlePayload,
+  type HostComponentView,
+  type LineageEntityInput,
+  type LineageOutcome,
+  type PendingVersion,
+  type ReconcileDecision,
+  type SettledOutcome,
+  type Verdict,
+} from "./lineage.js";
+export { parseHostStatus, readHostComponents } from "./lineage-host.js";
+export {
+  ensureParentEntity,
+  findLineageEntity,
+  markLineageAnnounced,
+  settleLineageEntity,
+  storeLineageEntity,
+} from "./lineage-store.js";
+export {
+  _setLineageReconcilerForTests,
+  createLineageReconciler,
+  discoverProducedVersions,
+  getLineageReconciler,
+  type HostOutcomeFrame,
+  type HostOutcomeResult,
+  type LineageReconciler,
+  type LineageReconcilerOptions,
+  type TrackedVersion,
+} from "./lineage-reconcile.js";

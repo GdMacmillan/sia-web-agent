@@ -123,14 +123,15 @@ interface Entity {
 
 Memory tools are defined in `src/tools/memory-tools.ts` and re-exported
 from `src/tools/index.ts`. The default tool set (`createStandardTools`
-in `src/deep-agent-setup.ts`) wires **five** of them through to the
+in `src/deep-agent-setup.ts`) wires all **eight** of them through to the
 agent: `store_entity`, `retrieve_entity`, `search_entities`,
-`list_entities`, `update_entity_status`. The remaining three
-(`update_entity`, `promote_entities`, `traverse_graph`) are present in
-the source — `update_entity` is exported but not in the standard tool
-list; `promote_entities` and `traverse_graph` aren't exported from
-`tools/index.ts` at all. To use them, wire them in by extending the
-tool list passed to `createDeepAgent`.
+`list_entities`, `update_entity_status`, `update_entity`,
+`promote_entities`, `traverse_graph`. Every tool result ends with a
+`next_step` line pointing at the tool that naturally follows (an empty
+search suggests broadening or storing; a store with a failed edge
+suggests retrying the link through `update_entity`; a
+`component_version` stored without a `SUPERSEDES` edge is told how to
+link its parent).
 
 ### `store_entity`
 
@@ -204,23 +205,39 @@ update_entity_status({
 });
 ```
 
-### `update_entity` *(not in default tool set)*
+### `update_entity`
 
 Update any entity field. Heavier than `update_entity_status` — prefer
 the status-only tool when status is all that's changing.
 
-### `promote_entities` *(not in default tool set, not exported)*
+```ts
+update_entity({
+  entity_id: "…",
+  content: "…", content_mode: "replace" | "append",
+  tags: ["…"], tags_mode: "replace" | "merge",
+  title, priority, context, status,
+  metadata: { key: value },          // merged into the entity's custom metadata; other keys kept
+  related_entity_ids: ["…"],         // edges from this entity to each target
+  relationship_types: ["SUPERSEDES"],// parallel to related_entity_ids; default RELATED_TO
+  notes: "why",
+});
+```
 
-Defined in `src/tools/memory-tools.ts`. Promotes 3+ raw entities to a
-synthesized level, or 3+ synthesized entities to abstract, generating
-synthesized content via LLM. Calls `POST /admin/promote` on the
-backend. Not currently wired through `tools/index.ts`.
+The metadata merge is done client-side (the backend replaces the map
+as a whole); a failed edge is reported in `edge_errors` and does not
+fail the update.
 
-### `traverse_graph` *(not in default tool set, not exported)*
+### `promote_entities`
 
-Defined in `src/tools/memory-tools.ts`. Walks the relationship graph
-from a seed node along outgoing / incoming / both edges. Calls
-`POST /graph/traverse`. Not currently wired through `tools/index.ts`.
+Promotes 3+ raw entities to a synthesized level, or 3+ synthesized
+entities to abstract, generating synthesized content via LLM. Calls
+`POST /admin/promote` on the backend.
+
+### `traverse_graph`
+
+Walks the relationship graph from a seed node along outgoing / incoming
+/ both edges, optionally filtered by edge type. Calls
+`POST /graph/traverse`.
 
 ## Semantic search
 
@@ -423,15 +440,47 @@ store_entity({
 
 ### Storage shape
 
-Relationships are stored in entity metadata in the reference backend
-(not as separate graph edges) for:
+Relationships are graph edges (`POST /graph/edges`, from the new entity
+to each target, typed by the relationship string). Types are free
+strings end to end — no backend schema change per relationship type —
+and `traverse_graph` walks them in either direction, optionally
+filtered by type. Edges are written at store time
+(`related_entity_ids` + `relationship_types`) or afterwards through
+`update_entity` with the same two fields.
 
-- **Simplicity** — no backend schema changes per relationship type.
-- **Flexibility** — relationship semantics can evolve.
-- **Portability** — entities are self-contained.
+### Conventions — `component_version` (lineage)
 
-Tradeoff: no graph-traversal queries on relationships in the reference
-backend (yet). `traverse_graph` operates at the entity level.
+The component tools (`docs/COMPONENTS.md` §6) keep one entity per
+component version so that every agent sharing the workspace can read
+what was tried, why, and what became of it. The shape is fixed by code,
+not by prompt:
+
+| Field | Value |
+|---|---|
+| `entity_type` | `component_version` |
+| `title` | `<name>@<version>` (e.g. `execute-code@0.2.3`) — looked up by exact title |
+| `content` | the component under both spellings (`execute-code`, `execute_code`), the parent, the need verbatim, the thread id, the producer, the outcome and its reason |
+| `context` | `component_version <name>` |
+| `tags` | `component_version`, `component:<name>`, `<name>`, `<name_with_underscores>`, `version:<v>`, `outcome:<o>`, `produced-by:<agent or seed>`, `announced` once announced |
+| `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at? }` |
+| `abstraction_level` | `raw` |
+| `status` | `active` while `outcome: candidate`; `completed` once settled. Never archived |
+| edge | `SUPERSEDES`, new version → parent |
+
+`outcome` is `candidate` → one of `converged`, `reverted`, `failed`,
+`rejected`. Writers: `prepare_component_version` (child as candidate,
+parent created from its manifest if missing), `announce_component_version`
+(`announced_at`, or `failed` with the summary as reason), and the lineage
+reconciler (the host's verdict, pushed to the agent or polled from the
+host — idempotent, so both paths agree).
+
+Two search facts shape the convention. The backend indexes title, content
+and tags — never `metadata` — which is why the need, the names and the
+outcome are repeated in words. And search cascades abstract →
+synthesized → raw, stopping at the first level with a hit, so a raw
+lineage entity is shadowed by any higher-level match on the same words;
+filter by `entity_type: "component_version"` when looking lineage up
+(`search_entities("execute_code version", { entity_type: "component_version" })`).
 
 ### Best practices
 

@@ -529,11 +529,50 @@ contract ran it out-of-process and proves behaviour, not liveness.
 | `run_component_contract({ name, version? })` | `runComponentContract` on the named version; `contract passed for …` / `contract FAILED for …: <error>`. |
 | `announce_component_version({ name, version, summary, outcome?, channel? })` | Tells the host about the candidate and, when `SIA_ANNOUNCE_TO_CHAT` is on, posts one message with a link to the thread (`HOST_CONTRACT.md` §3.4). Best-effort: a host without those endpoints is reported, never thrown. |
 
-Lineage lives in two places: `manifest.lineage` on disk, and a
-`component_version` entity the skill stores in memory as soon as the
-version directory exists (linked with `SUPERSEDES` to its parent). The
-entity is written early on purpose: a self-task thread lives only as long
-as the process, and a restart mid-iteration must still leave a trace.
+**Lineage.** It lives in two places: `manifest.lineage` on disk (one node's
+view), and a `component_version` entity in graph memory (the workspace's
+view, readable by every agent that shares it). The entity is written by the
+tools, not by the model:
+
+| Entity field | Value |
+|---|---|
+| `entity_type` / `title` | `component_version` / `<name>@<version>` — exact-title lookups depend on it |
+| `content` | prose a stranger can use: the component under both spellings (`execute-code`, `execute_code`), the parent, the need verbatim, the thread, the producer, the outcome and its reason |
+| `tags` | `component_version`, `component:<name>`, both spellings, `version:<v>`, `outcome:<o>`, `produced-by:<agent>`, `announced` |
+| `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at? }` |
+| `status` | `active` while a candidate, `completed` once settled — never archived; a reverted version is exactly the memory worth keeping |
+| edge | `SUPERSEDES`, new version → parent |
+
+`outcome` is one of `candidate`, `converged`, `reverted`, `failed`,
+`rejected`. `prepare_component_version` stores the child as a `candidate`
+as soon as the version directory exists (a self-task thread lives only as
+long as the process, and a restart mid-iteration must still leave a
+trace), first making sure the parent has an entity — created from the
+parent's own manifest, `converged`, when nobody stored one, so every lineage
+has a root. `announce_component_version` stamps `provenance.announced_at`
+or, on `outcome: "failed"`, settles the entity with the summary as the
+reason. Memory failing never fails either tool; the result's `lineage:`
+line says what happened.
+
+The host's verdict arrives two ways, and both settle the same entity
+idempotently — whichever lands first wins, the other finds nothing left to
+do. The host **pushes** it to `POST /components/outcome` on the agent's own
+server (`HOST_CONTRACT.md` §3.6), and the agent **polls** for it: the
+`lineageReconciler` starts after assembly with every version under the
+host-managed root this agent produced whose entity is still a `candidate`,
+reads the host's `GET /status` every 3 s for up to 120 s (a swap's health
+wait) and settles from `lastOutcome` (`activated` → `converged`, `reverted`,
+`failed`); a version the host no longer lists as candidate or active, and
+never reported on, is `rejected` — after the cap at boot, at once during a
+turn. The turn check runs from `componentsMiddleware` at most once a
+minute and only while something is pending. Nothing here can break boot:
+no memory adapter or no `SIA_DAEMON_URL` latches the reconciler off for
+the process, and every failure is logged and dropped.
+
+Search is by words, not metadata: the need, the names and the outcome are
+in the title, content and tags for that reason. A raw entity can be
+shadowed by a higher-level hit on the same words, so filter by
+`entity_type: "component_version"` when looking lineage up.
 
 ---
 

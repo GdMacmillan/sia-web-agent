@@ -4,7 +4,7 @@ description: Write, check and announce a new version of one of your own componen
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Iterate a component
@@ -25,7 +25,15 @@ do here changes what is live.
 | `announce_component_version` | Tell the host about the candidate (and, when enabled, post one message linking this thread) |
 
 Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `contract.ts`, and
-`search_entities` / `store_entity` / `update_entity` for lineage.
+`search_entities` / `retrieve_entity` / `traverse_graph` for reading the lineage graph memory keeps.
+
+Lineage is recorded for you. `prepare_component_version` stores a `component_version` entity titled
+`<name>@<next>` (the need, this thread's id, the parent, `outcome: candidate`) linked `SUPERSEDES` to
+the entity for `<name>@<previous>`, creating that one from its manifest if nobody has yet.
+`announce_component_version` marks it announced, or settles it as `failed`. The host's verdict —
+`converged`, `reverted`, `rejected` — is written by the process that comes back after the restart, not
+by you. Each tool's result carries a `lineage:` line saying what it recorded; read it, and continue
+either way — memory being unreachable never stops an iteration.
 
 ## The three rules
 
@@ -47,13 +55,16 @@ Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `con
 1. **Name the component from the need.** Tool names and component names differ (`execute_code` is
    the tool; `execute-code` is the component). `describe_component` shows the manifest `intent`,
    the current version, which root wins and the paths — read it before deciding what to change.
-2. **Prepare, then record lineage immediately.** Call `prepare_component_version` with the need in
-   the words of whoever raised it. If earlier candidates are still waiting under the host root,
-   the new number simply follows them (`0.1.1` → `0.1.2`); the parent is still the current
-   version, and a patch bump is right unless the need is genuinely larger. Then, before editing anything, `store_entity` a
-   `component_version` entity titled `<name>@<next>` whose content holds the need, this thread's
-   id and "in progress"; link it with `SUPERSEDES` to the entity for `<name>@<previous>` if
-   `search_entities` finds one. A restart kills this thread; the entity is the trace that survives.
+2. **Read the lineage before you propose, then prepare.** `search_entities` for `<name>` with
+   `entity_type: "component_version"` and read what came before: a version settled `reverted` or
+   `rejected` names, in its content, the need it answered and why it was turned down — do not
+   propose it again unchanged, and say so in the announcement if the need is the same one. What
+   memory says about a version is authoritative, including versions other agents in the workspace
+   produced. Then call `prepare_component_version` with the need in the words of whoever raised
+   it. If earlier candidates are still waiting under the host root, the new number simply follows
+   them (`0.1.1` → `0.1.2`); the parent is still the current version, and a patch bump is right
+   unless the need is genuinely larger. The result's `lineage:` line says whether the entity was
+   recorded; a restart kills this thread, and that entity is the trace that survives.
 3. **Change the entry, and make the contract prove it.** `read_file` the copied `entry.ts` and
    `contract.ts`. Make the smallest change to the entry that answers the need, and add a contract
    case that would fail without it — a version proves itself. Keep the manifest's `replaces` name;
@@ -63,8 +74,9 @@ Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `con
    three edit/run rounds — a need that resists three attempts deserves a person's eyes, not a
    fourth guess.
 5. **Announce once.** On a pass, `announce_component_version` with a two-sentence summary: what
-   changed and why. On exhaustion, announce with `outcome: "failed"` and what stood in the way.
-   Then `update_entity` on the lineage entity with the outcome.
+   changed and why. On exhaustion, announce with `outcome: "failed"` and what stood in the way —
+   that summary becomes the recorded reason, so make it the one a future iteration needs to read.
+   The announcement updates the lineage entity itself; there is nothing to store afterwards.
 6. **Say what is true.** In this thread and in the announcement: the version is described now and
    runs after the host activates it and you restart. The contract passed against the candidate,
    out-of-process; nothing is live.
