@@ -44,7 +44,9 @@ interface Captured {
   body: Record<string, unknown> | undefined;
 }
 
-function fakeHost(statuses: { thread?: number; event?: number; publish?: number } = {}) {
+function fakeHost(
+  statuses: { thread?: number; event?: number; publish?: number; selfTask?: boolean } = {},
+) {
   const captured: Captured[] = [];
   const fetchImpl = jest.fn(async (url: unknown, init: unknown): Promise<Response> => {
     const req = (init ?? {}) as RequestInit;
@@ -58,7 +60,10 @@ function fakeHost(statuses: { thread?: number; event?: number; publish?: number 
     if (u.includes("/threads/")) {
       const status = statuses.thread ?? 200;
       return new Response(
-        JSON.stringify({ thread_id: THREAD, metadata: { channel: "dev", self_task: true } }),
+        JSON.stringify({
+          thread_id: THREAD,
+          metadata: { channel: "dev", self_task: statuses.selfTask ?? true },
+        }),
         { status },
       );
     }
@@ -488,6 +493,75 @@ describe("component tools", () => {
       expect(text).toContain("candidate event: accepted by the host (200).");
       expect(text).toContain('message to "dev" rejected by the host (500); the summary stays in this thread.');
     });
+
+    it("refuses a candidate from a thread that is not the self-task thread that built it", async () => {
+      const { fetchImpl, captured } = fakeHost({ selfTask: false });
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        daemonUrl: "http://127.0.0.1:7700",
+        daemonToken: "t",
+        serverUrl: "http://127.0.0.1:2024",
+        announceToChat: true,
+        fetchImpl,
+      });
+      await prepare(tools);
+      const text = await byName(tools, "announce_component_version").invoke(
+        { name: "hello", version: "0.1.1", summary: "s" },
+        config,
+      );
+      expect(text).toBe(
+        "Cannot announce: this is not the self-task thread that built the candidate. " +
+          "announce_component_version is called from the self-task thread that produced " +
+          "the version (see the iterate-component skill), so a version is announced by " +
+          "the work that made it, not by whatever thread happens to call the tool.",
+      );
+      expect(captured.some((c) => c.url.endsWith("/chat/component-version"))).toBe(false);
+      expect(captured.some((c) => c.url.endsWith("/chat/publish"))).toBe(false);
+    });
+
+    it("refuses a failed outcome too, from a non-self-task thread", async () => {
+      const { fetchImpl, captured } = fakeHost({ selfTask: false });
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        daemonUrl: "http://127.0.0.1:7700",
+        daemonToken: "t",
+        serverUrl: "http://127.0.0.1:2024",
+        announceToChat: true,
+        fetchImpl,
+      });
+      await prepare(tools);
+      const text = await byName(tools, "announce_component_version").invoke(
+        { name: "hello", version: "0.1.1", summary: "Three rounds, still failing.", outcome: "failed" },
+        config,
+      );
+      expect(text).toContain("Cannot announce: this is not the self-task thread");
+      expect(captured.some((c) => c.url.endsWith("/chat/component-version"))).toBe(false);
+      expect(captured.some((c) => c.url.endsWith("/chat/publish"))).toBe(false);
+    });
+
+    it("proceeds when the thread lookup fails — an unknown self-task status is not a refusal", async () => {
+      const { fetchImpl, captured } = fakeHost({ thread: 404, event: 200 });
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        daemonUrl: "http://127.0.0.1:7700",
+        daemonToken: "t",
+        serverUrl: "http://127.0.0.1:2024",
+        fetchImpl,
+      });
+      await prepare(tools);
+      const text = await byName(tools, "announce_component_version").invoke(
+        { name: "hello", version: "0.1.1", summary: "s" },
+        config,
+      );
+      expect(text).toContain("candidate event: accepted by the host");
+      expect(captured.some((c) => c.url.endsWith("/chat/component-version"))).toBe(true);
+    });
   });
 });
 
@@ -635,7 +709,9 @@ describe("component lineage", () => {
       outcome: "candidate",
     });
     expect(graph.edges).toEqual([{ fromNodeId: "n-2", toNodeId: "n-1", type: "SUPERSEDES" }]);
-    expect(reconciler.pending()).toEqual([{ name: "hello", version: "0.1.1", entityId: "n-2" }]);
+    expect(reconciler.pending()).toEqual([
+      { name: "hello", version: "0.1.1", announced: false, entityId: "n-2" },
+    ]);
   });
 
   it("prepare links to an existing parent entity instead of creating one", async () => {
@@ -741,6 +817,99 @@ describe("component lineage", () => {
     );
     expect(text).toContain("lineage: no entity for hello@0.1.1; nothing updated");
     expect(text).toContain("**hello@0.1.1** — s");
+  });
+
+  it("refuses a second candidate announcement for the same component from the same thread while the first is still pending", async () => {
+    const graph = memoryGraph();
+    const { tools } = build(graph);
+    await prepare(tools, "say it louder");
+    const first = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Louder now." },
+      config,
+    );
+    expect(first).toContain("lineage: announced (id n-2)");
+
+    await prepare(tools, "say it louder, again");
+    const text = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.2", summary: "Even louder." },
+      config,
+    );
+    expect(text).toBe(
+      "Cannot announce: hello@0.1.1 from this thread is still pending a verdict; announce once per candidate.",
+    );
+    // Re-announcing the same pending version is not a "second" announcement.
+    const again = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Louder now, still." },
+      config,
+    );
+    expect(again).toContain("lineage: announced (id n-2)");
+  });
+
+  it("clears the guard on a failed outcome, so a fresh candidate for the same component can be announced next", async () => {
+    const graph = memoryGraph();
+    const { tools } = build(graph);
+    await prepare(tools, "say it louder");
+    await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Louder now." },
+      config,
+    );
+    await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "no good", outcome: "failed" },
+      config,
+    );
+
+    await prepare(tools, "say it louder, again");
+    const text = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.2", summary: "Even louder." },
+      config,
+    );
+    expect(text).not.toMatch(/^Cannot announce/);
+    expect(text).toContain("lineage: announced (id n-3)");
+  });
+
+  it("does not stamp announced when the host rejects the candidate event, and a retry is not blocked by the guard", async () => {
+    const graph = memoryGraph();
+    const rejected = fakeHost({ event: 500 });
+    const reconciler = createLineageReconciler({
+      agentId: "agent-1",
+      daemonUrl: undefined,
+      getAdapter: () => graph.adapter,
+      discoverLocalVersions: async () => [],
+    });
+    const tools = createComponentTools({
+      projectRoot: project,
+      componentsDir: host,
+      agentId: "agent-1",
+      adapter: () => graph.adapter,
+      reconciler,
+      now: () => new Date(NOW),
+      daemonUrl: "http://127.0.0.1:7700",
+      daemonToken: "t",
+      serverUrl: "http://127.0.0.1:2024",
+      fetchImpl: rejected.fetchImpl,
+    });
+    await prepare(tools);
+
+    const text = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Louder now." },
+      config,
+    );
+    expect(text).toContain("candidate event: rejected by the host (500).");
+    expect(text).not.toContain("lineage: announced");
+    const child = graph.entity("n-2");
+    expect(child.custom.provenance).not.toHaveProperty("announced_at");
+    expect(reconciler.pending()).toEqual([
+      { name: "hello", version: "0.1.1", announced: false, entityId: "n-2" },
+    ]);
+
+    // Not stamped means not guarded either: the same version can be
+    // announced again without tripping the double-announce refusal.
+    const retry = await byName(tools, "announce_component_version").invoke(
+      { name: "hello", version: "0.1.1", summary: "Louder now, retry." },
+      config,
+    );
+    expect(retry).toContain("candidate event: rejected by the host (500).");
+    expect(retry).not.toMatch(/^Cannot announce/);
   });
 });
 

@@ -97,6 +97,8 @@ function threadIdFrom(config?: RunnableConfig): string | undefined {
 
 /** Most distinct thread × name@version entries kept for run history. */
 const CONTRACT_RUN_HISTORY_LIMIT = 256;
+/** Most distinct thread × component entries kept for the double-announce guard. */
+const ANNOUNCE_GUARD_LIMIT = 256;
 
 interface ContractRunRecord {
   runs: number;
@@ -299,22 +301,25 @@ export function createComponentTools(
   };
 
   /**
-   * Bring the version's entity up to date with an announcement: a
-   * candidate is marked announced, a failure settles it. Returns the line
-   * the tool result carries; never throws.
+   * Bring the version's entity up to date with an announcement: a failure
+   * settles it right away; a candidate is *not* stamped here — the caller
+   * decides when the announcement actually reached anyone (see
+   * `markCandidateAnnounced`) — so this returns the entity id instead of a
+   * report line for that case. Returns the line the tool result carries
+   * (empty for a candidate, filled in later); never throws.
    */
   const recordAnnouncement = async (input: {
     name: string;
     version: string;
     outcome: "candidate" | "failed";
     summary: string;
-  }): Promise<string> => {
+  }): Promise<{ line: string; candidateEntityId?: string }> => {
     const title = lineageTitle(input.name, input.version);
     try {
       const adapter = memory();
       const entity = await findLineageEntity(adapter, title);
       if (!entity) {
-        return `lineage: no entity for ${title}; nothing updated`;
+        return { line: `lineage: no entity for ${title}; nothing updated` };
       }
       if (input.outcome === "failed") {
         reconciler().untrack(input.name, input.version);
@@ -324,12 +329,38 @@ export function createComponentTools(
           { outcome: "failed", reason: input.summary },
           nowIso,
         );
-        return result === "settled"
-          ? `lineage: settled as failed (id ${entity.id})`
-          : `lineage: already settled (id ${entity.id})`;
+        return {
+          line:
+            result === "settled"
+              ? `lineage: settled as failed (id ${entity.id})`
+              : `lineage: already settled (id ${entity.id})`,
+        };
       }
-      await markLineageAnnounced(adapter, entity.id, nowIso());
-      return `lineage: announced (id ${entity.id})`;
+      return { line: "", candidateEntityId: entity.id };
+    } catch (error: unknown) {
+      return { line: `lineage: not updated — ${errorMessage(error)}` };
+    }
+  };
+
+  /**
+   * Stamp a candidate's entity as announced and tell the reconciler, once
+   * the caller knows the announcement is actually going out (or that no
+   * host is configured to confirm it — see `announceTool`). Idempotent via
+   * `markLineageAnnounced`'s own settled-entity guard; never throws.
+   */
+  const markCandidateAnnounced = async (
+    name: string,
+    version: string,
+    entityId: string,
+  ): Promise<string> => {
+    try {
+      const adapter = memory();
+      const result = await markLineageAnnounced(adapter, entityId, nowIso());
+      if (result === "already_settled") {
+        return `lineage: already settled (id ${entityId})`;
+      }
+      reconciler().markAnnounced(name, version);
+      return `lineage: announced (id ${entityId})`;
     } catch (error: unknown) {
       return `lineage: not updated — ${errorMessage(error)}`;
     }
@@ -498,6 +529,19 @@ export function createComponentTools(
     },
   });
 
+  // Per-thread, per-component record of the version last announced as a
+  // candidate, so a second `announce_component_version` for the same
+  // component from the same thread — while that candidate is still
+  // pending — is refused rather than silently repeated. A `failed` outcome
+  // clears the entry (the story for this thread/component is over); a
+  // settlement that arrives out of band (a keeper's verdict, a revert)
+  // does not, so a self-task thread that genuinely starts a fresh
+  // candidate after that stays blocked until the process restarts — a
+  // known, accepted limitation of a process-local guard.
+  const pendingAnnouncements = new Map<string, string>();
+
+  const announceGuardKey = (threadId: string, name: string): string => `${threadId}\u0000${name}`;
+
   const announceTool = new DynamicStructuredTool({
     name: "announce_component_version",
     description:
@@ -507,8 +551,11 @@ export function createComponentTools(
       "raised in. A need raised outside a room (a direct conversation) is " +
       "posted nowhere in the room; its owner sees it where they asked. " +
       "Pass `channel` to post to a room of your choosing instead. Call it " +
-      "once, after the contract ran. outcome is \"candidate\" (default) or " +
-      "\"failed\".",
+      "once, after the contract ran, from the self-task thread that built " +
+      "the version — a second candidate announcement for the same " +
+      "component from the same thread while the first is still pending is " +
+      "refused, as is any call from a thread that is not a self-task. " +
+      "outcome is \"candidate\" (default) or \"failed\".",
     schema: z.object({
       name: z.string().describe("The component name."),
       version: z.string().describe("The version this thread produced."),
@@ -557,12 +604,14 @@ export function createComponentTools(
       const id = agentId();
       const threadId = threadIdFrom(config);
       const fetchImpl = opts.fetchImpl ?? fetch;
-      const report: string[] = [
-        await recordAnnouncement({ name, version, outcome: kind, summary: trimmedSummary }),
-      ];
 
-      // The thread's own metadata says which room the work came from.
+      // The thread's own metadata says which room the work came from, and
+      // — for a candidate — whether this is the self-task thread that is
+      // supposed to be doing the announcing. A lookup failure (no thread
+      // id, a 404, a network error) is not a refusal: both checks below
+      // simply proceed as they always have when the metadata is unknown.
       let inheritedChannel: string | undefined;
+      let threadMetadata: Record<string, unknown> | undefined;
       if (threadId !== undefined) {
         const serverUrl = (
           opts.serverUrl ?? resolveOwnServerUrl({ env, argv: opts.argv })
@@ -575,15 +624,66 @@ export function createComponentTools(
           });
           if (res.ok) {
             const thread = (await res.json()) as { metadata?: Record<string, unknown> };
-            const value = thread?.metadata?.channel;
+            threadMetadata = thread?.metadata;
+            const value = threadMetadata?.channel;
             if (typeof value === "string" && value) {
               inheritedChannel = value;
             }
           }
         } catch (_error) {
-          // No room known: the room message is skipped below.
+          // No room known, no self-task check possible: proceed as before.
         }
       }
+
+      if (threadMetadata !== undefined && threadMetadata.self_task !== true) {
+        return (
+          "Cannot announce: this is not the self-task thread that built the candidate. " +
+          "announce_component_version is called from the self-task thread that produced " +
+          "the version (see the iterate-component skill), so a version is announced by " +
+          "the work that made it, not by whatever thread happens to call the tool."
+        );
+      }
+
+      let guardKey: string | undefined;
+      if (kind === "candidate" && threadId !== undefined) {
+        guardKey = announceGuardKey(threadId, name);
+        const priorVersion = pendingAnnouncements.get(guardKey);
+        if (priorVersion !== undefined && priorVersion !== version) {
+          return (
+            `Cannot announce: ${lineageTitle(name, priorVersion)} from this thread is still ` +
+            "pending a verdict; announce once per candidate."
+          );
+        }
+      }
+
+      const report: string[] = [];
+      const recorded = await recordAnnouncement({ name, version, outcome: kind, summary: trimmedSummary });
+      if (recorded.line) {
+        report.push(recorded.line);
+      }
+      if (kind === "failed" && threadId !== undefined) {
+        // The story for this thread/component is over: free the guard so a
+        // later self-task thread for the same component is not blocked by
+        // a candidate that never converged.
+        pendingAnnouncements.delete(announceGuardKey(threadId, name));
+      }
+
+      const finishCandidate = async (): Promise<void> => {
+        if (kind !== "candidate" || recorded.candidateEntityId === undefined) {
+          return;
+        }
+        report.push(await markCandidateAnnounced(name, version, recorded.candidateEntityId));
+        if (threadId !== undefined) {
+          const k = guardKey ?? announceGuardKey(threadId, name);
+          pendingAnnouncements.set(k, version);
+          while (pendingAnnouncements.size > ANNOUNCE_GUARD_LIMIT) {
+            const oldest = pendingAnnouncements.keys().next().value;
+            if (oldest === undefined) break;
+            pendingAnnouncements.delete(oldest);
+          }
+        }
+      };
+
       const room = channel?.trim() || inheritedChannel;
       const text = buildAnnouncementText({
         name,
@@ -599,6 +699,8 @@ export function createComponentTools(
       const daemonUrl = (opts.daemonUrl ?? env.SIA_DAEMON_URL ?? "").trim().replace(/\/+$/, "");
       const daemonToken = (opts.daemonToken ?? env.SIA_DAEMON_TOKEN ?? "").trim();
       if (!daemonUrl || !daemonToken) {
+        // No host to confirm receipt with: stamp now, exactly as before.
+        await finishCandidate();
         report.push("host chat endpoint not configured; the summary stays in this thread:");
         return `${report.join("\n")}\n${text}`;
       }
@@ -626,10 +728,16 @@ export function createComponentTools(
           });
           if (res.ok) {
             report.push(`candidate event: accepted by the host (${res.status}).`);
+            await finishCandidate();
           } else if (res.status === 404) {
             report.push(
               "candidate event: the host does not accept component-version events yet (404); the version is described on disk and the message below still goes out.",
             );
+            // An older host that has never heard of this endpoint cannot
+            // hold a candidate slot either, so there is nothing for this
+            // version to be displaced from — stamping now is as good as
+            // it gets on this host.
+            await finishCandidate();
           } else {
             report.push(`candidate event: rejected by the host (${res.status}).`);
           }

@@ -544,15 +544,20 @@ tools, not by the model:
 | edge | `SUPERSEDES`, new version → parent |
 
 `outcome` is one of `candidate`, `converged`, `reverted`, `failed`,
-`rejected`. `prepare_component_version` stores the child as a `candidate`
-as soon as the version directory exists (a self-task thread lives only as
-long as the process, and a restart mid-iteration must still leave a
-trace), first making sure the parent has an entity — created from the
-parent's own manifest, `converged`, when nobody stored one, so every lineage
-has a root. `announce_component_version` stamps `provenance.announced_at`
-or, on `outcome: "failed"`, settles the entity with the summary as the
-reason. Memory failing never fails either tool; the result's `lineage:`
-line says what happened.
+`rejected`, `abandoned`. `prepare_component_version` stores the child as a
+`candidate` as soon as the version directory exists (a self-task thread
+lives only as long as the process, and a restart mid-iteration must still
+leave a trace), first making sure the parent has an entity — created from
+the parent's own manifest, `converged`, when nobody stored one, so every
+lineage has a root. `announce_component_version` stamps
+`provenance.announced_at` or, on `outcome: "failed"`, settles the entity
+with the summary as the reason. It is called once, from the self-task
+thread that built the version: a call from a thread whose metadata is
+readable and is not a self-task is refused, and a second candidate
+announcement for the same component from the same thread while the first
+is still pending is refused too, naming the earlier version. Memory
+failing never fails either tool; the result's `lineage:` line says what
+happened.
 
 The host's verdict arrives two ways, and both settle the same entity
 idempotently — whichever lands first wins, the other finds nothing left to
@@ -562,12 +567,31 @@ server (`HOST_CONTRACT.md` §3.6), and the agent **polls** for it: the
 host-managed root this agent produced whose entity is still a `candidate`,
 reads the host's `GET /status` every 3 s for up to 120 s (a swap's health
 wait) and settles from `lastOutcome` (`activated` → `converged`, `reverted`,
-`failed`); a version the host no longer lists as candidate or active, and
-never reported on, is `rejected` — after the cap at boot, at once during a
-turn. The turn check runs from `componentsMiddleware` at most once a
-minute and only while something is pending. Nothing here can break boot:
-no memory adapter or no `SIA_DAEMON_URL` latches the reconciler off for
-the process, and every failure is logged and dropped.
+`failed`). A version the host no longer lists as candidate or active falls
+into one of three buckets, none of which is a verdict from anyone but this
+side:
+
+- **never announced** — the candidate event never reached the host, so it
+  may simply still be under construction (a self-task in another thread
+  can be mid-edit when a turn elsewhere runs this check). A turn never
+  settles it; only a boot pass may, since a restart ends any self-task
+  that was still running: `abandoned`, "never announced".
+- **displaced** — it was announced, but a different, newer candidate for
+  the same component now occupies the host's slot: `abandoned`, "replaced
+  by `<version>`". Nobody rejected this one; it was simply superseded
+  before a verdict arrived.
+- **genuinely gone**, with nothing having taken its place — a keeper's
+  reject leaves no outcome behind, so this is `rejected`: at once during a
+  turn, and at boot only once the poll has waited long enough (the cap) for
+  a swap in flight to be recorded.
+
+Unlike `rejected` and `reverted`, `abandoned` carries no judgment on the
+change itself — the `iterate-component` skill treats it as work that may
+be retried or resumed, not as a verdict to work around. The turn check
+runs from `componentsMiddleware` at most once a minute and only while
+something is pending. Nothing here can break boot: no memory adapter or no
+`SIA_DAEMON_URL` latches the reconciler off for the process, and every
+failure is logged and dropped.
 
 Search is by words, not metadata: the need, the names and the outcome are
 in the title, content and tags for that reason. A raw entity can be

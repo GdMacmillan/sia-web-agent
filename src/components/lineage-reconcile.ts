@@ -32,10 +32,11 @@ import {
   lineageTitle,
   type PendingVersion,
   type SettledOutcome,
+  type TrackedPendingVersion,
   type Verdict,
 } from "./lineage.js";
 
-export interface TrackedVersion extends PendingVersion {
+export interface TrackedVersion extends TrackedPendingVersion {
   entityId: string;
 }
 
@@ -83,6 +84,8 @@ export interface LineageReconciler {
   track(entityId: string, name: string, version: string): void;
   /** Stop watching a version (its entity was settled by other means). */
   untrack(name: string, version: string): void;
+  /** Mark a tracked version as announced, once its candidate event reaches the host. */
+  markAnnounced(name: string, version: string): void;
   pending(): TrackedVersion[];
   enabled(): boolean;
 }
@@ -278,7 +281,7 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
       if (pending.has(k)) continue;
       const entity = await findLineageEntity(a, k);
       if (entity && entity.metadata.outcome === "candidate") {
-        pending.set(k, { ...version, entityId: entity.id });
+        pending.set(k, { ...version, announced: entity.tags.includes("announced"), entityId: entity.id });
       }
     }
   };
@@ -349,7 +352,12 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
       if (!entity) {
         return { status: "not_found" };
       }
-      tracked = { name: frame.component, version: frame.version, entityId: entity.id };
+      tracked = {
+        name: frame.component,
+        version: frame.version,
+        announced: entity.tags.includes("announced"),
+        entityId: entity.id,
+      };
     }
     const verdict: Verdict = {
       outcome: frame.kind,
@@ -365,10 +373,17 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
     onTurn,
     onHostOutcome,
     track: (entityId, name, version) => {
-      pending.set(key(name, version), { name, version, entityId });
+      pending.set(key(name, version), { name, version, announced: false, entityId });
     },
     untrack: (name, version) => {
       pending.delete(key(name, version));
+    },
+    markAnnounced: (name, version) => {
+      const k = key(name, version);
+      const tracked = pending.get(k);
+      if (tracked) {
+        pending.set(k, { ...tracked, announced: true });
+      }
     },
     pending: () => [...pending.values()],
     enabled: () => !latchedOff,
