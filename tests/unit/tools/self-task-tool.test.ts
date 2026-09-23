@@ -292,6 +292,33 @@ describe("start_self_task", () => {
     expect(_activeSelfTasksForTests().size).toBe(0);
   });
 
+  it("explains a host refusal and creates no run", async () => {
+    const refused = fakeServer({
+      create: {
+        status: 403,
+        body: { error: "self_task_not_permitted", reason: "not permitted for this request" },
+      },
+    });
+    const tool = createSelfTaskTool({ fetchImpl: refused.fetchImpl, baseUrl: "http://x", agentId: "a" });
+    const result = await tool.invoke({ task: "x" }, config);
+    expect(result).toMatch(/^Not started: the host refused this self-task/);
+    expect(result).toContain("not permitted for this request");
+    expect(refused.captured.some((c) => c.url.endsWith("/runs/stream"))).toBe(false);
+    expect(_activeSelfTasksForTests().size).toBe(0);
+
+    // A refusal without a reason still reads as a refusal.
+    _resetSelfTaskStateForTests();
+    const bare = fakeServer({ create: { status: 403, body: { error: "self_task_not_permitted" } } });
+    const tool2 = createSelfTaskTool({ fetchImpl: bare.fetchImpl, baseUrl: "http://x", agentId: "a" });
+    expect(await tool2.invoke({ task: "x" }, config)).toMatch(/^Not started: the host refused/);
+
+    // Any other 403 is an ordinary failure.
+    _resetSelfTaskStateForTests();
+    const other = fakeServer({ create: { status: 403, body: { error: "forbidden" } } });
+    const tool3 = createSelfTaskTool({ fetchImpl: other.fetchImpl, baseUrl: "http://x", agentId: "a" });
+    expect(await tool3.invoke({ task: "x" }, config)).toMatch(/creating the thread failed \(403\)/);
+  });
+
   it("reports a failed thread create and a transport error, never throwing", async () => {
     const created = fakeServer({ create: { status: 500, body: { error: "boom" } } });
     const tool = createSelfTaskTool({ fetchImpl: created.fetchImpl, baseUrl: "http://x", agentId: "a" });

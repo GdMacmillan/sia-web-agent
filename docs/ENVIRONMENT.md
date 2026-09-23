@@ -106,7 +106,7 @@ summary stays in the thread.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SIA_ANNOUNCE_TO_CHAT` | unset (off) | Truthy (`1`/`true`/`yes`/`on`) lets `announce_component_version` also post one message to the room the work came from (else the default room). Off keeps announcements to the host event and the thread. |
+| `SIA_ANNOUNCE_TO_CHAT` | unset (off) | Truthy (`1`/`true`/`yes`/`on`) lets `announce_component_version` also post one announcement to the room the need was raised in (none when it was not raised in a room). Off keeps announcements to the host event and the thread. |
 
 ### Own server
 
