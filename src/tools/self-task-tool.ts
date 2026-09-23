@@ -34,6 +34,9 @@ const METADATA_TASK_MAX = 500;
 /** Header the server reads for thread attribution. */
 const AGENT_ID_HEADER = "X-SIA-Agent-Id";
 
+/** Error code the host answers (403) when it refuses to create a self-task. */
+const SELF_TASK_NOT_PERMITTED = "self_task_not_permitted";
+
 export interface ResolveOwnServerUrlInput {
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
@@ -221,7 +224,10 @@ export function createSelfTaskTool(
       "should not happen inline in the current conversation (for example " +
       "iterating one of your components). The new thread starts from the " +
       "task text; pass `skill` to have it load that skill first. One " +
-      "self-task per conversation at a time; a self-task cannot start another.",
+      "self-task per conversation at a time; a self-task cannot start another. " +
+      "The host decides who may ask for one: by default only your owner, so " +
+      "a request that came from someone else (or from no person at all) is " +
+      "refused, and the result says why.",
     schema: z.object({
       task: z
         .string()
@@ -307,6 +313,20 @@ export function createSelfTaskTool(
           body: JSON.stringify({ metadata }),
           signal: AbortSignal.timeout(timeoutMs),
         });
+        if (created.status === 403) {
+          const refusal = await readJson(created);
+          if (refusal.error === SELF_TASK_NOT_PERMITTED) {
+            const reason =
+              typeof refusal.reason === "string" && refusal.reason.trim()
+                ? refusal.reason.trim()
+                : "the person who asked is not allowed to";
+            return (
+              `Not started: the host refused this self-task (${reason}). ` +
+              "Nothing was created. You can tell whoever asked, and pass the idea " +
+              "along to someone who can start it."
+            );
+          }
+        }
         if (!created.ok) {
           return `Cannot start a self-task: creating the thread failed (${created.status}).`;
         }

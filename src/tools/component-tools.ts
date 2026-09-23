@@ -42,13 +42,11 @@ import { resolveOwnServerUrl } from "./self-task-tool.js";
 
 /** Longest any single call to the host may take. */
 export const DEFAULT_ANNOUNCE_TIMEOUT_MS = 10_000;
-/** Where a room message goes when the thread carries no channel of its own. */
-export const DEFAULT_ANNOUNCE_CHANNEL = "general";
 /**
  * Env switch for the room message. Off unless set to a truthy value: an
- * announcement in a shared room reaches every participant, each of whom
- * decides whether to answer it, so it stays opt-in. The host event is
- * always sent.
+ * announcement in a shared room reaches every participant, so it stays
+ * opt-in and a host that renders announcements turns it on. The host event
+ * is always sent.
  */
 export const ANNOUNCE_TO_CHAT_ENV = "SIA_ANNOUNCE_TO_CHAT";
 
@@ -116,7 +114,26 @@ function realpathOr(dir: string): string {
   }
 }
 
-/** Build the announcement text posted to the room. */
+/** Message kind that marks a room message as a component announcement. */
+export const ANNOUNCEMENT_KIND = "announcement";
+/**
+ * Longest need or summary carried in the structured announcement. The host
+ * caps the whole structure, so each free-text field is bounded here; the
+ * full text still goes out in the message body.
+ */
+const ANNOUNCEMENT_FIELD_MAX = 600;
+
+function clip(value: string): string {
+  return value.length > ANNOUNCEMENT_FIELD_MAX
+    ? `${value.slice(0, ANNOUNCEMENT_FIELD_MAX - 1)}…`
+    : value;
+}
+
+/**
+ * Build the announcement text posted to the room. It stands on its own for
+ * clients that render only text; clients that know the announcement kind
+ * render the structured fields instead.
+ */
 export function buildAnnouncementText(input: {
   name: string;
   version: string;
@@ -124,16 +141,24 @@ export function buildAnnouncementText(input: {
   outcome: "candidate" | "failed";
   agentId: string;
   threadId?: string;
+  parentVersion?: string;
+  need?: string;
 }): string {
-  const head =
+  let text =
     input.outcome === "failed"
       ? `**${input.name}@${input.version}** — could not produce a passing version. ${input.summary}`
       : `**${input.name}@${input.version}** — ${input.summary}`;
+  const details: string[] = [];
+  if (input.need?.trim()) details.push(`Need: ${input.need.trim()}`);
+  if (input.parentVersion?.trim()) details.push(`from ${input.parentVersion.trim()}`);
+  if (details.length > 0) {
+    text += `\n${details.join(" · ")}`;
+  }
   if (!input.threadId) {
-    return head;
+    return text;
   }
   const link = `/chat?agentId=${encodeURIComponent(input.agentId)}&threadId=${encodeURIComponent(input.threadId)}`;
-  return `${head}\n\n[Open the thread](${link})`;
+  return `${text}\n\n[Open the thread](${link})`;
 }
 
 /** Create the four component tools. Every option is injectable for tests. */
@@ -401,9 +426,12 @@ export function createComponentTools(
     description:
       "Announce the outcome of a component iteration: tells the host about " +
       "a candidate version and, when room announcements are enabled, posts " +
-      "one message to the room the work came from (or the default room) with " +
-      "a link to this thread. Call it once, after the contract ran. outcome " +
-      "is \"candidate\" (default) or \"failed\".",
+      "one announcement with a link to this thread to the room the need was " +
+      "raised in. A need raised outside a room (a direct conversation) is " +
+      "posted nowhere in the room; its owner sees it where they asked. " +
+      "Pass `channel` to post to a room of your choosing instead. Call it " +
+      "once, after the contract ran. outcome is \"candidate\" (default) or " +
+      "\"failed\".",
     schema: z.object({
       name: z.string().describe("The component name."),
       version: z.string().describe("The version this thread produced."),
@@ -417,7 +445,7 @@ export function createComponentTools(
       channel: z
         .string()
         .optional()
-        .describe("Room to post to (default: the room this thread came from, else the default room)."),
+        .describe("Room to post to (default: the room the need was raised in; none when it was not raised in a room)."),
     }),
     func: async (
       {
@@ -476,10 +504,10 @@ export function createComponentTools(
             }
           }
         } catch (_error) {
-          // The room falls back to the default below.
+          // No room known: the room message is skipped below.
         }
       }
-      const room = channel?.trim() || inheritedChannel || DEFAULT_ANNOUNCE_CHANNEL;
+      const room = channel?.trim() || inheritedChannel;
       const text = buildAnnouncementText({
         name,
         version,
@@ -487,6 +515,8 @@ export function createComponentTools(
         outcome: kind,
         agentId: id,
         threadId,
+        parentVersion,
+        need,
       });
 
       const daemonUrl = (opts.daemonUrl ?? env.SIA_DAEMON_URL ?? "").trim().replace(/\/+$/, "");
@@ -540,6 +570,12 @@ export function createComponentTools(
         );
         return `${report.join("\n")}\n\n${text}`;
       }
+      if (!room) {
+        report.push(
+          "room message: not posted; the need was not raised in a room, so the summary stays in this thread.",
+        );
+        return `${report.join("\n")}\n\n${text}`;
+      }
 
       try {
         const res = await fetchImpl(`${daemonUrl}/chat/publish`, {
@@ -552,6 +588,16 @@ export function createComponentTools(
             isAgent: true,
             ...(threadId !== undefined ? { threadId } : {}),
             text,
+            kind: ANNOUNCEMENT_KIND,
+            announcement: {
+              component: name,
+              version,
+              outcome: kind,
+              ...(parentVersion ? { parentVersion } : {}),
+              ...(need ? { need: clip(need) } : {}),
+              summary: clip(trimmedSummary),
+              ...(threadId !== undefined ? { threadId } : {}),
+            },
             timestamp: new Date().toISOString(),
           }),
           signal: AbortSignal.timeout(timeoutMs),

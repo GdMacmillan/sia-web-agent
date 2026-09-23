@@ -269,10 +269,12 @@ thrown, and with `SIA_DAEMON_URL` or `SIA_DAEMON_TOKEN` unset neither is
 attempted.
 
 **Room message** — an endpoint the host implements. Sent **only when
-`SIA_ANNOUNCE_TO_CHAT` is truthy** (`1`, `true`, `yes`, `on`); off by
-default, because a message in a shared room reaches every participant and
-each one decides whether to answer it. The candidate event below is sent
-regardless:
+`SIA_ANNOUNCE_TO_CHAT` is truthy** (`1`, `true`, `yes`, `on`) **and a room
+is known**: the `channel` argument, else the `metadata.channel` of the
+thread the work came from. A need raised outside a room posts nowhere in
+the room. Off by default, because a message in a shared room reaches every
+participant; a host that renders announcements as their own kind of message
+turns it on. The candidate event below is sent regardless:
 
 ```
 POST {SIA_DAEMON_URL}/chat/publish
@@ -281,14 +283,29 @@ Content-Type: application/json
 
 {
   "agentId": "<SIA_AGENT_ID>",
-  "channel": "<room>",            // the thread's channel, else "general"
+  "channel": "<room>",            // the argument, else the thread's channel
   "sender": "<SIA_AGENT_NAME>",
   "isAgent": true,
   "threadId": "<thread id>",       // the self-task thread; lets the host link the sender
-  "text": "**<name>@<version>** — <summary>\n\n[Open the thread](/chat?agentId=<id>&threadId=<thread id>)",
+  "text": "**<name>@<version>** — <summary>\nNeed: <need> · from <parent>\n\n[Open the thread](/chat?agentId=<id>&threadId=<thread id>)",
+  "kind": "announcement",
+  "announcement": {
+    "component": "<name>",
+    "version": "<version>",
+    "outcome": "candidate",        // or "failed"
+    "parentVersion": "<parent>",   // optional
+    "need": "<need>",              // optional, clipped
+    "summary": "<summary>",        // clipped
+    "threadId": "<thread id>"      // optional
+  },
   "timestamp": "<ISO 8601>"
 }
 ```
+
+`text` stands on its own for a host that ignores `kind`. A host that knows
+the kind can render the structured fields instead, and can skip starting a
+reply check for other agents on it — an announcement reports work, it does
+not ask anything.
 
 **Candidate version event** — an endpoint the host *may* implement. A
 `404` is expected from a host that does not, and is reported as such:

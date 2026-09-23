@@ -325,7 +325,7 @@ describe("component tools", () => {
       expect(text).toContain("candidate event: the host does not accept component-version events yet (404)");
       expect(text).toContain('message posted to "dev" (200).');
       expect(text).toContain(
-        `**hello@0.1.1** — Prints in caps.\n\n[Open the thread](/chat?agentId=agent-1&threadId=${THREAD})`,
+        `**hello@0.1.1** — Prints in caps.\nNeed: say it louder · from hello@0.1.0\n\n[Open the thread](/chat?agentId=agent-1&threadId=${THREAD})`,
       );
 
       expect(captured.map((c) => `${c.method} ${c.url}`)).toEqual([
@@ -351,11 +351,21 @@ describe("component tools", () => {
         sender: "Agent One",
         isAgent: true,
         threadId: THREAD,
-        text: `**hello@0.1.1** — Prints in caps.\n\n[Open the thread](/chat?agentId=agent-1&threadId=${THREAD})`,
+        text: `**hello@0.1.1** — Prints in caps.\nNeed: say it louder · from hello@0.1.0\n\n[Open the thread](/chat?agentId=agent-1&threadId=${THREAD})`,
+        kind: "announcement",
+        announcement: {
+          component: "hello",
+          version: "0.1.1",
+          outcome: "candidate",
+          parentVersion: "hello@0.1.0",
+          need: "say it louder",
+          summary: "Prints in caps.",
+          threadId: THREAD,
+        },
       });
     });
 
-    it("falls back to the default room when the thread has none, and honours an explicit one", async () => {
+    it("posts nowhere in the room when the need was not raised in one, and honours an explicit room", async () => {
       const noThread = fakeHost({ thread: 404 });
       const tools = createComponentTools({
         projectRoot: project,
@@ -370,9 +380,10 @@ describe("component tools", () => {
       await prepare(tools);
       const announce = byName(tools, "announce_component_version");
       const text = await announce.invoke({ name: "hello", version: "0.1.1", summary: "s" }, config);
-      expect(text).toContain('message posted to "general" (200).');
-      const publish = noThread.captured.find((c) => c.url.endsWith("/chat/publish"));
-      expect(publish?.body?.channel).toBe("general");
+      expect(text).toContain("room message: not posted; the need was not raised in a room");
+      expect(noThread.captured.some((c) => c.url.endsWith("/chat/publish"))).toBe(false);
+      // The host still hears about the candidate.
+      expect(noThread.captured.some((c) => c.url.endsWith("/chat/component-version"))).toBe(true);
 
       const explicit = await announce.invoke(
         { name: "hello", version: "0.1.1", summary: "s", channel: "ops" },
@@ -710,5 +721,19 @@ describe("buildAnnouncementText", () => {
     expect(
       buildAnnouncementText({ name: "hello", version: "0.1.1", summary: "s", outcome: "candidate", agentId: "a" }),
     ).toBe("**hello@0.1.1** — s");
+  });
+
+  it("carries the need and the parent so the text stands on its own", () => {
+    expect(
+      buildAnnouncementText({
+        name: "hello",
+        version: "0.1.1",
+        summary: "s",
+        outcome: "candidate",
+        agentId: "a",
+        need: "  say it louder ",
+        parentVersion: "hello@0.1.0",
+      }),
+    ).toBe("**hello@0.1.1** — s\nNeed: say it louder · from hello@0.1.0");
   });
 });
