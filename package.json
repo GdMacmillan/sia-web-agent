@@ -54,7 +54,7 @@
     "semver": "^7",
     "tsx": "^4.23.13",
     "uuid": "14.0.2",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
