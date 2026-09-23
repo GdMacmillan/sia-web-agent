@@ -6,8 +6,8 @@
  * the error text. The runner never throws.
  */
 
-import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import semver from "semver";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -43,12 +43,25 @@ import {
 /** Default contract timeout. */
 export const DEFAULT_CONTRACT_TIMEOUT_MS = 30_000;
 
+/** A file the runner read, identified by its content. */
+export interface LoadedFile {
+  /** Path relative to the version directory. */
+  file: string;
+  /** First 12 hex digits of the sha256 of the bytes on disk. */
+  sha256: string;
+}
+
 export interface ContractResult {
   ok: boolean;
   durationMs: number;
   /** The targeted version, once its manifest parsed; null before that. */
   version: string | null;
   sdkVersion: string;
+  /**
+   * The entry and contract as they were on disk just before this run
+   * imported them; absent when the run stopped before that point.
+   */
+  loaded?: { entry: LoadedFile; contract: LoadedFile };
   error?: string;
 }
 
@@ -70,6 +83,16 @@ type ResolveTargetResult =
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function describeFile(filePath: string, versionDir: string): LoadedFile {
+  let sha256: string;
+  try {
+    sha256 = createHash("sha256").update(readFileSync(filePath)).digest("hex").slice(0, 12);
+  } catch (_error) {
+    sha256 = "unreadable";
+  }
+  return { file: path.relative(versionDir, filePath), sha256 };
 }
 
 /**
@@ -207,12 +230,14 @@ export async function runComponentContract(
   const started = Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_CONTRACT_TIMEOUT_MS;
   let version: string | null = null;
+  let loaded: ContractResult["loaded"];
 
   const fail = (error: string): ContractResult => ({
     ok: false,
     durationMs: Date.now() - started,
     version,
     sdkVersion: SDK_VERSION,
+    ...(loaded !== undefined ? { loaded } : {}),
     error,
   });
 
@@ -245,6 +270,10 @@ export async function runComponentContract(
       return fail(`no contract file: ${manifest.contract}`);
     }
 
+    loaded = {
+      entry: describeFile(component.entryPath, component.versionDir),
+      contract: describeFile(component.contractPath, component.versionDir),
+    };
     const importModule = opts.importModule ?? defaultImportModule;
     const run = async (): Promise<void> => {
       const entryModule = (await importModule(component.entryPath)) as {
@@ -296,6 +325,7 @@ export async function runComponentContract(
       durationMs: Date.now() - started,
       version,
       sdkVersion: SDK_VERSION,
+      loaded,
     };
   } catch (error: unknown) {
     return fail(errorMessage(error));

@@ -95,6 +95,7 @@ export {
   DEFAULT_CONTRACT_TIMEOUT_MS,
   runComponentContract,
   type ContractResult,
+  type LoadedFile,
   type RunContractOptions,
 } from "./contract.js";
 export {

@@ -23,6 +23,8 @@ import {
   readComponentVersion,
   resolveComponentRoots,
   runComponentContract,
+  type ContractResult,
+  type LoadedFile,
   type RunContractOptions,
   type VersionBump,
 } from "../components/index.js";
@@ -91,6 +93,71 @@ function errorMessage(error: unknown): string {
 function threadIdFrom(config?: RunnableConfig): string | undefined {
   const threadId = config?.configurable?.thread_id;
   return typeof threadId === "string" && threadId.length > 0 ? threadId : undefined;
+}
+
+/** Most distinct thread × name@version entries kept for run history. */
+const CONTRACT_RUN_HISTORY_LIMIT = 256;
+
+interface ContractRunRecord {
+  runs: number;
+  loaded?: ContractResult["loaded"];
+}
+
+function describeLoadedFile(
+  current: LoadedFile,
+  previous: LoadedFile | undefined,
+  hadPrevious: boolean,
+): string {
+  const base = `${current.file} sha256 ${current.sha256}`;
+  if (!hadPrevious) {
+    return base;
+  }
+  if (previous === undefined) {
+    return `${base} (not loaded on the previous run)`;
+  }
+  return previous.sha256 === current.sha256
+    ? `${base} (unchanged since the previous run)`
+    : `${base} (changed since the previous run, was ${previous.sha256})`;
+}
+
+/**
+ * Record one contract run and describe it relative to the previous run of
+ * the same version in the same thread.
+ */
+function recordContractRun(
+  history: Map<string, ContractRunRecord>,
+  threadId: string,
+  label: string,
+  result: ContractResult,
+): string[] {
+  const key = `${threadId}\u0000${label}`;
+  const previous = history.get(key);
+  const runs = (previous?.runs ?? 0) + 1;
+
+  history.delete(key);
+  history.set(key, { runs, ...(result.loaded !== undefined ? { loaded: result.loaded } : {}) });
+  while (history.size > CONTRACT_RUN_HISTORY_LIMIT) {
+    const oldest = history.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    history.delete(oldest);
+  }
+
+  const lines: string[] = [];
+  if (result.loaded !== undefined) {
+    const hadPrevious = previous !== undefined;
+    lines.push(
+      `loaded: ${describeLoadedFile(result.loaded.entry, previous?.loaded?.entry, hadPrevious)}; ` +
+        describeLoadedFile(result.loaded.contract, previous?.loaded?.contract, hadPrevious),
+    );
+  }
+  lines.push(
+    runs === 1
+      ? `first run of ${label}'s contract in this thread`
+      : `run ${runs} of ${label}'s contract in this thread`,
+  );
+  return lines;
 }
 
 function coerceBump(value: unknown): VersionBump | null {
@@ -392,12 +459,19 @@ export function createComponentTools(
     },
   });
 
+  // Per-thread record of contract runs, keyed by thread and name@version,
+  // so a result can say how often that version has run and whether the
+  // files it loaded differ from the previous run's.
+  const contractRuns = new Map<string, ContractRunRecord>();
+
   const runTool = new DynamicStructuredTool({
     name: "run_component_contract",
     description:
-      "Run a component's contract out-of-process against a specific " +
+      "Run a component's contract in this process against a specific " +
       "version (or the current one) and report pass/fail with the error " +
-      "text. A pass proves the version behaves; it does not activate it.",
+      "text, the content hashes of the entry and contract files it loaded, " +
+      "and how many times that version's contract has run in this thread. " +
+      "A pass proves the version behaves; it does not activate it.",
     schema: z.object({
       name: z.string().describe("The component name."),
       version: z
@@ -405,17 +479,22 @@ export function createComponentTools(
         .optional()
         .describe("The version to check (default: the current version)."),
     }),
-    func: async ({ name, version }: { name: string; version?: string }): Promise<string> => {
+    func: async (
+      { name, version }: { name: string; version?: string },
+      _runManager?: unknown,
+      config?: RunnableConfig,
+    ): Promise<string> => {
       const target = version?.trim() || undefined;
       const result = await runComponentContract(name, {
         ...(opts.contract ?? {}),
         ...(target !== undefined ? { version: target } : {}),
       });
       const label = `${name}@${result.version ?? target ?? "current"}`;
-      if (result.ok) {
-        return `contract passed for ${label} in ${result.durationMs} ms (SDK ${result.sdkVersion})`;
-      }
-      return `contract FAILED for ${label}: ${result.error ?? "unknown error"}`;
+      const headline = result.ok
+        ? `contract passed for ${label} in ${result.durationMs} ms (SDK ${result.sdkVersion})`
+        : `contract FAILED for ${label}: ${result.error ?? "unknown error"}`;
+      const detail = recordContractRun(contractRuns, threadIdFrom(config) ?? "", label, result);
+      return [headline, ...detail].join("\n");
     },
   });
 
