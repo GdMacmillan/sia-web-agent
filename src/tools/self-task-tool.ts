@@ -221,8 +221,12 @@ export function createSelfTaskTool(
     description:
       "Start a piece of work in a new thread of your own, in the background, " +
       "and return immediately with the thread id. Use it for work that " +
-      "should not happen inline in the current conversation (for example " +
-      "iterating one of your components). The new thread starts from the " +
+      "should not happen inline in the current conversation. Changing how " +
+      "one of your own tools behaves is always such work: those tools are " +
+      "components (execute_code is one), the running version is not the " +
+      "copy in your source tree, and a new version needs its own thread — " +
+      'pass skill "iterate-component" and the person\'s need as the task. ' +
+      "The new thread starts from the " +
       "task text; pass `skill` to have it load that skill first. One " +
       "self-task per conversation at a time; a self-task cannot start another. " +
       "The host may refuse to start one; the result then says why.",

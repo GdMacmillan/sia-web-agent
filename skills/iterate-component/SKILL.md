@@ -1,6 +1,6 @@
 ---
 name: iterate-component
-description: Write, check and announce a new version of one of your own components in response to a stated need — "improve a component", "a tool is broken", "iterate <name>", "new component version". Runs inside a self-task thread; never edits the running version.
+description: Write, check and announce a new version of one of your own components (tools such as execute_code) in response to a stated need — "a tool is broken", "execute_code should also say X", "change what <tool> returns", "iterate <name>", "new component version". Runs inside a self-task thread; from a conversation, start one with start_self_task and skill "iterate-component" instead of editing anything. Never edits the running version or the source tree.
 license: MIT
 metadata:
   author: self-improving-agent

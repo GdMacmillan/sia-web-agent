@@ -6,7 +6,9 @@ description: |
   dependencies, and locating functionality using filesystem and search tools.
   You MUST load this skill before reading, searching, modifying, or analyzing
   any part of the codebase. Only skip for pure conversational or memory-only
-  interactions.
+  interactions. Not for changing how one of your own tools behaves (a
+  component such as execute_code) — that is a self-task: start_self_task with
+  the iterate-component skill.
 license: MIT
 metadata:
   author: self-improving-agent
@@ -30,6 +32,11 @@ You MUST load this skill when your task involves ANY of:
 - Investigating bugs or unexpected behavior
 
 Only skip for purely conversational tasks or memory-only operations.
+
+A change to how one of your own tools behaves is not a source edit, even though the tool's code
+sits in this tree: those tools are components, and the version you run is loaded from the host's
+directory, so an edit here changes nothing live. That change is a self-task —
+`start_self_task` with the `iterate-component` skill.
 
 ## Discovery Tools
 
