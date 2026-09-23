@@ -6,7 +6,7 @@
  * `announce_component_version` through an injected `fetch`.
  */
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createComponentTools, buildAnnouncementText } from "../../../src/tools/component-tools.js";
 import { createLineageReconciler } from "../../../src/components/lineage-reconcile.js";
@@ -218,7 +218,35 @@ describe("component tools", () => {
       const fail = await byName(tools, "run_component_contract").invoke({ name: "broken", version: "0.1.0" });
       expect(fail).toMatch(/^contract FAILED for broken@0\.1\.0: .*deliberately failed/);
       const missing = await byName(tools, "run_component_contract").invoke({ name: "hello", version: "9.9.9" });
-      expect(missing).toBe('contract FAILED for hello@9.9.9: version "9.9.9" of "hello" not found');
+      expect(missing.split("\n")[0]).toBe(
+        'contract FAILED for hello@9.9.9: version "9.9.9" of "hello" not found',
+      );
+      expect(missing).not.toContain("loaded:");
+    });
+
+    it("reports the loaded files' hashes and the runs of a version in a thread", async () => {
+      setActiveComponents({ components: [], roots: [seed] });
+      const tools = createComponentTools({ projectRoot: project, componentsDir: undefined, contract: CONTRACT });
+      const run = byName(tools, "run_component_contract");
+      const hash = /sha256 ([0-9a-f]{12})/;
+
+      const first = (await run.invoke({ name: "hello" }, config)).split("\n");
+      expect(first[0]).toMatch(/^contract passed for hello@0\.1\.0/);
+      expect(first[1]).toMatch(/^loaded: entry\.ts sha256 [0-9a-f]{12}; contract\.ts sha256 [0-9a-f]{12}$/);
+      expect(first[2]).toBe("first run of hello@0.1.0's contract in this thread");
+
+      const entryHash = first[1].split("; ")[0].match(hash)?.[1];
+      appendFileSync(path.join(seed, "hello", ".versions", "0.1.0", "entry.ts"), "\n// edited\n");
+
+      const second = (await run.invoke({ name: "hello" }, config)).split("\n");
+      expect(second[1]).toContain(`(changed since the previous run, was ${entryHash})`);
+      expect(second[1]).toMatch(/contract\.ts sha256 [0-9a-f]{12} \(unchanged since the previous run\)$/);
+      expect(second[2]).toBe("run 2 of hello@0.1.0's contract in this thread");
+
+      const otherThread = { configurable: { thread_id: "44444444-4444-4444-8444-444444444444" } };
+      const elsewhere = (await run.invoke({ name: "hello" }, otherThread)).split("\n");
+      expect(elsewhere[1]).not.toContain("since the previous run");
+      expect(elsewhere[2]).toBe("first run of hello@0.1.0's contract in this thread");
     });
 
     it("finds a version that exists only in the host copy written after assembly", async () => {

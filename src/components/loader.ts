@@ -36,12 +36,15 @@ import { tagReplaces } from "./replaces-tag.js";
 /** Load a module from an absolute path. */
 export type ImportModule = (absolutePath: string) => Promise<unknown>;
 
+let importSeq = 0;
+
 /**
  * Production importer: a cache-busted `file://` import, so a restart always
- * sees the current pointer even when the module loader caches by URL.
+ * sees the current pointer even when the module loader caches by URL. The
+ * counter keeps two imports within one millisecond distinct.
  */
 export const defaultImportModule: ImportModule = (absolutePath) =>
-  import(`${pathToFileURL(absolutePath).href}?t=${Date.now()}`);
+  import(`${pathToFileURL(absolutePath).href}?t=${Date.now()}-${++importSeq}`);
 
 export interface LoadedMiddleware {
   middleware: AgentMiddleware;
