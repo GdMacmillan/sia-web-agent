@@ -9,6 +9,7 @@ import {
   _activeSelfTasksForTests,
   _resetSelfTaskStateForTests,
   buildSelfTaskMessage,
+  SELF_TASK_PREAMBLE,
   createSelfTaskTool,
   resolveOwnServerUrl,
 } from "../../../src/tools/self-task-tool.js";
@@ -129,10 +130,15 @@ describe("resolveOwnServerUrl", () => {
 });
 
 describe("buildSelfTaskMessage", () => {
+  it("tells the thread it is the self-task, so it does not start another", () => {
+    expect(buildSelfTaskMessage("do it")).toMatch(/^This thread is a self-task/);
+    expect(SELF_TASK_PREAMBLE).toMatch(/do not start another self-task/);
+  });
+
   it("prefixes the skill instruction only when a skill is given", () => {
-    expect(buildSelfTaskMessage("do it")).toBe("do it");
+    expect(buildSelfTaskMessage("do it")).toBe(`${SELF_TASK_PREAMBLE} do it`);
     expect(buildSelfTaskMessage("do it", "iterate-component")).toBe(
-      'Load the skill "iterate-component" with load_skill before anything else. Then: do it',
+      `${SELF_TASK_PREAMBLE} Load the skill "iterate-component" with load_skill before anything else. Then: do it`,
     );
   });
 });
@@ -190,8 +196,7 @@ describe("start_self_task", () => {
         messages: [
           {
             role: "user",
-            content:
-              'Load the skill "iterate-component" with load_skill before anything else. Then: improve execute_code',
+            content: `${SELF_TASK_PREAMBLE} Load the skill "iterate-component" with load_skill before anything else. Then: improve execute_code`,
           },
         ],
       },
@@ -219,7 +224,7 @@ describe("start_self_task", () => {
     expect(create.metadata).not.toHaveProperty("skill");
     expect(create.metadata.parent_thread_id).toBe(PARENT);
     const run = captured[2].body as { input: { messages: Array<{ content: string }> } };
-    expect(run.input.messages[0].content).toBe(long);
+    expect(run.input.messages[0].content).toBe(`${SELF_TASK_PREAMBLE} ${long}`);
   });
 
   it("refuses to nest inside a self-task, sending nothing further", async () => {

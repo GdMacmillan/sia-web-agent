@@ -200,13 +200,23 @@ function runIdFrom(event: SseEvent | null): string | undefined {
   }
 }
 
+/**
+ * Opens every self-task thread, so the thread knows what it is: guidance that
+ * says "start a self-task for this" is addressed to the conversation that
+ * raised the need, not to the thread already doing it.
+ */
+export const SELF_TASK_PREAMBLE =
+  "This thread is a self-task: you started it from another conversation to do " +
+  "the work below, and this is where that work happens. Do it here — do not " +
+  "start another self-task for it.";
+
 /** The first message of the self-task thread. */
 export function buildSelfTaskMessage(task: string, skill?: string): string {
   const trimmedSkill = skill?.trim();
   if (trimmedSkill) {
-    return `Load the skill "${trimmedSkill}" with load_skill before anything else. Then: ${task}`;
+    return `${SELF_TASK_PREAMBLE} Load the skill "${trimmedSkill}" with load_skill before anything else. Then: ${task}`;
   }
-  return task;
+  return `${SELF_TASK_PREAMBLE} ${task}`;
 }
 
 /** Create the `start_self_task` tool. Every option is injectable for tests. */
