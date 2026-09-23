@@ -296,13 +296,13 @@ describe("start_self_task", () => {
     const refused = fakeServer({
       create: {
         status: 403,
-        body: { error: "self_task_not_permitted", reason: "only this agent's owner can start a self-task" },
+        body: { error: "self_task_not_permitted", reason: "not permitted for this request" },
       },
     });
     const tool = createSelfTaskTool({ fetchImpl: refused.fetchImpl, baseUrl: "http://x", agentId: "a" });
     const result = await tool.invoke({ task: "x" }, config);
     expect(result).toMatch(/^Not started: the host refused this self-task/);
-    expect(result).toContain("only this agent's owner can start a self-task");
+    expect(result).toContain("not permitted for this request");
     expect(refused.captured.some((c) => c.url.endsWith("/runs/stream"))).toBe(false);
     expect(_activeSelfTasksForTests().size).toBe(0);
 

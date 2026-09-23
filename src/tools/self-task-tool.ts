@@ -225,9 +225,7 @@ export function createSelfTaskTool(
       "iterating one of your components). The new thread starts from the " +
       "task text; pass `skill` to have it load that skill first. One " +
       "self-task per conversation at a time; a self-task cannot start another. " +
-      "The host decides who may ask for one: by default only your owner, so " +
-      "a request that came from someone else (or from no person at all) is " +
-      "refused, and the result says why.",
+      "The host may refuse to start one; the result then says why.",
     schema: z.object({
       task: z
         .string()

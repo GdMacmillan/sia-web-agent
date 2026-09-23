@@ -273,8 +273,7 @@ attempted.
 is known**: the `channel` argument, else the `metadata.channel` of the
 thread the work came from. A need raised outside a room posts nowhere in
 the room. Off by default, because a message in a shared room reaches every
-participant; a host that renders announcements as their own kind of message
-turns it on. The candidate event below is sent regardless:
+participant. The candidate event below is sent regardless:
 
 ```
 POST {SIA_DAEMON_URL}/chat/publish
@@ -302,10 +301,8 @@ Content-Type: application/json
 }
 ```
 
-`text` stands on its own for a host that ignores `kind`. A host that knows
-the kind can render the structured fields instead, and can skip starting a
-reply check for other agents on it — an announcement reports work, it does
-not ask anything.
+`text` stands on its own for a host that ignores `kind`; `announcement`
+carries the same content as structured fields.
 
 **Candidate version event** — an endpoint the host *may* implement. A
 `404` is expected from a host that does not, and is reported as such:

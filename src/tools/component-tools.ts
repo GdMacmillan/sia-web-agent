@@ -45,8 +45,7 @@ export const DEFAULT_ANNOUNCE_TIMEOUT_MS = 10_000;
 /**
  * Env switch for the room message. Off unless set to a truthy value: an
  * announcement in a shared room reaches every participant, so it stays
- * opt-in and a host that renders announcements turns it on. The host event
- * is always sent.
+ * opt-in. The host event is always sent.
  */
 export const ANNOUNCE_TO_CHAT_ENV = "SIA_ANNOUNCE_TO_CHAT";
 
@@ -117,9 +116,8 @@ function realpathOr(dir: string): string {
 /** Message kind that marks a room message as a component announcement. */
 export const ANNOUNCEMENT_KIND = "announcement";
 /**
- * Longest need or summary carried in the structured announcement. The host
- * caps the whole structure, so each free-text field is bounded here; the
- * full text still goes out in the message body.
+ * Longest need or summary carried in the structured announcement, which is
+ * kept small; the full text still goes out in the message body.
  */
 const ANNOUNCEMENT_FIELD_MAX = 600;
 
