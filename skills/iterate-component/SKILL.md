@@ -1,6 +1,6 @@
 ---
 name: iterate-component
-description: Write, check and announce a new version of one of your own components (tools such as execute_code) in response to a stated need — "a tool is broken", "execute_code should also say X", "change what <tool> returns", "iterate <name>", "new component version". Runs inside a self-task thread; from a conversation, start one with start_self_task and skill "iterate-component" instead of editing anything. Never edits the running version or the source tree.
+description: Write, check and announce a new version of one of your own components (tools such as execute_code) in response to a stated need — "a tool is broken", "execute_code should also say X", "change what <tool> returns", "iterate <name>", "new component version". The work runs in a self-task thread. If this thread opened as a self-task, you are already in it: do the work here. Only in the conversation where a person raised the need do you start one, with start_self_task and skill "iterate-component", instead of editing anything. Never edits the running version or the source tree.
 license: MIT
 metadata:
   author: self-improving-agent
@@ -49,9 +49,10 @@ either way — memory being unreachable never stops an iteration.
 
 ## Working principles
 
-0. **You are already inside the self-task.** The person confirmed when this thread was started.
-   Do not ask whether to proceed, and do not ask them anything else here — they are not in this
-   thread. Proceed; your questions, if any, go into the announcement.
+0. **You are already inside the self-task.** A thread whose first message says it is a self-task
+   is the one `start_self_task` created; calling it again here is refused. The person confirmed
+   when this thread was started. Do not ask whether to proceed, and do not ask them anything else
+   here — they are not in this thread. Proceed; your questions, if any, go into the announcement.
 1. **Name the component from the need.** Tool names and component names differ (`execute_code` is
    the tool; `execute-code` is the component). `describe_component` shows the manifest `intent`,
    the current version, which root wins and the paths — read it before deciding what to change.
