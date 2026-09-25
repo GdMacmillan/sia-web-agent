@@ -112,16 +112,24 @@ export async function ensureParentEntity(
   return { id: stored.id, created: true };
 }
 
+export type AnnounceResult = "stamped" | "already_settled";
+
 /**
  * Merge fields into an entity's `provenance` (the structured copy of who
  * produced it and when it was announced), leaving the rest untouched.
+ * Mirrors {@link settleLineageEntity}'s idempotency guard: a version whose
+ * outcome is no longer `candidate` is left exactly as it is — settlement
+ * can race an announcement, and a settled entity must not be re-stamped.
  */
 export async function markLineageAnnounced(
   adapter: IGraphMemoryAdapter,
   entityId: string,
   announcedAt: string,
-): Promise<void> {
+): Promise<AnnounceResult> {
   const { entity } = await retrieveEntity(adapter, { entity_id: entityId });
+  if (entity.metadata.outcome !== "candidate") {
+    return "already_settled";
+  }
   const provenance =
     entity.metadata.provenance && typeof entity.metadata.provenance === "object"
       ? (entity.metadata.provenance as Record<string, unknown>)
@@ -132,6 +140,7 @@ export async function markLineageAnnounced(
     tags_mode: "merge",
     metadata: { provenance: { ...provenance, announced_at: announcedAt } },
   });
+  return "stamped";
 }
 
 export type SettleResult = "settled" | "already_settled";

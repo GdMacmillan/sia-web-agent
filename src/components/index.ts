@@ -115,6 +115,7 @@ export {
   type PendingVersion,
   type ReconcileDecision,
   type SettledOutcome,
+  type TrackedPendingVersion,
   type Verdict,
 } from "./lineage.js";
 export { parseHostStatus, readHostComponents } from "./lineage-host.js";

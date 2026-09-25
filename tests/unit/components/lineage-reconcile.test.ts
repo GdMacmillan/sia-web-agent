@@ -109,7 +109,17 @@ const settleOf = (updates: Array<{ properties: Record<string, unknown> }>) =>
 
 function build(overrides: Partial<Parameters<typeof createLineageReconciler>[0]> = {}) {
   const clock = fakeClock();
-  const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "candidate" }]);
+  // Announced by default: most of this suite is exercising a version that
+  // was already sent to the host and is now waiting on, or settled by, a
+  // verdict. The never-announced / displaced paths seed their own store.
+  const store = stubAdapter([
+    {
+      id: "e-023",
+      title: "execute-code@0.2.3",
+      outcome: "candidate",
+      tags: ["component_version", "outcome:candidate", "announced"],
+    },
+  ]);
   const reconciler = createLineageReconciler({
     agentId: "agent-1",
     daemonUrl: "http://127.0.0.1:7700",
@@ -135,7 +145,9 @@ describe("boot poll", () => {
 
     const boot = reconciler.onBoot();
     await clock.advance(0);
-    expect(reconciler.pending()).toEqual([{ name: "execute-code", version: "0.2.3", entityId: "e-023" }]);
+    expect(reconciler.pending()).toEqual([
+      { name: "execute-code", version: "0.2.3", announced: true, entityId: "e-023" },
+    ]);
     await clock.advance(3_000);
     await boot;
 
@@ -170,6 +182,35 @@ describe("boot poll", () => {
     await boot;
 
     expect(settleOf(store.updates)).toEqual(["rejected"]);
+  });
+
+  it("settles a never-announced version as abandoned at once — a restart ends any self-task still building it", async () => {
+    const host = scriptedHost([status({ active: "0.2.1" })]);
+    // No "announced" tag: the candidate event never reached the host.
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "candidate" }]);
+    const { clock, reconciler } = build({ fetchImpl: host.fetchImpl, getAdapter: () => store.adapter });
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+
+    expect(host.calls).toHaveLength(1);
+    const meta = store.updates[0]?.properties.custom_metadata as Record<string, unknown>;
+    expect(meta).toMatchObject({ outcome: "abandoned", reason: "never announced" });
+    expect(reconciler.pending()).toEqual([]);
+  });
+
+  it("settles an announced version as abandoned, not rejected, when a newer candidate has taken its slot", async () => {
+    const host = scriptedHost([status({ active: "0.2.1", candidate: { version: "0.2.4" } })]);
+    const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl });
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+
+    expect(host.calls).toHaveLength(1);
+    const meta = store.updates[0]?.properties.custom_metadata as Record<string, unknown>;
+    expect(meta).toMatchObject({ outcome: "abandoned", reason: "replaced by 0.2.4" });
   });
 
   it("does not reject at the cap when the host never reported a component store", async () => {
@@ -253,10 +294,11 @@ describe("boot poll", () => {
 });
 
 describe("turn check", () => {
-  it("rejects a vanished version at once, throttled to once per minute", async () => {
+  it("rejects a vanished, announced version at once, throttled to once per minute", async () => {
     const host = scriptedHost([status({ active: "0.2.1", candidate: { version: "0.2.3" } }), status({ active: "0.2.1" })]);
     const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl });
     reconciler.track("e-023", "execute-code", "0.2.3");
+    reconciler.markAnnounced("execute-code", "0.2.3");
 
     await reconciler.onTurn();
     expect(host.calls).toHaveLength(1);
@@ -270,6 +312,39 @@ describe("turn check", () => {
     expect(host.calls).toHaveLength(2);
     expect(settleOf(store.updates)).toEqual(["rejected"]);
     expect(reconciler.pending()).toEqual([]);
+  });
+
+  it("never settles a never-announced version during a turn — it may still be under construction elsewhere", async () => {
+    const host = scriptedHost([status({ active: "0.2.1" }), status({ active: "0.2.1" })]);
+    const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl });
+    reconciler.track("e-023", "execute-code", "0.2.3");
+
+    await reconciler.onTurn();
+    expect(host.calls).toHaveLength(1);
+    expect(settleOf(store.updates)).toEqual([]);
+    expect(reconciler.pending()).toEqual([
+      { name: "execute-code", version: "0.2.3", announced: false, entityId: "e-023" },
+    ]);
+
+    await clock.advance(60_000);
+    await reconciler.onTurn();
+    expect(host.calls).toHaveLength(2);
+    expect(settleOf(store.updates)).toEqual([]);
+    expect(reconciler.pending()).toHaveLength(1);
+  });
+
+  it("marking a version announced mid-flight lets a later turn reject it once it is gone", async () => {
+    const host = scriptedHost([status({ active: "0.2.1" }), status({ active: "0.2.1" })]);
+    const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl });
+    reconciler.track("e-023", "execute-code", "0.2.3");
+
+    await reconciler.onTurn();
+    expect(settleOf(store.updates)).toEqual([]);
+
+    reconciler.markAnnounced("execute-code", "0.2.3");
+    await clock.advance(60_000);
+    await reconciler.onTurn();
+    expect(settleOf(store.updates)).toEqual(["rejected"]);
   });
 
   it("does not call the host while nothing is pending", async () => {

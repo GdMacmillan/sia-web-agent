@@ -25,10 +25,24 @@ export const SUPERSEDES = SUPERSEDES_RELATIONSHIP;
 
 /**
  * Where a version stands. `candidate` until the host decides; the other
- * four are terminal. `failed` is the author giving up before a candidate
- * ever reached the host, or the host failing to apply one.
+ * five are terminal. `failed` is the author giving up before a candidate
+ * ever reached the host, or the host failing to apply one. `abandoned` is
+ * never sent by the host — it is this side's own conclusion that a
+ * candidate's story simply ended without a verdict from anyone: it was
+ * never announced (the self-task that was building it ended, or a
+ * restart caught it mid-flight), or a later candidate for the same
+ * component took its place in the host's slot before it was decided.
+ * Unlike `rejected` and `reverted`, `abandoned` carries no judgment on
+ * the change itself — it is fine to retry or resume the work.
  */
-export const OUTCOMES = ["candidate", "converged", "reverted", "failed", "rejected"] as const;
+export const OUTCOMES = [
+  "candidate",
+  "converged",
+  "reverted",
+  "failed",
+  "rejected",
+  "abandoned",
+] as const;
 export type LineageOutcome = (typeof OUTCOMES)[number];
 
 export type SettledOutcome = Exclude<LineageOutcome, "candidate">;
@@ -185,6 +199,17 @@ export interface PendingVersion {
   version: string;
 }
 
+/**
+ * A pending version paired with whether its candidate event ever reached
+ * the host. This is the only fact that lets {@link decideReconcile} tell
+ * a version that vanished because nobody has seen it yet (still being
+ * written by a live self-task, possibly in another thread) from one that
+ * vanished because the host actually held it and then let it go.
+ */
+export interface TrackedPendingVersion extends PendingVersion {
+  announced: boolean;
+}
+
 export interface Verdict {
   outcome: SettledOutcome;
   reason?: string;
@@ -204,12 +229,23 @@ export type ReconcileDecision =
  * - the host's last outcome names this version → settle with that verdict.
  * - it is the candidate, or the active version without a verdict yet
  *   (a swap in flight) → wait.
- * - otherwise it is gone. A keeper's reject leaves no outcome behind, so
- *   gone means rejected — at once on a turn, and at boot only once the
- *   poll has waited long enough for a swap in flight to be recorded.
+ * - it was never announced → it may still be under construction (a
+ *   self-task in another thread can be mid-`prepare`/`run`/edit when a
+ *   turn elsewhere runs this check — `recordLineage` tracks a version the
+ *   moment it is written, long before it is announced). A turn never
+ *   settles this. Only a boot pass may, since a restart ends any
+ *   self-task that was still running: `abandoned`, "never announced".
+ * - it was announced, but a *different* candidate now occupies the
+ *   host's slot for this component → nobody rejected this one; a newer
+ *   one simply replaced it before a verdict arrived: `abandoned`,
+ *   "replaced by `<version>`".
+ * - otherwise it is genuinely gone with nothing having taken its place.
+ *   A keeper's reject leaves no outcome behind, so that means rejected —
+ *   at once on a turn, and at boot only once the poll has waited long
+ *   enough for a swap in flight to be recorded.
  */
 export function decideReconcile(
-  pending: PendingVersion,
+  pending: TrackedPendingVersion,
   hostView: HostComponentView[] | null,
   phase: "boot" | "turn",
   capReached: boolean,
@@ -233,6 +269,18 @@ export function decideReconcile(
   }
   if (component?.candidate?.version === pending.version || component?.active === pending.version) {
     return { action: "wait" };
+  }
+  if (!pending.announced) {
+    return phase === "boot"
+      ? { action: "settle", outcome: "abandoned", reason: "never announced" }
+      : { action: "wait" };
+  }
+  if (component?.candidate && component.candidate.version !== pending.version) {
+    return {
+      action: "settle",
+      outcome: "abandoned",
+      reason: `replaced by ${component.candidate.version}`,
+    };
   }
   if (phase === "boot" && !capReached) {
     return { action: "wait" };

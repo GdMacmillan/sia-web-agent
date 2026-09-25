@@ -153,14 +153,21 @@ describe("outcomeFromHostResult", () => {
     expect(outcomeFromHostResult(undefined)).toBeNull();
   });
 
-  it("exposes the five outcomes and the edge name", () => {
-    expect(OUTCOMES).toEqual(["candidate", "converged", "reverted", "failed", "rejected"]);
+  it("exposes the six outcomes and the edge name", () => {
+    expect(OUTCOMES).toEqual([
+      "candidate",
+      "converged",
+      "reverted",
+      "failed",
+      "rejected",
+      "abandoned",
+    ]);
     expect(SUPERSEDES).toBe("SUPERSEDES");
   });
 });
 
 describe("decideReconcile", () => {
-  const pending = { name: "execute-code", version: "0.2.3" };
+  const pending = { name: "execute-code", version: "0.2.3", announced: true };
   const view = (c: Partial<HostComponentView>): HostComponentView[] => [
     { name: "execute-code", versions: [], ...c },
   ];
@@ -246,6 +253,66 @@ describe("decideReconcile", () => {
     expect(
       decideReconcile(pending, view({ lastOutcome: { version: "0.2.3", result: "weird" } }), "turn", false),
     ).toEqual({ action: "wait" });
+  });
+
+  describe("a version that was never announced", () => {
+    const unannounced = { ...pending, announced: false };
+
+    it("is never settled during a turn — it may still be under construction elsewhere", () => {
+      expect(decideReconcile(unannounced, view({ active: "0.2.1" }), "turn", false)).toEqual({
+        action: "wait",
+      });
+      // Even once the cap has notionally been reached — the cap is a boot
+      // concept, and being gone from the host is expected for something
+      // that was never sent to it.
+      expect(decideReconcile(unannounced, view({ active: "0.2.1" }), "turn", true)).toEqual({
+        action: "wait",
+      });
+    });
+
+    it("is abandoned at boot, once the version is gone with no verdict — a restart ends the self-task", () => {
+      expect(decideReconcile(unannounced, view({ active: "0.2.1" }), "boot", false)).toEqual({
+        action: "settle",
+        outcome: "abandoned",
+        reason: "never announced",
+      });
+    });
+
+    it("still waits while it is the host's candidate or active version", () => {
+      expect(
+        decideReconcile(
+          unannounced,
+          view({ active: "0.2.1", candidate: { version: "0.2.3" } }),
+          "boot",
+          false,
+        ),
+      ).toEqual({ action: "wait" });
+    });
+  });
+
+  describe("a version displaced by a newer candidate", () => {
+    it("is abandoned, not rejected, in either phase — nobody decided against it", () => {
+      const host = view({ active: "0.2.1", candidate: { version: "0.2.4" } });
+      expect(decideReconcile(pending, host, "turn", false)).toEqual({
+        action: "settle",
+        outcome: "abandoned",
+        reason: "replaced by 0.2.4",
+      });
+      expect(decideReconcile(pending, host, "boot", false)).toEqual({
+        action: "settle",
+        outcome: "abandoned",
+        reason: "replaced by 0.2.4",
+      });
+    });
+
+    it("does not apply to an unannounced version — that is decided by the never-announced branch", () => {
+      const host = view({ active: "0.2.1", candidate: { version: "0.2.4" } });
+      expect(decideReconcile({ ...pending, announced: false }, host, "boot", false)).toEqual({
+        action: "settle",
+        outcome: "abandoned",
+        reason: "never announced",
+      });
+    });
   });
 });
 

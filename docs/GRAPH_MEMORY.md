@@ -468,11 +468,21 @@ not by prompt:
 | edge | `SUPERSEDES`, new version → parent |
 
 `outcome` is `candidate` → one of `converged`, `reverted`, `failed`,
-`rejected`. Writers: `prepare_component_version` (child as candidate,
-parent created from its manifest if missing), `announce_component_version`
-(`announced_at`, or `failed` with the summary as reason), and the lineage
-reconciler (the host's verdict, pushed to the agent or polled from the
-host — idempotent, so both paths agree).
+`rejected`, `abandoned`. The first four come from the host (`abandoned`
+never does — it is the agent's own conclusion that a candidate's story
+ended with no verdict from anyone): "never announced" when the candidate
+event never reached the host (it may still be under construction
+elsewhere, so this is only ever settled at boot, never during a turn), or
+"replaced by `<version>`" when a newer candidate for the same component
+took its place in the host's slot before this one was decided. Unlike
+`rejected` and `reverted`, `abandoned` carries no judgment on the change
+itself — it is fine to retry or resume the work. Writers:
+`prepare_component_version` (child as candidate, parent created from its
+manifest if missing), `announce_component_version` (`announced_at`, or
+`failed` with the summary as reason — called once, from the self-task
+thread that produced the version), and the lineage reconciler (the host's
+verdict, pushed to the agent or polled from the host — idempotent, so both
+paths agree; `abandoned` is decided locally from the same poll).
 
 Two search facts shape the convention. The backend indexes title, content
 and tags — never `metadata` — which is why the need, the names and the

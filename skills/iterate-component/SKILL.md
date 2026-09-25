@@ -4,7 +4,7 @@ description: Write, check and announce a new version of one of your own componen
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Iterate a component
@@ -32,8 +32,11 @@ Lineage is recorded for you. `prepare_component_version` stores a `component_ver
 the entity for `<name>@<previous>`, creating that one from its manifest if nobody has yet.
 `announce_component_version` marks it announced, or settles it as `failed`. The host's verdict —
 `converged`, `reverted`, `rejected` — is written by the process that comes back after the restart, not
-by you. Each tool's result carries a `lineage:` line saying what it recorded; read it, and continue
-either way — memory being unreachable never stops an iteration.
+by you. A version can also end up `abandoned`: that is not a verdict from anyone, just this side
+noticing the story ended without one (the candidate was never announced — a restart caught it
+mid-iteration — or a later candidate replaced it in the host's slot before it was decided). Each
+tool's result carries a `lineage:` line saying what it recorded; read it, and continue either way —
+memory being unreachable never stops an iteration.
 
 ## The three rules
 
@@ -59,13 +62,16 @@ either way — memory being unreachable never stops an iteration.
 2. **Read the lineage before you propose, then prepare.** `search_entities` for `<name>` with
    `entity_type: "component_version"` and read what came before: a version settled `reverted` or
    `rejected` names, in its content, the need it answered and why it was turned down — do not
-   propose it again unchanged, and say so in the announcement if the need is the same one. What
-   memory says about a version is authoritative, including versions other agents in the workspace
-   produced. Then call `prepare_component_version` with the need in the words of whoever raised
-   it. If earlier candidates are still waiting under the host root, the new number simply follows
-   them (`0.1.1` → `0.1.2`); the parent is still the current version, and a patch bump is right
-   unless the need is genuinely larger. The result's `lineage:` line says whether the entity was
-   recorded; a restart kills this thread, and that entity is the trace that survives.
+   propose it again unchanged, and say so in the announcement if the need is the same one. A
+   version settled `abandoned` carries no such judgment — its content names the reason ("never
+   announced" or "replaced by `<version>`"), not a rejection of the change — so it is fine to
+   retry it unchanged or resume it where it left off. What memory says about a version is
+   authoritative, including versions other agents in the workspace produced. Then call
+   `prepare_component_version` with the need in the words of whoever raised it. If earlier
+   candidates are still waiting under the host root, the new number simply follows them (`0.1.1` →
+   `0.1.2`); the parent is still the current version, and a patch bump is right unless the need is
+   genuinely larger. The result's `lineage:` line says whether the entity was recorded; a restart
+   kills this thread, and that entity is the trace that survives.
 3. **Change the entry, and make the contract prove it.** `read_file` the copied `entry.ts` and
    `contract.ts`. Make the smallest change to the entry that answers the need, and add a contract
    case that would fail without it — a version proves itself. Keep the manifest's `replaces` name;
@@ -74,10 +80,14 @@ either way — memory being unreachable never stops an iteration.
    version `prepare_component_version` returned. Read the error text; fix; run again. Stop after
    three edit/run rounds — a need that resists three attempts deserves a person's eyes, not a
    fourth guess.
-5. **Announce once.** On a pass, `announce_component_version` with a two-sentence summary: what
-   changed and why. On exhaustion, announce with `outcome: "failed"` and what stood in the way —
-   that summary becomes the recorded reason, so make it the one a future iteration needs to read.
-   The announcement updates the lineage entity itself; there is nothing to store afterwards.
+5. **Announce once, from this thread.** On a pass, `announce_component_version` with a
+   two-sentence summary: what changed and why. On exhaustion, announce with `outcome: "failed"` and
+   what stood in the way — that summary becomes the recorded reason, so make it the one a future
+   iteration needs to read. The announcement updates the lineage entity itself; there is nothing to
+   store afterwards. Call it once: it is refused if this thread already announced a candidate for
+   this component that is still awaiting a verdict, and refused from any thread that is not the
+   self-task itself — the tool is how the work that produced a version tells the host about it, not
+   a general-purpose way to talk about one.
 6. **Say what is true.** In this thread and in the announcement: the version is described now and
    runs after the host activates it and you restart. The contract passed against the candidate,
    out-of-process; nothing is live.
