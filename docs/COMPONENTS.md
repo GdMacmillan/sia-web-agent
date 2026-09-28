@@ -477,7 +477,7 @@ be checked (see *Authoring a version* below).
 ### Authoring a version
 
 The agent can write the next version of one of its components itself. The
-pure part is `src/components/authoring.ts`; four tools
+pure part is `src/components/authoring.ts`; five tools
 (`src/tools/component-tools.ts`) put it in the agent's hands, and the
 `iterate-component` skill (`skills/iterate-component/SKILL.md`) is the
 procedure. A version is authored in a thread of the agent's own — see
@@ -488,7 +488,8 @@ the agent's own server and starts a run in it.
 `SIA_COMPONENTS_DIR`, never under the seed root shipped with the source
 tree (the host re-stages that tree, and anything written there would run
 unreviewed until it did). With no host-managed root configured,
-`prepare_component_version` refuses; there is nowhere to write.
+`prepare_component_version` and `create_component` refuse; there is
+nowhere to write.
 
 **Layout.** On the first iteration the whole component directory is
 copied from the root that currently wins into the host-managed root —
@@ -520,11 +521,58 @@ host's deliberate, separate step, after which the agent restarts. The
 version is described now and runs after activation and restart; a passing
 contract ran it out-of-process and proves behaviour, not liveness.
 
+### Authoring a new component
+
+A need can also be for a tool the agent does not have. `create_component`
+(pure part: `planNewComponent` in `src/components/authoring.ts`, sources in
+`src/components/scaffold.ts`) lays out the **first** version of a component
+that exists in no root:
+
+```
+$SIA_COMPONENTS_DIR/
+  parse-time-expression/
+    .versions/
+      0.1.0/                  # component.json, entry.ts, contract.ts — and no `current`
+```
+
+The version is always `0.1.0`. The manifest is `kind: "tools"`, `depth: 0`,
+`sdk: "^<SDK_VERSION>"` and a `lineage` with `need` and `producedBy` but **no
+`parent`** — a first version is the root of its lineage. The entry
+contributes one tool, named `tool_name` when given and otherwise the
+component name with `-` turned into `_` (`parse-time-expression` →
+`parse_time_expression`), that echoes its input; the contract invokes it
+through `deps.invoke` and checks the echo. So the scaffold **passes its own
+contract before the author touches it** — the analogue of copying the
+current version when iterating — and the author changes entry and contract
+together from a green start. Both generated sources import nothing: a
+version under the host-managed root has no source tree beside it.
+
+`create_component` refuses, naming the reason: an invalid component name; a
+tool name outside `^[a-z][a-z0-9_]*$` or already taken by a tool the agent
+has (the assembled pool plus the middleware-provided names); an empty
+intent or need; no host-managed root (or the seed root, directly or through
+a link); and a component of that name present in **any** root, with or
+without a `current` — the message lists the versions staged there and points
+at `prepare_component_version` for a new version of an existing component
+and at `run_component_contract` with an explicit version for one already
+staged. `describe_component` on a component that has versions but no
+`current` says exactly that: the versions present, that one runs through
+`run_component_contract` with an explicit version, and that it becomes
+current only when the host activates it.
+
+Nothing in the loader changes for a new component: with no `current` it is
+skipped with a warning; once the host activates `0.1.0` and the agent
+restarts, its tool is in the pool like any other. A host that later reverts
+a first version has nothing to go back to; how it leaves the component
+(pointer removed, version directory kept) is the host's business, and the
+agent's `describe_component` reads the result truthfully either way.
+
 **The tools.**
 
 | Tool | What it does |
 |---|---|
 | `describe_component({ name })` | Read-only: which root wins and why, the current version, the versions present, the manifest and the paths. Root precedence is not visible through `read_file`. |
+| `create_component({ name, intent, need, tool_name?, description? })` | The first version of a component no root has: `.versions/0.1.0/` under the host-managed root with a parentless manifest, a stub tool that echoes its input and a contract that invokes it; then admits that root for the filesystem tools. Returns the paths and the next step. |
 | `prepare_component_version({ name, need, bump? })` | The layout above under the host-managed root (created if missing), then admits that root for the filesystem tools. Returns the paths and the next step. |
 | `run_component_contract({ name, version? })` | `runComponentContract` on the named version; `contract passed for …` / `contract FAILED for …: <error>`. |
 | `announce_component_version({ name, version, summary, outcome?, channel? })` | Tells the host about the candidate and, when `SIA_ANNOUNCE_TO_CHAT` is on, posts one message with a link to the thread (`HOST_CONTRACT.md` §3.4). Best-effort: a host without those endpoints is reported, never thrown. |
@@ -541,7 +589,7 @@ tools, not by the model:
 | `tags` | `component_version`, `component:<name>`, both spellings, `version:<v>`, `outcome:<o>`, `produced-by:<agent>`, `announced` |
 | `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at? }` |
 | `status` | `active` while a candidate, `completed` once settled — never archived; a reverted version is exactly the memory worth keeping |
-| edge | `SUPERSEDES`, new version → parent |
+| edge | `SUPERSEDES`, new version → parent; none for a first version, which is the root of its lineage |
 
 `outcome` is one of `candidate`, `converged`, `reverted`, `failed`,
 `rejected`, `abandoned`. `prepare_component_version` stores the child as a
@@ -549,7 +597,8 @@ tools, not by the model:
 lives only as long as the process, and a restart mid-iteration must still
 leave a trace), first making sure the parent has an entity — created from
 the parent's own manifest, `converged`, when nobody stored one, so every
-lineage has a root. `announce_component_version` stamps
+lineage has a root. `create_component` stores `<name>@0.1.0` the same way
+with no parent and no edge; its content says so. `announce_component_version` stamps
 `provenance.announced_at` or, on `outcome: "failed"`, settles the entity
 with the summary as the reason. It is called once, from the self-task
 thread that built the version: a call from a thread whose metadata is

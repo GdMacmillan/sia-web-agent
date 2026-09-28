@@ -104,8 +104,9 @@ export interface DeepAgentConfig<
  * - get_ready_items: Get all items ready to work on (not blocked or completed)
  * - delete_checklist: Delete a checklist
  * - start_self_task: Start background work in a new thread of your own
- * - describe_component / prepare_component_version / run_component_contract /
- *   announce_component_version: Iterate a component version (see docs/COMPONENTS.md)
+ * - describe_component / create_component / prepare_component_version /
+ *   run_component_contract / announce_component_version: Iterate a component
+ *   version, or create a component's first one (see docs/COMPONENTS.md)
  *
  * NOTE: Memory tools require the Graph-Memory API to be running:
  * - yarn graph-db:compile (build Go backend)

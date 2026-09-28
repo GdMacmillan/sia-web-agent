@@ -1,8 +1,9 @@
 /**
- * The four component tools over temp roots: what `describe_component`
- * says, where `prepare_component_version` writes (and its refusal with no
- * host root), `run_component_contract` against fixture contracts and a
- * version that exists only in the host copy, and every leg of
+ * The five component tools over temp roots: what `describe_component`
+ * says, where `create_component` lays out a brand-new component, where
+ * `prepare_component_version` writes (and its refusal with no host root),
+ * `run_component_contract` against fixture contracts and a version that
+ * exists only in the host copy, and every leg of
  * `announce_component_version` through an injected `fetch`.
  */
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
@@ -139,6 +140,155 @@ describe("component tools", () => {
       const text = await byName(tools, "describe_component").invoke({ name: "hello" });
       expect(text).toContain(`winning root: ${host} (host-managed root`);
       expect(text).toContain(`shadowed roots: ${seed}`);
+    });
+  });
+
+  it("offers the five tools in working order", () => {
+    const tools = createComponentTools({ projectRoot: project, componentsDir: host });
+    expect(tools.map((t) => t.name)).toEqual([
+      "describe_component",
+      "create_component",
+      "prepare_component_version",
+      "run_component_contract",
+      "announce_component_version",
+    ]);
+  });
+
+  describe("create_component", () => {
+    const NEED = "I keep asking what 4 days from now is and you have no tool for it";
+    const INTENT = "Turn phrases like '4 days from now' into ISO 8601 timestamps.";
+
+    it("lays out 0.1.0 under the host root as a runnable stub, admits the root, and points at the contract", async () => {
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        contract: CONTRACT,
+      });
+      const text = await byName(tools, "create_component").invoke({
+        name: "parse-time-expression",
+        intent: INTENT,
+        need: NEED,
+      });
+      const componentDir = path.join(host, "parse-time-expression");
+      const versionDir = path.join(componentDir, ".versions", "0.1.0");
+      expect(text).toContain(`Created parse-time-expression@0.1.0 under ${host}`);
+      expect(text).toContain("tool: parse_time_expression");
+      expect(text).toContain("no parent");
+      expect(text).toContain(`version directory: ${versionDir}`);
+      expect(text).toContain("`current` does not exist yet");
+      expect(text).toContain("lineage: not recorded — ");
+      expect(text).toContain(
+        'run_component_contract({ name: "parse-time-expression", version: "0.1.0" })',
+      );
+
+      const manifest = JSON.parse(readFileSync(path.join(versionDir, "component.json"), "utf-8"));
+      expect(manifest).toMatchObject({
+        name: "parse-time-expression",
+        version: "0.1.0",
+        kind: "tools",
+        intent: INTENT,
+        lineage: { need: NEED, producedBy: "agent-1" },
+      });
+      expect(manifest.lineage).not.toHaveProperty("parent");
+      expect(existsSync(path.join(componentDir, "current"))).toBe(false);
+      expect(existsSync(path.join(seed, "parse-time-expression"))).toBe(false);
+      expect(getAllowedPathRoots()).toContain(host);
+
+      // The stub passes its own contract before the author touches it.
+      setActiveComponents({ components: [], roots: [seed] });
+      const previous = process.env.SIA_COMPONENTS_DIR;
+      process.env.SIA_COMPONENTS_DIR = host;
+      resetConfig();
+      try {
+        const run = await byName(tools, "run_component_contract").invoke({
+          name: "parse-time-expression",
+          version: "0.1.0",
+        });
+        expect(run).toMatch(/^contract passed for parse-time-expression@0\.1\.0/);
+      } finally {
+        if (previous === undefined) delete process.env.SIA_COMPONENTS_DIR;
+        else process.env.SIA_COMPONENTS_DIR = previous;
+        resetConfig();
+      }
+    });
+
+    it("takes an explicit tool name and description", async () => {
+      const tools = createComponentTools({ projectRoot: project, componentsDir: host });
+      const text = await byName(tools, "create_component").invoke({
+        name: "parse-time-expression",
+        intent: INTENT,
+        need: NEED,
+        tool_name: "when_is",
+        description: "Resolve a phrase to a time.",
+      });
+      expect(text).toContain("tool: when_is");
+      const entry = readFileSync(
+        path.join(host, "parse-time-expression", ".versions", "0.1.0", "entry.ts"),
+        "utf-8",
+      );
+      expect(entry).toContain('name: "when_is"');
+      expect(entry).toContain('"Resolve a phrase to a time."');
+    });
+
+    it("refuses an existing name and routes to prepare_component_version", async () => {
+      const tools = createComponentTools({ projectRoot: project, componentsDir: host });
+      const text = await byName(tools, "create_component").invoke({
+        name: "hello",
+        intent: INTENT,
+        need: NEED,
+      });
+      expect(text).toMatch(/^Cannot create a component: component "hello" already exists under /);
+      expect(text).toContain("versions present: 0.1.0");
+      expect(text).toContain("prepare_component_version");
+      expect(existsSync(path.join(host, "hello"))).toBe(false);
+    });
+
+    it("refuses a tool name a built-in already has, by default and when given", async () => {
+      const tools = createComponentTools({ projectRoot: project, componentsDir: host });
+      const given = await byName(tools, "create_component").invoke({
+        name: "reader",
+        intent: INTENT,
+        need: NEED,
+        tool_name: "read_file",
+      });
+      expect(given).toMatch(/^Cannot create a component: tool name "read_file" is already taken/);
+      const byDefault = await byName(tools, "create_component").invoke({
+        name: "execute-code",
+        intent: INTENT,
+        need: NEED,
+      });
+      expect(byDefault).toMatch(/already/);
+      expect(existsSync(path.join(host, "reader"))).toBe(false);
+      expect(existsSync(host)).toBe(false);
+    });
+
+    it("refuses with no host root and with an empty intent or need", async () => {
+      const none = createComponentTools({ projectRoot: project, componentsDir: undefined });
+      const text = await byName(none, "create_component").invoke({
+        name: "parse-time-expression",
+        intent: INTENT,
+        need: NEED,
+      });
+      expect(text).toBe(
+        "Cannot create a component: no host-managed component root is configured (SIA_COMPONENTS_DIR); a new component has nowhere to go",
+      );
+      const tools = createComponentTools({ projectRoot: project, componentsDir: host });
+      expect(
+        await byName(tools, "create_component").invoke({
+          name: "parse-time-expression",
+          intent: "  ",
+          need: NEED,
+        }),
+      ).toMatch(/^Cannot create a component: .*intent/);
+      expect(
+        await byName(tools, "create_component").invoke({
+          name: "parse-time-expression",
+          intent: INTENT,
+          need: "",
+        }),
+      ).toMatch(/^Cannot create a component: .*need/);
+      expect(existsSync(path.join(host, "parse-time-expression"))).toBe(false);
     });
   });
 
@@ -667,6 +817,52 @@ describe("component lineage", () => {
 
   const prepare = (tools: ReturnType<typeof createComponentTools>, need = "say it louder") =>
     byName(tools, "prepare_component_version").invoke({ name: "hello", need }, config);
+
+  it("create records a root entity: a candidate with no parent and no SUPERSEDES edge", async () => {
+    const graph = memoryGraph();
+    const { tools, reconciler } = build(graph);
+    const text = await byName(tools, "create_component").invoke(
+      {
+        name: "parse-time-expression",
+        intent: "Turn phrases into timestamps.",
+        need: "what is 4 days from now",
+      },
+      config,
+    );
+    expect(text).toContain("Created parse-time-expression@0.1.0");
+    expect(text).toContain("lineage: recorded (id n-1; root of its lineage)");
+
+    const root = graph.entity("n-1");
+    expect(root.title).toBe("parse-time-expression@0.1.0");
+    expect(root.entity_type).toBe("component_version");
+    expect(root.status).toBe("active");
+    expect(root.tags).toEqual(
+      expect.arrayContaining([
+        "component_version",
+        "component:parse-time-expression",
+        "parse_time_expression",
+        "version:0.1.0",
+        "outcome:candidate",
+        "produced-by:agent-1",
+      ]),
+    );
+    expect(root.custom).toMatchObject({
+      component: "parse-time-expression",
+      version: "0.1.0",
+      need: "what is 4 days from now",
+      thread_id: THREAD,
+      depth: 0,
+      outcome: "candidate",
+      provenance: { produced_by: "agent-1" },
+    });
+    expect((root.custom.provenance as Record<string, unknown>).parent).toBeUndefined();
+    expect(String(root.content)).toContain("root of its lineage");
+    expect(graph.nodes.size).toBe(1);
+    expect(graph.edges).toEqual([]);
+    expect(reconciler.pending()).toEqual([
+      { name: "parse-time-expression", version: "0.1.0", announced: false, entityId: "n-1" },
+    ]);
+  });
 
   it("prepare creates the parent entity when it is missing and links the child to it", async () => {
     const graph = memoryGraph();

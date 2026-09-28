@@ -1,8 +1,10 @@
 /**
- * Component tools — the four small operations behind authoring a new
- * component version: describe a component as the loader sees it, lay out
- * the next version under the host-managed root, run a version's contract,
- * and announce the outcome. See `docs/COMPONENTS.md` §Authoring a version.
+ * Component tools — the five small operations behind authoring a component
+ * version: describe a component as the loader sees it, lay out the first
+ * version of a brand-new component, lay out the next version of an existing
+ * one under the host-managed root, run a version's contract, and announce
+ * the outcome. See `docs/COMPONENTS.md` §Authoring a version and
+ * §Authoring a new component.
  *
  * The filesystem work is `src/components/authoring.ts`; these tools add
  * the configuration (which roots, which agent) and turn results into text.
@@ -16,10 +18,13 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod/v4";
 import { getConfig } from "../config/index.js";
 import {
+  MIDDLEWARE_TOOL_NAMES,
   SEED_COMPONENTS_DIRNAME,
   describeComponent,
+  getActiveToolPool,
   isVersionBump,
   planComponentVersion,
+  planNewComponent,
   readComponentVersion,
   resolveComponentRoots,
   runComponentContract,
@@ -228,7 +233,7 @@ export function buildAnnouncementText(input: {
   return `${text}\n\n[Open the thread](${link})`;
 }
 
-/** Create the four component tools. Every option is injectable for tests. */
+/** Create the five component tools. Every option is injectable for tests. */
 export function createComponentTools(
   opts: ComponentToolsOptions = {},
 ): DynamicStructuredTool[] {
@@ -250,14 +255,16 @@ export function createComponentTools(
   const nowIso = (): string => (opts.now ?? (() => new Date()))().toISOString();
 
   /**
-   * Record a prepared version in graph memory: the parent gets an entity
-   * if it has none, the child is stored as a candidate superseding it,
-   * and the reconciler watches for the verdict. Returns the line the
-   * tool result carries; never throws.
+   * Record a prepared version in graph memory: the parent (when there is
+   * one) gets an entity if it has none, the version is stored as a
+   * candidate superseding it, and the reconciler watches for the verdict.
+   * A first version has no parent: it is stored as the root of its lineage,
+   * with no edge. Returns the line the tool result carries; never throws.
    */
   const recordLineage = async (input: {
     name: string;
-    previousVersion: string;
+    /** Absent for the first version of a new component. */
+    previousVersion?: string;
     nextVersion: string;
     need: string;
     threadId?: string;
@@ -265,11 +272,30 @@ export function createComponentTools(
     const { name, previousVersion, nextVersion } = input;
     try {
       const adapter = memory();
+      const child = readComponentVersion({ name, version: nextVersion, roots: roots() });
+
+      if (previousVersion === undefined) {
+        const stored = await storeLineageEntity(
+          adapter,
+          {
+            name,
+            version: nextVersion,
+            depth: child.ok ? child.component.manifest.depth : 0,
+            need: input.need,
+            producedBy: agentId(),
+            threadId: input.threadId,
+            outcome: "candidate",
+          },
+          { agentId: agentId() },
+        );
+        reconciler().track(stored.id, name, nextVersion);
+        return `lineage: recorded (id ${stored.id}; root of its lineage)`;
+      }
+
       const parent = readComponentVersion({ name, version: previousVersion, roots: roots() });
       if (!parent.ok) {
         return `lineage: not recorded — parent ${lineageTitle(name, previousVersion)} unreadable (${parent.reason})`;
       }
-      const child = readComponentVersion({ name, version: nextVersion, roots: roots() });
       const depth = child.ok ? child.component.manifest.depth : parent.component.manifest.depth;
       const parentEntity = await ensureParentEntity(adapter, parent.component.manifest, {
         agentId: agentId(),
@@ -414,6 +440,101 @@ export function createComponentTools(
         lines.push(`  host-managed root: ${host} (new versions are written there, never here: ${seedRoot()})`);
       }
       return lines.join("\n");
+    },
+  });
+
+  const createTool = new DynamicStructuredTool({
+    name: "create_component",
+    description:
+      "Create a brand-new component — a tool you do not have yet — as its " +
+      "first version, 0.1.0, under the host-managed component root: " +
+      ".versions/0.1.0/ with a manifest (kind tools, no parent), an entry " +
+      "that contributes one stub tool which echoes its input, and a " +
+      "contract that invokes it, so the contract passes before you change " +
+      "anything. Never touches `current`: the component exists only as a " +
+      "described version until a person accepts it and you restart. Refuses " +
+      "a name any root already carries (that is prepare_component_version) " +
+      "and a tool name you already have. Returns the paths to edit next.",
+    schema: z.object({
+      name: z
+        .string()
+        .describe('The component name: lower-case, digits and hyphens, e.g. "parse-time-expression".'),
+      intent: z
+        .string()
+        .describe("One paragraph, for a person: what the component is for."),
+      need: z
+        .string()
+        .describe("The need it answers, in the words of whoever raised it."),
+      tool_name: z
+        .string()
+        .optional()
+        .describe(
+          'The tool the entry contributes (default: the name with "-" replaced by "_", e.g. "parse_time_expression").',
+        ),
+      description: z
+        .string()
+        .optional()
+        .describe("The tool's description for the model (default: the intent)."),
+    }),
+    func: async (
+      {
+        name,
+        intent,
+        need,
+        tool_name,
+        description,
+      }: {
+        name: string;
+        intent: string;
+        need: string;
+        tool_name?: string;
+        description?: string;
+      },
+      _runManager?: unknown,
+      config?: RunnableConfig,
+    ): Promise<string> => {
+      // Names the model already knows — the middleware's tools and the
+      // pool assembled for this agent, components included — would collide
+      // at the model boundary; the component's own future tool must not.
+      const reservedToolNames = new Set<string>([
+        ...MIDDLEWARE_TOOL_NAMES,
+        ...getActiveToolPool().map((t) => t.name),
+      ]);
+      const result = planNewComponent({
+        name: typeof name === "string" ? name.trim() : name,
+        roots: roots(),
+        authoringRoot: hostRoot(),
+        seedRoot: seedRoot(),
+        intent,
+        need,
+        producedBy: agentId(),
+        toolName: tool_name,
+        description,
+        reservedToolNames,
+      });
+      if (!result.ok) {
+        return `Cannot create a component: ${result.reason}`;
+      }
+      const p = result.plan;
+      allowPathRoot(p.root);
+      allowPathRoot(realpathOr(p.root));
+      const lineage = await recordLineage({
+        name: p.name,
+        nextVersion: p.version,
+        need: need.trim(),
+        threadId: threadIdFrom(config),
+      });
+      return [
+        `Created ${p.name}@${p.version} under ${p.root} (a new component: no parent, nothing live yet).`,
+        `  tool: ${p.toolName} (a stub that echoes its input; the contract invokes it)`,
+        `  version directory: ${p.versionDir}`,
+        `  manifest: ${p.manifestPath} (kind tools, intent, lineage.need; no lineage.parent)`,
+        `  entry: ${p.entryPath}`,
+        `  contract: ${p.contractPath}`,
+        `  ${lineage}`,
+        `\`current\` does not exist yet and you must not create it — the component runs only after the host activates ${p.version}, after which the agent restarts.`,
+        `Next: run_component_contract({ name: "${p.name}", version: "${p.version}" }) to see the stub pass, then edit ${p.entryPath} so ${p.toolName} answers the need and make ${path.basename(p.contractPath)} prove it.`,
+      ].join("\n");
     },
   });
 
@@ -800,5 +921,5 @@ export function createComponentTools(
     },
   });
 
-  return [describeTool, prepareTool, runTool, announceTool];
+  return [describeTool, createTool, prepareTool, runTool, announceTool];
 }

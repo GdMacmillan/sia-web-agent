@@ -62,6 +62,7 @@ const EXPECTED_TOOL_NAMES = [
   "delete_checklist",
   "start_self_task",
   "describe_component",
+  "create_component",
   "prepare_component_version",
   "run_component_contract",
   "announce_component_version",
@@ -71,6 +72,7 @@ const EXPECTED_TOOL_NAMES = [
 const SELF_ITERATION_TOOL_NAMES = [
   "start_self_task",
   "describe_component",
+  "create_component",
   "prepare_component_version",
   "run_component_contract",
   "announce_component_version",

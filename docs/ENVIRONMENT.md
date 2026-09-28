@@ -96,8 +96,9 @@ spec: [`COMPONENTS.md`](./COMPONENTS.md).
 | `SIA_COMPONENTS_DIR` | unset | Host-managed component root (`<name>/current/component.json`). Shadows the seed components in `<projectRoot>/components`. Unset → seed components only. Read once at assembly by `src/components/assemble.ts` (`getConfig().runtime.componentsDir`); see [`COMPONENTS.md`](./COMPONENTS.md). |
 | `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON list of remote tool servers with optional scope tags. Missing → no remote tools. |
 
-New component versions (`prepare_component_version`) are written under
-`SIA_COMPONENTS_DIR` only; with it unset the tool refuses. The
+New component versions (`prepare_component_version`) and new components
+(`create_component`) are written under `SIA_COMPONENTS_DIR` only; with it
+unset both tools refuse. The
 `announce_component_version` tool posts to
 `{SIA_DAEMON_URL}/chat/component-version` and, when enabled, to
 `{SIA_DAEMON_URL}/chat/publish` with `SIA_DAEMON_TOKEN` (see
