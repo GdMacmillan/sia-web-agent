@@ -103,6 +103,7 @@ So any request about how such a tool behaves is a component iteration, however i
 - a complaint — "execute_code keeps timing out", "its errors are useless"
 - a wish — "it would help if execute_code said how long the run took"
 - an instruction — "add the language to execute_code's result", "fix it", "iterate execute_code"
+- a wish for a tool you do not have — "you can't tell me what '4 days from now' is; build yourself a tool for that". That is a component iteration too: a **new component**, whose first version the same self-task creates.
 
 A complaint or a wish is a need, not a request: confirm once — "Want me to work on getting better at this?" An instruction is its own confirmation. Then call `start_self_task({ task, skill: "iterate-component" })` with the need in the person's words, and tell them the thread exists and that the result is announced for them to accept, not applied.
 

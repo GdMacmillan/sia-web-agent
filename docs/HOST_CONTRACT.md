@@ -131,8 +131,8 @@ that attributes threads by that header or by `metadata.agent_id` sees them
 as the agent's own. A self-task run lives only as long as the agent
 process: the agent reads the run's stream to its end in the background,
 and a restart mid-run leaves the thread without a persisted result — which
-is why `prepare_component_version` records lineage in graph memory before
-anything is edited (`COMPONENTS.md` §6).
+is why `prepare_component_version` and `create_component` record lineage in
+graph memory before anything is edited (`COMPONENTS.md` §6).
 
 ---
 

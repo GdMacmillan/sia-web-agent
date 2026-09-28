@@ -7,8 +7,9 @@ description: |
   You MUST load this skill before reading, searching, modifying, or analyzing
   any part of the codebase. Only skip for pure conversational or memory-only
   interactions. Not for changing how one of your own tools behaves (a
-  component such as execute_code) — that is a self-task: start_self_task with
-  the iterate-component skill.
+  component such as execute_code), nor for building yourself a tool you do
+  not have — either is a self-task: start_self_task with the
+  iterate-component skill.
 license: MIT
 metadata:
   author: self-improving-agent
@@ -35,7 +36,8 @@ Only skip for purely conversational tasks or memory-only operations.
 
 A change to how one of your own tools behaves is not a source edit, even though the tool's code
 sits in this tree: those tools are components, and the version you run is loaded from the host's
-directory, so an edit here changes nothing live. That change is a self-task —
+directory, so an edit here changes nothing live. The same holds for a tool you do not have yet:
+a new one is a new component, not a file added to this tree. Either change is a self-task —
 `start_self_task` with the `iterate-component` skill.
 
 ## Discovery Tools

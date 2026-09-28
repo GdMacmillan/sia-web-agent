@@ -20,11 +20,14 @@ import {
   describeComponent,
   listComponentVersions,
   planComponentVersion,
+  planNewComponent,
   readComponentVersion,
 } from "../../../src/components/authoring.js";
+import { parseComponentManifest } from "../../../src/components/manifest.js";
 import {
   PASSING_CONTRACT,
   SERVICE_ENTRY,
+  TOOLS_ENTRY,
   makeRoot,
   removeRoot,
   writeComponent,
@@ -295,12 +298,178 @@ describe("describeComponent", () => {
     expect(result.reason).toMatch(/no "current" pointer/);
   });
 
+  it("lists the staged versions of a component that has no current yet, and how one runs", () => {
+    writeComponent(host, "waiting", "0.1.0", { entry: TOOLS_ENTRY, current: false });
+    writeComponent(host, "waiting", "0.1.1", { entry: TOOLS_ENTRY, current: false });
+    const result = describeComponent({ name: "waiting", roots: [host, seed] });
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok) return;
+    expect(result.reason).toMatch(/no "current" pointer/);
+    expect(result.reason).toContain("versions present: 0.1.0, 0.1.1");
+    expect(result.reason).toContain("run_component_contract");
+    expect(result.reason).toMatch(/becomes current only when the host activates it/);
+  });
+
   it("refuses an unknown or invalid name", () => {
     expect(describeComponent({ name: "nope", roots: [seed] })).toMatchObject({
       ok: false,
       reason: 'unknown component "nope"',
     });
     expect(describeComponent({ name: "../x", roots: [seed] })).toMatchObject({ ok: false });
+  });
+});
+
+describe("planNewComponent", () => {
+  let seed: string;
+  let host: string;
+
+  const plan = (overrides: Record<string, unknown> = {}) =>
+    planNewComponent({
+      name: "parse-time-expression",
+      roots: [host, seed].filter(existsSync),
+      authoringRoot: host,
+      seedRoot: seed,
+      intent: "Turn phrases like '4 days from now' into ISO 8601 timestamps.",
+      need: "what is 4 days from now",
+      producedBy: "agent-1",
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    seed = makeRoot("seed-");
+    host = makeRoot("host-");
+    writeComponent(seed, "hello", "0.1.0", { entry: SERVICE_ENTRY, currentFile: true });
+  });
+
+  afterEach(() => {
+    removeRoot(seed);
+    removeRoot(host);
+  });
+
+  it("lays out 0.1.0 under the host root as a runnable stub and never writes current", () => {
+    const result = plan();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const componentDir = path.join(host, "parse-time-expression");
+    const versionDir = path.join(componentDir, ".versions", "0.1.0");
+    expect(result.plan).toEqual({
+      name: "parse-time-expression",
+      root: host,
+      version: "0.1.0",
+      toolName: "parse_time_expression",
+      componentDir,
+      versionDir,
+      manifestPath: path.join(versionDir, "component.json"),
+      entryPath: path.join(versionDir, "entry.ts"),
+      contractPath: path.join(versionDir, "contract.ts"),
+    });
+    expect(existsSync(path.join(componentDir, "current"))).toBe(false);
+    expect(existsSync(path.join(seed, "parse-time-expression"))).toBe(false);
+
+    const raw = JSON.parse(readFileSync(result.plan.manifestPath, "utf-8"));
+    const parsed = parseComponentManifest(raw, {
+      dirName: "parse-time-expression",
+      versionDirName: "0.1.0",
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.manifest).toMatchObject({
+      name: "parse-time-expression",
+      version: "0.1.0",
+      kind: "tools",
+      depth: 0,
+      intent: "Turn phrases like '4 days from now' into ISO 8601 timestamps.",
+      lineage: { need: "what is 4 days from now", producedBy: "agent-1" },
+    });
+    expect(parsed.manifest.lineage.parent).toBeUndefined();
+    expect(raw.lineage).not.toHaveProperty("parent");
+
+    expect(readFileSync(result.plan.entryPath, "utf-8")).toContain('name: "parse_time_expression"');
+    expect(readFileSync(result.plan.contractPath, "utf-8")).toContain(
+      'deps.invoke("parse_time_expression"',
+    );
+  });
+
+  it("takes an explicit tool name and description, trimmed", () => {
+    const result = plan({ toolName: " when_is ", description: " Resolve a phrase to a time. " });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.toolName).toBe("when_is");
+    const entry = readFileSync(result.plan.entryPath, "utf-8");
+    expect(entry).toContain('name: "when_is"');
+    expect(entry).toContain('"Resolve a phrase to a time."');
+  });
+
+  it("refuses when no authoring root is configured", () => {
+    const result = plan({ authoringRoot: undefined });
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok) return;
+    expect(result.reason).toMatch(/no host-managed component root is configured/);
+    expect(existsSync(path.join(host, "parse-time-expression"))).toBe(false);
+  });
+
+  it("refuses to author under the seed root, directly and through a link", () => {
+    expect(plan({ authoringRoot: seed })).toMatchObject({ ok: false });
+    const link = path.join(makeRoot("link-"), "seed-link");
+    symlinkSync(seed, link, "dir");
+    try {
+      const result = plan({ authoringRoot: link });
+      expect(result).toMatchObject({ ok: false });
+      if (result.ok) return;
+      expect(result.reason).toMatch(/seed root/);
+    } finally {
+      removeRoot(path.dirname(link));
+    }
+    expect(existsSync(path.join(seed, "parse-time-expression"))).toBe(false);
+  });
+
+  it("refuses a name present in any root, listing what is staged and where to go instead", () => {
+    const inSeed = plan({ name: "hello" });
+    expect(inSeed).toMatchObject({ ok: false });
+    if (inSeed.ok) return;
+    expect(inSeed.reason).toContain(`component "hello" already exists under ${seed}`);
+    expect(inSeed.reason).toContain("versions present: 0.1.0");
+    expect(inSeed.reason).toContain("prepare_component_version");
+
+    writeComponent(host, "waiting", "0.1.0", { entry: TOOLS_ENTRY, current: false });
+    const inHost = plan({ name: "waiting" });
+    expect(inHost).toMatchObject({ ok: false });
+    if (inHost.ok) return;
+    expect(inHost.reason).toContain(`component "waiting" already exists under ${host}`);
+    expect(inHost.reason).toContain("versions present: 0.1.0");
+    expect(inHost.reason).toContain("run_component_contract");
+    expect(existsSync(path.join(host, "waiting", ".versions", "0.1.0"))).toBe(true);
+  });
+
+  it("refuses a tool name that is already taken", () => {
+    const result = plan({
+      toolName: "read_file",
+      reservedToolNames: new Set(["read_file", "execute_code"]),
+    });
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok) return;
+    expect(result.reason).toMatch(/tool name "read_file" is already taken/);
+    expect(existsSync(path.join(host, "parse-time-expression"))).toBe(false);
+
+    const byDefault = plan({
+      name: "read-file",
+      reservedToolNames: new Set(["read_file"]),
+    });
+    expect(byDefault).toMatchObject({ ok: false });
+  });
+
+  it("refuses invalid names, an invalid tool name, and empty intent or need", () => {
+    expect(plan({ name: "../x" })).toMatchObject({ ok: false, reason: 'invalid component name "../x"' });
+    expect(plan({ name: "Parse" })).toMatchObject({ ok: false });
+    expect(plan({ toolName: "Parse-Time" })).toMatchObject({ ok: false });
+    const noIntent = plan({ intent: "  " });
+    expect(noIntent).toMatchObject({ ok: false });
+    if (!noIntent.ok) expect(noIntent.reason).toMatch(/intent/);
+    const noNeed = plan({ need: "" });
+    expect(noNeed).toMatchObject({ ok: false });
+    if (!noNeed.ok) expect(noNeed.reason).toMatch(/need/);
+    expect(plan({ producedBy: "" })).toMatchObject({ ok: false });
+    expect(existsSync(path.join(host, "parse-time-expression"))).toBe(false);
   });
 });
 

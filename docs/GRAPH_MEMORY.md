@@ -465,7 +465,7 @@ not by prompt:
 | `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at? }` |
 | `abstraction_level` | `raw` |
 | `status` | `active` while `outcome: candidate`; `completed` once settled. Never archived |
-| edge | `SUPERSEDES`, new version → parent |
+| edge | `SUPERSEDES`, new version → parent. A component's first version (`create_component`) has no parent and no edge: it is the root of its lineage, and its content says so |
 
 `outcome` is `candidate` → one of `converged`, `reverted`, `failed`,
 `rejected`, `abandoned`. The first four come from the host (`abandoned`
@@ -478,7 +478,8 @@ took its place in the host's slot before this one was decided. Unlike
 `rejected` and `reverted`, `abandoned` carries no judgment on the change
 itself — it is fine to retry or resume the work. Writers:
 `prepare_component_version` (child as candidate, parent created from its
-manifest if missing), `announce_component_version` (`announced_at`, or
+manifest if missing), `create_component` (first version as candidate, no
+parent), `announce_component_version` (`announced_at`, or
 `failed` with the summary as reason — called once, from the self-task
 thread that produced the version), and the lineage reconciler (the host's
 verdict, pushed to the agent or polled from the host — idempotent, so both

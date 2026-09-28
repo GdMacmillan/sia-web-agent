@@ -1,25 +1,28 @@
 ---
 name: iterate-component
-description: Write, check and announce a new version of one of your own components (tools such as execute_code) in response to a stated need — "a tool is broken", "execute_code should also say X", "change what <tool> returns", "iterate <name>", "new component version". The work runs in a self-task thread. If this thread opened as a self-task, you are already in it: do the work here. Only in the conversation where a person raised the need do you start one, with start_self_task and skill "iterate-component", instead of editing anything. Never edits the running version or the source tree.
+description: Write, check and announce a new version of one of your own components (tools such as execute_code) in response to a stated need — "a tool is broken", "execute_code should also say X", "change what <tool> returns", "iterate <name>", "new component version" — or a first version of a tool you do not have yet ("build yourself a tool that does X"), which is a new component. The work runs in a self-task thread. If this thread opened as a self-task, you are already in it: do the work here. Only in the conversation where a person raised the need do you start one, with start_self_task and skill "iterate-component", instead of editing anything. Never edits the running version or the source tree.
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Iterate a component
 
 You are producing the next version of one of your components: a copy of the current version with
 one change that answers a stated need, proven by its contract, described so a person can decide
-whether to activate it. The version you write is **described now and runs only after the host
-activates it and you restart**. A passing contract ran the candidate out-of-process; nothing you
-do here changes what is live.
+whether to activate it. When the need is for a tool you do not have, the "next version" is the
+first one: a brand-new component whose `0.1.0` starts from a stub that already passes its contract.
+Either way the version you write is **described now and runs only after the host activates it and
+you restart**. A passing contract ran the candidate out-of-process; nothing you do here changes
+what is live.
 
 ## Tools
 
 | Tool                         | Purpose                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
 | `describe_component`         | Which root wins, the current version, the versions present, the manifest, the paths         |
+| `create_component`           | Lay out `.versions/0.1.0/` of a component that does not exist yet: a manifest with no parent, an entry with one stub tool that echoes its input, and a contract that invokes it |
 | `prepare_component_version`  | Lay out `.versions/<next>/` under the host-managed root with the manifest already rewritten |
 | `run_component_contract`     | Run a version's contract out-of-process; pass/fail with the error text                      |
 | `announce_component_version` | Tell the host about the candidate (and, when enabled, post one announcement linking this thread to the room the need was raised in; a need raised in a direct conversation stays there) |
@@ -30,7 +33,9 @@ Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `con
 Lineage is recorded for you. `prepare_component_version` stores a `component_version` entity titled
 `<name>@<next>` (the need, this thread's id, the parent, `outcome: candidate`) linked `SUPERSEDES` to
 the entity for `<name>@<previous>`, creating that one from its manifest if nobody has yet.
-`announce_component_version` marks it announced, or settles it as `failed`. The host's verdict —
+`create_component` stores the same entity for `<name>@0.1.0` with no parent and no `SUPERSEDES`
+edge — a first version is the root of its lineage. `announce_component_version` marks the entity
+announced, or settles it as `failed`. The host's verdict —
 `converged`, `reverted`, `rejected` — is written by the process that comes back after the restart, not
 by you. A version can also end up `abandoned`: that is not a verdict from anyone, just this side
 noticing the story ended without one (the candidate was never announced — a restart caught it
@@ -41,13 +46,16 @@ memory being unreachable never stops an iteration.
 ## The three rules
 
 - You MUST NOT write `current`. Activating a version is the host's deliberate step; a version you
-  point at yourself was never checked.
+  point at yourself was never checked. A new component has no `current` at all until the host
+  activates `0.1.0`; until then `describe_component` reports it as present but not runnable, and
+  its versions run only through `run_component_contract` with an explicit version.
 - You MUST NOT write under the seed root shipped with the source tree. The host re-stages that tree;
   anything written there is lost and, until then, runs unreviewed. If `prepare_component_version`
-  reports that no host-managed root is configured, stop and say so — there is nowhere to write.
-- The root you write to is the one `prepare_component_version` returned, not the one
-  `describe_component` said wins. The two differ on the first iteration: the winning root is the
-  seed, and `prepare_component_version` copies the component into the host-managed root and
+  or `create_component` reports that no host-managed root is configured, stop and say so — there
+  is nowhere to write.
+- The root you write to is the one `prepare_component_version` or `create_component` returned, not
+  the one `describe_component` said wins. The two differ on the first iteration: the winning root
+  is the seed, and `prepare_component_version` copies the component into the host-managed root and
   returns paths under it.
 
 ## Working principles
@@ -59,6 +67,12 @@ memory being unreachable never stops an iteration.
 1. **Name the component from the need.** Tool names and component names differ (`execute_code` is
    the tool; `execute-code` is the component). `describe_component` shows the manifest `intent`,
    the current version, which root wins and the paths — read it before deciding what to change.
+   If no component answers the need — `describe_component` says the name is unknown and none of
+   your tools does the job — the need is for a **new component**: name it from the need
+   (`parse-time-expression` for a `parse_time_expression` tool), state its intent in one sentence,
+   and call `create_component` instead of `prepare_component_version`. If `describe_component`
+   says the name exists but has no current version, someone already created it: the staged
+   version is the one to continue, via `read_file` and `run_component_contract` with that version.
 2. **Read the lineage before you propose, then prepare.** `search_entities` for `<name>` with
    `entity_type: "component_version"` and read what came before: a version settled `reverted` or
    `rejected` names, in its content, the need it answered and why it was turned down — do not
@@ -75,9 +89,13 @@ memory being unreachable never stops an iteration.
 3. **Change the entry, and make the contract prove it.** `read_file` the copied `entry.ts` and
    `contract.ts`. Make the smallest change to the entry that answers the need, and add a contract
    case that would fail without it — a version proves itself. Keep the manifest's `replaces` name;
-   the loader uses it to swap the version in.
+   the loader uses it to swap the version in. For a new component the scaffolded stub passes its
+   contract before you touch it — run it once to see that, then make the tool answer the need
+   (widen its schema to the inputs it takes, replace the echo with the behaviour) and replace the
+   echo case with cases that prove it. The tool's `description` is what you will read when deciding
+   to call it later; write it for that reader.
 4. **Run the contract against the version, not `current`.** `run_component_contract` with the
-   version `prepare_component_version` returned. Read the error text; fix; run again. Stop after
+   version `prepare_component_version` or `create_component` returned. Read the error text; fix; run again. Stop after
    three edit/run rounds — a need that resists three attempts deserves a person's eyes, not a
    fourth guess.
 5. **Announce once, from this thread.** On a pass, `announce_component_version` with a
@@ -90,7 +108,8 @@ memory being unreachable never stops an iteration.
    a general-purpose way to talk about one.
 6. **Say what is true.** In this thread and in the announcement: the version is described now and
    runs after the host activates it and you restart. The contract passed against the candidate,
-   out-of-process; nothing is live.
+   out-of-process; nothing is live. For a new component say also that you have no such tool yet:
+   the announcement is for a tool you will gain, not one that changes.
 
 ## What the seed component gives you
 
