@@ -141,7 +141,9 @@ function findComponent(
           `component "${name}" under ${skipped.root} is unusable: ${skipped.reason}; ` +
           `versions present: ${versions.join(", ") || "none"}. ` +
           "A version there runs via run_component_contract with an explicit version; " +
-          "it becomes current only when the host activates it.",
+          "it becomes current only when the host activates it. " +
+          "If its lineage reads removed, the host took it back and create_component starts a " +
+          "fresh version above what is staged; a version still waiting for a verdict is the one to continue.",
       };
     }
     return { ok: false, reason: `unknown component "${name}"` };
@@ -506,6 +508,16 @@ export interface PlannedNewComponent {
   manifestPath: string;
   entryPath: string;
   contractPath: string;
+  /**
+   * Versions of this name already staged somewhere, ascending, empty for a
+   * genuinely fresh name. Non-empty means nothing resolves a live version
+   * of this name anywhere, but something was built before — a candidate
+   * still waiting on its first verdict, or a version the host removed
+   * after it went live; disk alone cannot tell which. `version` is the
+   * next minor above the highest of these, so re-creating never collides
+   * with what is already staged.
+   */
+  previousVersions: string[];
 }
 
 export type PlanNewComponentResult =
@@ -514,14 +526,27 @@ export type PlanNewComponentResult =
 
 /**
  * Lay out the first version of a brand-new component under `authoringRoot`:
- * `<root>/<name>/.versions/0.1.0/` with a manifest (`kind: tools`, no
+ * `<root>/<name>/.versions/<version>/` with a manifest (`kind: tools`, no
  * parent), an entry contributing one stub tool that echoes its input, and a
  * contract that invokes it — a version whose contract passes as written.
  *
- * Refuses a name any root already carries (that is a new version of an
- * existing component, `planComponentVersion`'s job), a tool name already
- * taken, and the same roots `planComponentVersion` refuses. Every check
- * runs before anything is written. Never writes `current`. Never throws.
+ * Three checks run in order, all before anything is written:
+ *
+ * 1. The seed root ships components with the source tree; one of that name
+ *    there can never be created again, live or not — a new version of it is
+ *    `planComponentVersion`'s job.
+ * 2. A name any root currently resolves a live version for is an existing
+ *    component however it got there — creating it again would shadow or
+ *    collide with what is running.
+ * 3. Otherwise the name is free to create, but versions of it may already
+ *    be staged (built, never activated, or once live and since removed by
+ *    the host) — see {@link PlannedNewComponent.previousVersions}. `version`
+ *    starts a fresh lineage root (no parent) one minor above the highest of
+ *    those, rather than colliding with `0.1.0` were one already there.
+ *
+ * A tool name already taken is refused the same way, and the same roots
+ * `planComponentVersion` refuses are refused here. Never writes `current`.
+ * Never throws.
  */
 export function planNewComponent(input: PlanNewComponentInput): PlanNewComponentResult {
   const { name, roots, seedRoot } = input;
@@ -565,26 +590,55 @@ export function planNewComponent(input: PlanNewComponentInput): PlanNewComponent
   }
   const authoringRoot = resolvedRoot.root;
 
-  // A directory of that name anywhere — with or without a `current` — is
-  // an existing component, however far it got. Creating it again would
-  // either shadow it or collide with it.
-  for (const root of [authoringRoot, ...roots]) {
-    const existingDir = path.join(root, name);
-    if (!existsSync(existingDir)) {
-      continue;
-    }
-    const versions = listComponentVersions(existingDir);
+  // 1. The seed root ships this component with the source tree; nothing
+  // ever creates it again, whether or not it is currently live.
+  if (seedRoot !== undefined && existsSync(path.join(seedRoot, name))) {
     return {
       ok: false,
       reason:
-        `component "${name}" already exists under ${root}; versions present: ${versions.join(", ") || "none"}. ` +
+        `component "${name}" ships with the source tree; it cannot be created again — ` +
+        "a new version of it is prepare_component_version.",
+    };
+  }
+
+  const allRoots = [authoringRoot, ...roots];
+
+  // 2. A name any root currently resolves a live version for is an existing
+  // component, however it got there — creating it again would either
+  // shadow or collide with what is running.
+  const live = discoverComponents(allRoots).found.find((c) => c.manifest.name === name);
+  if (live) {
+    const versions = listComponentVersions(live.componentDir);
+    return {
+      ok: false,
+      reason:
+        `component "${name}" already exists under ${live.root}; versions present: ${versions.join(", ") || "none"}. ` +
         "A new version of an existing component is prepare_component_version; " +
         "a version already staged runs via run_component_contract with an explicit version.",
     };
   }
 
+  // 3. Nothing live anywhere, but versions may still be staged — a
+  // candidate still awaiting its first verdict, or one the host removed
+  // after it went live. Disk alone cannot tell which apart (both read as
+  // "versions present, nothing current"), and either way it is safe to
+  // build on top of. Start one minor above the highest staged anywhere so
+  // re-creating never collides with what is already there.
+  const staged = new Set<string>();
+  for (const root of allRoots) {
+    const dir = path.join(root, name);
+    if (existsSync(dir)) {
+      for (const v of listComponentVersions(dir)) {
+        staged.add(v);
+      }
+    }
+  }
+  const previousVersions = semver.sort([...staged]);
+  const highest = previousVersions.length > 0 ? previousVersions[previousVersions.length - 1] : null;
+  const version = highest !== null ? (semver.inc(highest, "minor") ?? NEW_COMPONENT_VERSION) : NEW_COMPONENT_VERSION;
+
   const componentDir = path.join(authoringRoot, name);
-  const versionDir = path.join(componentDir, VERSIONS_DIR, NEW_COMPONENT_VERSION);
+  const versionDir = path.join(componentDir, VERSIONS_DIR, version);
   const manifestPath = path.join(versionDir, MANIFEST_FILE);
   const entryPath = path.join(versionDir, "entry.ts");
   const contractPath = path.join(versionDir, "contract.ts");
@@ -596,14 +650,14 @@ export function planNewComponent(input: PlanNewComponentInput): PlanNewComponent
     if (!isSafePath(componentDir, authoringRoot)) {
       return { ok: false, reason: "component directory resolves outside the authoring root" };
     }
-    const manifest = newComponentManifest({ name, intent, need, producedBy });
+    const manifest = newComponentManifest({ name, intent, need, producedBy, version });
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     writeFileSync(entryPath, stubEntrySource(toolName, description || intent));
     writeFileSync(contractPath, stubContractSource(toolName));
   } catch (error: unknown) {
     return {
       ok: false,
-      reason: `could not write ${name}@${NEW_COMPONENT_VERSION}: ${errorMessage(error)}`,
+      reason: `could not write ${name}@${version}: ${errorMessage(error)}`,
     };
   }
 
@@ -612,13 +666,14 @@ export function planNewComponent(input: PlanNewComponentInput): PlanNewComponent
     plan: {
       name,
       root: authoringRoot,
-      version: NEW_COMPONENT_VERSION,
+      version,
       toolName,
       componentDir,
       versionDir,
       manifestPath,
       entryPath,
       contractPath,
+      previousVersions,
     },
   };
 }

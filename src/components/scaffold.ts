@@ -31,17 +31,22 @@ export interface NewComponentManifestInput {
   intent: string;
   need: string;
   producedBy: string;
+  /** Defaults to {@link NEW_COMPONENT_VERSION}; set when re-creating a name
+   * above versions already staged (see `planNewComponent`). */
+  version?: string;
 }
 
 /**
  * The manifest of a first version: `kind: tools`, depth 0, the SDK range
  * this source tree was built against, and a lineage with a need and a
- * producer but no parent — a first version is the root of its lineage.
+ * producer but no parent — a first version is the root of its lineage,
+ * even when `version` is not the default (re-creating a removed component
+ * still starts fresh: no parent, just a higher starting number).
  */
 export function newComponentManifest(input: NewComponentManifestInput): Record<string, unknown> {
   return {
     name: input.name,
-    version: NEW_COMPONENT_VERSION,
+    version: input.version ?? NEW_COMPONENT_VERSION,
     kind: "tools",
     intent: input.intent,
     sdk: `^${SDK_VERSION}`,

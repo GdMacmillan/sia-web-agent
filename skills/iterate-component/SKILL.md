@@ -4,7 +4,7 @@ description: Write, check and announce a new version of one of your own componen
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # Iterate a component
@@ -22,7 +22,7 @@ what is live.
 | Tool                         | Purpose                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
 | `describe_component`         | Which root wins, the current version, the versions present, the manifest, the paths         |
-| `create_component`           | Lay out `.versions/0.1.0/` of a component that does not exist yet: a manifest with no parent, an entry with one stub tool that echoes its input, and a contract that invokes it |
+| `create_component`           | Lay out `.versions/<version>/` of a component with no live version anywhere: a manifest with no parent, an entry with one stub tool that echoes its input, and a contract that invokes it. `<version>` is `0.1.0` for a genuinely new name, or the next minor above whatever is already staged when the host removed an earlier lineage for it |
 | `prepare_component_version`  | Lay out `.versions/<next>/` under the host-managed root with the manifest already rewritten |
 | `run_component_contract`     | Run a version's contract out-of-process; pass/fail with the error text                      |
 | `announce_component_version` | Tell the host about the candidate (and, when enabled, post one announcement linking this thread to the room the need was raised in; a need raised in a direct conversation stays there) |
@@ -33,13 +33,16 @@ Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `con
 Lineage is recorded for you. `prepare_component_version` stores a `component_version` entity titled
 `<name>@<next>` (the need, this thread's id, the parent, `outcome: candidate`) linked `SUPERSEDES` to
 the entity for `<name>@<previous>`, creating that one from its manifest if nobody has yet.
-`create_component` stores the same entity for `<name>@0.1.0` with no parent and no `SUPERSEDES`
-edge — a first version is the root of its lineage. `announce_component_version` marks the entity
+`create_component` stores the same entity for `<name>@<version>` with no parent and no `SUPERSEDES`
+edge — a first version is always the root of its lineage, whatever its number. `announce_component_version` marks the entity
 announced, or settles it as `failed`. The host's verdict —
-`converged`, `reverted`, `rejected` — is written by the process that comes back after the restart, not
+`converged`, `reverted`, `rejected`, or later `removed` — is written by the process that comes back after the restart, not
 by you. A version can also end up `abandoned`: that is not a verdict from anyone, just this side
 noticing the story ended without one (the candidate was never announced — a restart caught it
-mid-iteration — or a later candidate replaced it in the host's slot before it was decided). Each
+mid-iteration — or a later candidate replaced it in the host's slot before it was decided). `removed`
+is different from the rest: it lands on a version that already settled `converged` — the host took a
+version that was live and removed it from the machine, later, and it carries no judgment on the
+change itself, the same as `abandoned`. Each
 tool's result carries a `lineage:` line saying what it recorded; read it, and continue either way —
 memory being unreachable never stops an iteration.
 
@@ -71,8 +74,12 @@ memory being unreachable never stops an iteration.
    your tools does the job — the need is for a **new component**: name it from the need
    (`parse-time-expression` for a `parse_time_expression` tool), state its intent in one sentence,
    and call `create_component` instead of `prepare_component_version`. If `describe_component`
-   says the name exists but has no current version, someone already created it: the staged
-   version is the one to continue, via `read_file` and `run_component_contract` with that version.
+   says the name exists but has no current version, check the lineage before assuming which case
+   this is: a version whose entity is still `candidate` is one someone already created and waiting
+   on a verdict — continue it, via `read_file` and `run_component_contract` with that version. A
+   version whose entity reads `removed` means the host took the whole lineage back off the
+   machine — that is a component you do not have, again, and `create_component` starts a fresh
+   version above what is staged, not a continuation of it.
 2. **Read the lineage before you propose, then prepare.** `search_entities` for `<name>` with
    `entity_type: "component_version"` and read what came before: a version settled `reverted` or
    `rejected` names, in its content, the need it answered and why it was turned down — do not

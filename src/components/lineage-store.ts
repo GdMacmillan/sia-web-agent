@@ -25,6 +25,7 @@ import {
   lineageTitle,
   settlePayload,
   type LineageEntityInput,
+  type SettledOutcome,
   type Verdict,
 } from "./lineage.js";
 import type { ComponentManifest } from "./manifest.js";
@@ -146,9 +147,26 @@ export async function markLineageAnnounced(
 export type SettleResult = "settled" | "already_settled";
 
 /**
- * Settle an entity with a verdict. Idempotent: an entity that is no
- * longer a candidate is left exactly as it is, so a host push and a poll
- * that both carry the same verdict cannot disagree.
+ * Whether `verdict` may settle an entity currently at `from`. `candidate`
+ * accepts any verdict — that is the ordinary first settlement. Every other
+ * outcome is already terminal, with one exception: `converged` may still
+ * move to `removed`, because the host can take a version that is live
+ * today and remove it later. That keeps `removed → removed` idempotent (a
+ * push and the boot catch-up racing the same verdict agree) without
+ * opening the door to settling over any other outcome.
+ */
+function canSettle(from: unknown, verdict: SettledOutcome): boolean {
+  if (from === "candidate") {
+    return true;
+  }
+  return from === "converged" && verdict === "removed";
+}
+
+/**
+ * Settle an entity with a verdict. Idempotent: an entity whose outcome
+ * cannot move to this verdict (see {@link canSettle}) is left exactly as
+ * it is, so a host push and a poll that both carry the same verdict
+ * cannot disagree.
  */
 export async function settleLineageEntity(
   adapter: IGraphMemoryAdapter,
@@ -157,7 +175,7 @@ export async function settleLineageEntity(
   now?: () => string,
 ): Promise<SettleResult> {
   const { entity } = await retrieveEntity(adapter, { entity_id: entityId });
-  if (entity.metadata.outcome !== "candidate") {
+  if (!canSettle(entity.metadata.outcome, verdict.outcome)) {
     return "already_settled";
   }
   const payload = settlePayload(entity.tags, verdict, now);

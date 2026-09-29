@@ -348,17 +348,24 @@ component:
   "previous": "0.0.9",
   "candidate": { "version": "0.1.1", "threadId": "…", "announcedAt": "…" },
   "lastOutcome": { "version": "0.1.1", "result": "activated", "at": "…", "error": "…" },
-  "versions": ["0.0.9", "0.1.0", "0.1.1"]
+  "versions": ["0.0.9", "0.1.0", "0.1.1"],
+  "retired": false
 }
 ```
 
-`lastOutcome.result` is `activated`, `reverted` or `failed`; `error` is the
-reason when it is not `activated`. Everything else in the response is
+`lastOutcome.result` is `activated`, `reverted`, `failed` or `removed`;
+`error` is the reason when it is not `activated`. `removed` means the host
+took a version that was live and removed it from the machine — `active`
+and `version` read empty on that entry, `retired` (optional boolean) may
+be `true`, and neither is an error: `.versions/` and the entry's own
+`versions` list stay as they were. Everything else in the response is
 ignored, a missing `components` array means the host does not report them
 (the agent stops polling), and any transport or non-2xx failure is treated
 as "no answer yet". The read runs every 3 s for up to 120 s after the agent
 starts and at most once a minute during turns, only while a version of this
-agent's is unsettled.
+agent's is unsettled — plus one extra read at boot to catch a `removed`
+verdict for a version that was already settled `converged` (see
+`COMPONENTS.md` §6).
 
 ### 3.6 Component outcome (host → agent, optional)
 
@@ -374,7 +381,7 @@ Authorization: Bearer <the token the host gates agent-side routes with>
 Content-Type: application/json
 
 {
-  "kind": "converged" | "reverted" | "failed" | "rejected",
+  "kind": "converged" | "reverted" | "failed" | "rejected" | "removed",
   "agentId": "<SIA_AGENT_ID>",
   "component": "execute-code",
   "version": "0.1.1",
@@ -390,6 +397,14 @@ else is ignored, never applied. The push is best-effort on the host's side:
 the agent may be off (a swap restarts it), and §3.5 exists so the verdict is
 found anyway. A push and a poll that both carry the verdict settle the
 entity once — the second finds it already settled.
+
+`removed` is the one kind that can arrive for a version whose lineage
+entity is already settled `converged` — it was live, then the host removed
+it. It is not a judgment on the change: a later version may still build on
+it. Because it targets a settled entity rather than a pending one, a push
+that lands while the agent is down has no pending record to poll for; the
+boot-time read of `/status` (§3.5) checks for exactly this case as well as
+the ordinary pending one.
 
 ---
 
