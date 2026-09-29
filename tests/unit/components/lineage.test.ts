@@ -144,16 +144,17 @@ describe("buildParentEntity", () => {
 });
 
 describe("outcomeFromHostResult", () => {
-  it("maps the host's three result words and nothing else", () => {
+  it("maps the host's four result words and nothing else", () => {
     expect(outcomeFromHostResult("activated")).toBe("converged");
     expect(outcomeFromHostResult("reverted")).toBe("reverted");
     expect(outcomeFromHostResult("failed")).toBe("failed");
+    expect(outcomeFromHostResult("removed")).toBe("removed");
     expect(outcomeFromHostResult("rejected")).toBeNull();
     expect(outcomeFromHostResult("")).toBeNull();
     expect(outcomeFromHostResult(undefined)).toBeNull();
   });
 
-  it("exposes the six outcomes and the edge name", () => {
+  it("exposes the seven outcomes and the edge name", () => {
     expect(OUTCOMES).toEqual([
       "candidate",
       "converged",
@@ -161,6 +162,7 @@ describe("outcomeFromHostResult", () => {
       "failed",
       "rejected",
       "abandoned",
+      "removed",
     ]);
     expect(SUPERSEDES).toBe("SUPERSEDES");
   });
@@ -183,6 +185,17 @@ describe("decideReconcile", () => {
       at: "2026-09-22T00:00:00Z",
     });
     expect(decideReconcile(pending, host, "turn", false)).toMatchObject({ action: "settle" });
+  });
+
+  it("settles removed the same way as any other lastOutcome match", () => {
+    const host = view({
+      lastOutcome: { version: "0.2.3", result: "removed", at: "2026-09-28T00:00:00Z" },
+    });
+    expect(decideReconcile(pending, host, "turn", false)).toEqual({
+      action: "settle",
+      outcome: "removed",
+      at: "2026-09-28T00:00:00Z",
+    });
   });
 
   it("carries the host's error as the reason on a revert or failure", () => {
@@ -337,5 +350,14 @@ describe("settlePayload", () => {
     const payload = settlePayload([], { outcome: "converged" }, () => "2026-09-22T01:02:03.000Z");
     expect(payload.metadata.settled_at).toBe("2026-09-22T01:02:03.000Z");
     expect(payload.metadata).not.toHaveProperty("reason");
+  });
+
+  it("gives removed its own sentence, distinct from the generic outcome line", () => {
+    const payload = settlePayload(
+      ["component_version", "outcome:converged", "version:0.2.3"],
+      { outcome: "removed", at: "2026-09-28T00:00:00Z" },
+    );
+    expect(payload.contentLine).toBe("Outcome: removed — the host removed it from the machine.");
+    expect(payload.tags).toEqual(["component_version", "version:0.2.3", "outcome:removed"]);
   });
 });

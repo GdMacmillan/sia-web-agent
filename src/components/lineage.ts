@@ -25,7 +25,7 @@ export const SUPERSEDES = SUPERSEDES_RELATIONSHIP;
 
 /**
  * Where a version stands. `candidate` until the host decides; the other
- * five are terminal. `failed` is the author giving up before a candidate
+ * six are terminal. `failed` is the author giving up before a candidate
  * ever reached the host, or the host failing to apply one. `abandoned` is
  * never sent by the host — it is this side's own conclusion that a
  * candidate's story simply ended without a verdict from anyone: it was
@@ -34,6 +34,13 @@ export const SUPERSEDES = SUPERSEDES_RELATIONSHIP;
  * component took its place in the host's slot before it was decided.
  * Unlike `rejected` and `reverted`, `abandoned` carries no judgment on
  * the change itself — it is fine to retry or resume the work.
+ *
+ * `removed` is the one outcome reachable from another settled outcome
+ * (`converged`) rather than only from `candidate`: the host took a
+ * version that was live and removed it from the machine — the version
+ * stays on disk and its lineage stays readable, it is simply not
+ * installed. Like `abandoned`, it carries no judgment on the change
+ * itself, so a later version may still build on it.
  */
 export const OUTCOMES = [
   "candidate",
@@ -42,6 +49,7 @@ export const OUTCOMES = [
   "failed",
   "rejected",
   "abandoned",
+  "removed",
 ] as const;
 export type LineageOutcome = (typeof OUTCOMES)[number];
 
@@ -87,7 +95,9 @@ function outcomeLine(outcome: LineageOutcome, reason?: string): string {
   const base =
     outcome === "candidate"
       ? "Outcome: candidate — waiting for the host's verdict."
-      : `Outcome: ${outcome}.`;
+      : outcome === "removed"
+        ? "Outcome: removed — the host removed it from the machine."
+        : `Outcome: ${outcome}.`;
   return reason ? `${base} Reason: ${reason}` : base;
 }
 
@@ -179,6 +189,8 @@ export function outcomeFromHostResult(result: string | undefined): SettledOutcom
       return "reverted";
     case "failed":
       return "failed";
+    case "removed":
+      return "removed";
     default:
       return null;
   }

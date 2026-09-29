@@ -25,6 +25,7 @@ import {
   FAILING_CONTRACT,
   PASSING_CONTRACT,
   SERVICE_ENTRY,
+  TOOLS_ENTRY,
   makeRoot,
   plainImport,
   removeRoot,
@@ -231,17 +232,50 @@ describe("component tools", () => {
       expect(entry).toContain('"Resolve a phrase to a time."');
     });
 
-    it("refuses an existing name and routes to prepare_component_version", async () => {
+    it("refuses a name the seed root ships and routes to prepare_component_version", async () => {
       const tools = createComponentTools({ projectRoot: project, componentsDir: host });
       const text = await byName(tools, "create_component").invoke({
         name: "hello",
         intent: INTENT,
         need: NEED,
       });
-      expect(text).toMatch(/^Cannot create a component: component "hello" already exists under /);
+      expect(text).toBe(
+        'Cannot create a component: component "hello" ships with the source tree; it cannot be created again — a new version of it is prepare_component_version.',
+      );
+      expect(existsSync(path.join(host, "hello"))).toBe(false);
+    });
+
+    it("refuses a name any root resolves a live version for", async () => {
+      const tools = createComponentTools({ projectRoot: project, componentsDir: host });
+      // Live under the host root, not the seed root — a different refusal path.
+      writeComponent(host, "running", "0.1.0", { entry: TOOLS_ENTRY, currentFile: true });
+      const text = await byName(tools, "create_component").invoke({
+        name: "running",
+        intent: INTENT,
+        need: NEED,
+      });
+      expect(text).toMatch(/^Cannot create a component: component "running" already exists under /);
       expect(text).toContain("versions present: 0.1.0");
       expect(text).toContain("prepare_component_version");
-      expect(existsSync(path.join(host, "hello"))).toBe(false);
+      expect(text).toContain("run_component_contract");
+    });
+
+    it("re-creates a name staged but never made current — the host may have removed it", async () => {
+      const tools = createComponentTools({ projectRoot: project, componentsDir: host });
+      writeComponent(host, "waiting", "0.1.0", { entry: TOOLS_ENTRY, current: false });
+      const text = await byName(tools, "create_component").invoke({
+        name: "waiting",
+        intent: INTENT,
+        need: NEED,
+      });
+      expect(text).toContain(`Created waiting@0.2.0 under ${host}`);
+      expect(text).toContain(
+        "earlier versions staged: 0.1.0 — the host removed the component; 0.2.0 starts a fresh lineage (no parent)",
+      );
+      const manifest = JSON.parse(
+        readFileSync(path.join(host, "waiting", ".versions", "0.2.0", "component.json"), "utf-8"),
+      );
+      expect(manifest.lineage).not.toHaveProperty("parent");
     });
 
     it("refuses a tool name a built-in already has, by default and when given", async () => {
@@ -861,6 +895,39 @@ describe("component lineage", () => {
     expect(graph.edges).toEqual([]);
     expect(reconciler.pending()).toEqual([
       { name: "parse-time-expression", version: "0.1.0", announced: false, entityId: "n-1" },
+    ]);
+  });
+
+  it("re-creating over a removed component records a fresh root, not a SUPERSEDES child", async () => {
+    writeComponent(host, "waiting", "0.1.0", { entry: TOOLS_ENTRY, current: false });
+    const graph = memoryGraph();
+    const { tools, reconciler } = build(graph);
+    const text = await byName(tools, "create_component").invoke(
+      {
+        name: "waiting",
+        intent: "Do the thing.",
+        need: "it needs doing",
+      },
+      config,
+    );
+    expect(text).toContain("Created waiting@0.2.0");
+    expect(text).toContain("lineage: recorded (id n-1; root of its lineage)");
+
+    const root = graph.entity("n-1");
+    expect(root.title).toBe("waiting@0.2.0");
+    expect(root.entity_type).toBe("component_version");
+    expect(root.custom).toMatchObject({
+      component: "waiting",
+      version: "0.2.0",
+      outcome: "candidate",
+    });
+    expect((root.custom.provenance as Record<string, unknown>).parent).toBeUndefined();
+    // No parent entity to look up and no SUPERSEDES edge to it — the 0.1.0
+    // that was removed is not this lineage's ancestor.
+    expect(graph.nodes.size).toBe(1);
+    expect(graph.edges).toEqual([]);
+    expect(reconciler.pending()).toEqual([
+      { name: "waiting", version: "0.2.0", announced: false, entityId: "n-1" },
     ]);
   });
 

@@ -72,6 +72,24 @@ describe("scaffold sources", () => {
     expect(parsed.manifest.lineage.parent).toBeUndefined();
     expect(semver.satisfies(SDK_VERSION, parsed.manifest.sdk)).toBe(true);
   });
+
+  it("honors an explicit version and still writes no parent — re-creating over a removed component starts fresh", () => {
+    const raw = newComponentManifest({
+      name: "waiting",
+      intent: "Turn phrases into timestamps.",
+      need: "what is 4 days from now",
+      producedBy: "agent-1",
+      version: "0.2.0",
+    });
+    const parsed = parseComponentManifest(raw, {
+      dirName: "waiting",
+      versionDirName: "0.2.0",
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.manifest.version).toBe("0.2.0");
+    expect(parsed.manifest.lineage.parent).toBeUndefined();
+  });
 });
 
 describe("a new component's stub passes its own contract", () => {

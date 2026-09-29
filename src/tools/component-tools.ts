@@ -453,8 +453,12 @@ export function createComponentTools(
       "contract that invokes it, so the contract passes before you change " +
       "anything. Never touches `current`: the component exists only as a " +
       "described version until a person accepts it and you restart. Refuses " +
-      "a name any root already carries (that is prepare_component_version) " +
-      "and a tool name you already have. Returns the paths to edit next.",
+      "a name any root already carries a live version of (that is " +
+      "prepare_component_version) and a tool name you already have. A name " +
+      "with no live version anywhere but versions still staged — the host " +
+      "removed it, with nothing else spoken for it — may be created again: " +
+      "the next minor above what is staged, as a fresh lineage root. " +
+      "Returns the paths to edit next.",
     schema: z.object({
       name: z
         .string()
@@ -532,6 +536,11 @@ export function createComponentTools(
         `  entry: ${p.entryPath}`,
         `  contract: ${p.contractPath}`,
         `  ${lineage}`,
+        ...(p.previousVersions.length > 0
+          ? [
+              `  earlier versions staged: ${p.previousVersions.join(", ")} — the host removed the component; ${p.version} starts a fresh lineage (no parent)`,
+            ]
+          : []),
         `\`current\` does not exist yet and you must not create it — the component runs only after the host activates ${p.version}, after which the agent restarts.`,
         `Next: run_component_contract({ name: "${p.name}", version: "${p.version}" }) to see the stub pass, then edit ${p.entryPath} so ${p.toolName} answers the need and make ${path.basename(p.contractPath)} prove it.`,
       ].join("\n");

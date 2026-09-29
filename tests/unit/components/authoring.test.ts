@@ -362,6 +362,7 @@ describe("planNewComponent", () => {
       manifestPath: path.join(versionDir, "component.json"),
       entryPath: path.join(versionDir, "entry.ts"),
       contractPath: path.join(versionDir, "contract.ts"),
+      previousVersions: [],
     });
     expect(existsSync(path.join(componentDir, "current"))).toBe(false);
     expect(existsSync(path.join(seed, "parse-time-expression"))).toBe(false);
@@ -423,22 +424,46 @@ describe("planNewComponent", () => {
     expect(existsSync(path.join(seed, "parse-time-expression"))).toBe(false);
   });
 
-  it("refuses a name present in any root, listing what is staged and where to go instead", () => {
-    const inSeed = plan({ name: "hello" });
-    expect(inSeed).toMatchObject({ ok: false });
-    if (inSeed.ok) return;
-    expect(inSeed.reason).toContain(`component "hello" already exists under ${seed}`);
-    expect(inSeed.reason).toContain("versions present: 0.1.0");
-    expect(inSeed.reason).toContain("prepare_component_version");
+  it("refuses a name the seed root ships, whatever its lineage state elsewhere", () => {
+    const result = plan({ name: "hello" });
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok) return;
+    expect(result.reason).toContain('component "hello" ships with the source tree');
+    expect(result.reason).toContain("it cannot be created again");
+    expect(result.reason).toContain("prepare_component_version");
+  });
 
+  it("refuses a name any root currently resolves a live version for", () => {
+    writeComponent(host, "running", "0.1.0", { entry: TOOLS_ENTRY, currentFile: true });
+    const result = plan({ name: "running" });
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok) return;
+    expect(result.reason).toContain(`component "running" already exists under ${host}`);
+    expect(result.reason).toContain("versions present: 0.1.0");
+    expect(result.reason).toContain("prepare_component_version");
+    expect(result.reason).toContain("run_component_contract");
+  });
+
+  it("re-creates over a version staged but never made current — one minor above the highest, no parent", () => {
     writeComponent(host, "waiting", "0.1.0", { entry: TOOLS_ENTRY, current: false });
-    const inHost = plan({ name: "waiting" });
-    expect(inHost).toMatchObject({ ok: false });
-    if (inHost.ok) return;
-    expect(inHost.reason).toContain(`component "waiting" already exists under ${host}`);
-    expect(inHost.reason).toContain("versions present: 0.1.0");
-    expect(inHost.reason).toContain("run_component_contract");
-    expect(existsSync(path.join(host, "waiting", ".versions", "0.1.0"))).toBe(true);
+    const result = plan({ name: "waiting" });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.plan.version).toBe("0.2.0");
+    expect(result.plan.previousVersions).toEqual(["0.1.0"]);
+    expect(existsSync(path.join(host, "waiting", ".versions", "0.2.0"))).toBe(true);
+    // The host removed it, not the agent — nothing on disk still calls 0.1.0 a parent.
+    const raw = JSON.parse(readFileSync(result.plan.manifestPath, "utf-8")) as Record<string, unknown>;
+    expect(raw.lineage).not.toHaveProperty("parent");
+  });
+
+  it("bumps to the next minor above the highest staged version, not a patch above it", () => {
+    writeComponent(host, "waiting", "0.1.3", { entry: TOOLS_ENTRY, current: false });
+    const result = plan({ name: "waiting" });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.plan.version).toBe("0.2.0");
+    expect(result.plan.previousVersions).toEqual(["0.1.3"]);
   });
 
   it("refuses a tool name that is already taken", () => {

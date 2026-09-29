@@ -95,7 +95,7 @@ const DEFAULT_BOOT_CAP_MS = 120_000;
 const DEFAULT_TURN_THROTTLE_MS = 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 
-const SETTLED_KINDS: readonly string[] = ["converged", "reverted", "failed", "rejected"];
+const SETTLED_KINDS: readonly string[] = ["converged", "reverted", "failed", "rejected", "removed"];
 
 function key(name: string, version: string): string {
   return lineageTitle(name, version);
@@ -286,6 +286,75 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
     }
   };
 
+  /**
+   * Boot-time catch-up for a version the host removed while nothing was
+   * running to receive the push. `onHostOutcome` only reaches a live
+   * process; if the host removed a version that was `converged` and
+   * restarted the agent without it, and nothing was up for the push, the
+   * entity would sit `converged` forever with no verdict pending to poll
+   * for (removal only ever touches a settled version — `discoverPending`
+   * only tracks candidates). One extra read of `/status` at boot closes
+   * that gap: an entry whose last outcome is `removed`, that has no
+   * `active` version, and whose removed version is one this agent
+   * produced, gets the same settle a push would have given it. Never
+   * throws — no daemon url, an unreachable host, or a memory failure
+   * just means nothing is caught up this boot.
+   */
+  const catchUpRemoved = async (): Promise<void> => {
+    const a = resolveAdapter();
+    const { agentId, daemonUrl, componentsDir } = runtime();
+    if (!a || !daemonUrl) {
+      return;
+    }
+    const view = await readHostComponents(fetchImpl, daemonUrl, requestTimeoutMs);
+    if (!view || view.length === 0) {
+      return;
+    }
+    let produced: PendingVersion[];
+    try {
+      produced = opts.discoverLocalVersions
+        ? await opts.discoverLocalVersions()
+        : await discoverProducedVersions(componentsDir, agentId);
+    } catch (error) {
+      logger.warn({ error: errorMessage(error) }, "component lineage: removed catch-up discovery failed");
+      return;
+    }
+    const isOwnVersion = (name: string, version: string): boolean =>
+      produced.some((p) => p.name === name && p.version === version);
+    for (const entry of view) {
+      const last = entry.lastOutcome;
+      if (!last || last.result !== "removed" || entry.active || !isOwnVersion(entry.name, last.version)) {
+        continue;
+      }
+      try {
+        const entity = await findLineageEntity(a, lineageTitle(entry.name, last.version));
+        if (!entity || (entity.metadata.outcome !== "converged" && entity.metadata.outcome !== "candidate")) {
+          continue;
+        }
+        const result = await settleLineageEntity(
+          a,
+          entity.id,
+          {
+            outcome: "removed",
+            ...(last.error ? { reason: last.error } : {}),
+            ...(last.at ? { at: last.at } : {}),
+          },
+          () => new Date(now()).toISOString(),
+        );
+        pending.delete(key(entry.name, last.version));
+        logger.info(
+          { component: entry.name, version: last.version, result },
+          "component lineage: removed catch-up settled",
+        );
+      } catch (error) {
+        logger.warn(
+          { component: entry.name, version: last.version, error: errorMessage(error) },
+          "component lineage: removed catch-up settle failed",
+        );
+      }
+    }
+  };
+
   const onBoot = async (): Promise<void> => {
     try {
       await discoverPending();
@@ -293,6 +362,11 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
       // First contact with graph memory failed: treat it as not here.
       latch("boot discovery failed", error);
       return;
+    }
+    try {
+      await catchUpRemoved();
+    } catch (error) {
+      logger.warn({ error: errorMessage(error) }, "component lineage: removed catch-up failed");
     }
     if (pending.size === 0) {
       return;

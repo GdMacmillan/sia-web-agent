@@ -42,10 +42,19 @@ function stubAdapter(seed: Array<{ id: string; title: string; outcome: string; t
     updateEntity: jest.fn(async (req: { nodeId: string; properties: Record<string, unknown> }) => {
       updates.push(req);
       const node = nodes.get(req.nodeId);
-      const incoming = (req.properties as { metadata?: Record<string, unknown> }).metadata ?? {};
+      // The real handler pre-merges metadata itself and sends the finished
+      // map as `custom_metadata` (never nested under a `metadata` key) — see
+      // `tool-handlers.ts#updateEntity`. Reflect it the same way so a second
+      // read of the same entity within one test (e.g. an idempotency check)
+      // sees the outcome the first update actually settled, not a stale one.
+      const incoming = req.properties as { metadata?: Record<string, unknown>; custom_metadata?: Record<string, unknown> };
       if (node) {
         const meta = node.properties.metadata as Record<string, unknown>;
-        node.properties.metadata = { ...meta, ...incoming };
+        node.properties.metadata = {
+          ...meta,
+          ...(incoming.metadata ?? {}),
+          ...(incoming.custom_metadata ? { custom_metadata: incoming.custom_metadata } : {}),
+        };
       }
       return { id: req.nodeId, properties: node?.properties ?? {}, version: 2, changed_fields: [] };
     }),
@@ -138,6 +147,8 @@ function build(overrides: Partial<Parameters<typeof createLineageReconciler>[0]>
 describe("boot poll", () => {
   it("finds the pending version on disk and settles it when the host reports activated", async () => {
     const host = scriptedHost([
+      // Consumed first by the removed catch-up read (a no-op: no lastOutcome).
+      status({ active: "0.2.1", candidate: { version: "0.2.3" } }),
       status({ active: "0.2.1", candidate: { version: "0.2.3" } }),
       status({ active: "0.2.3", lastOutcome: { version: "0.2.3", result: "activated", at: "t1" } }),
     ]);
@@ -151,7 +162,7 @@ describe("boot poll", () => {
     await clock.advance(3_000);
     await boot;
 
-    expect(host.calls).toHaveLength(2);
+    expect(host.calls).toHaveLength(3);
     expect(settleOf(store.updates)).toEqual(["converged"]);
     expect(reconciler.pending()).toEqual([]);
   });
@@ -194,7 +205,9 @@ describe("boot poll", () => {
     await clock.advance(0);
     await boot;
 
-    expect(host.calls).toHaveLength(1);
+    // One extra read up front for the removed catch-up, then one for the
+    // ordinary poll — both against the same scripted answer.
+    expect(host.calls).toHaveLength(2);
     const meta = store.updates[0]?.properties.custom_metadata as Record<string, unknown>;
     expect(meta).toMatchObject({ outcome: "abandoned", reason: "never announced" });
     expect(reconciler.pending()).toEqual([]);
@@ -208,7 +221,9 @@ describe("boot poll", () => {
     await clock.advance(0);
     await boot;
 
-    expect(host.calls).toHaveLength(1);
+    // One extra read up front for the removed catch-up, then one for the
+    // ordinary poll — both against the same scripted answer.
+    expect(host.calls).toHaveLength(2);
     const meta = store.updates[0]?.properties.custom_metadata as Record<string, unknown>;
     expect(meta).toMatchObject({ outcome: "abandoned", reason: "replaced by 0.2.4" });
   });
@@ -232,7 +247,9 @@ describe("boot poll", () => {
     const boot = reconciler.onBoot();
     await clock.advance(0);
     await boot;
-    expect(host.calls).toHaveLength(0);
+    // The removed catch-up still reads /status once — it does not depend on
+    // anything being locally pending — but no poll follows.
+    expect(host.calls).toHaveLength(1);
   });
 
   it("skips versions whose entity is already settled", async () => {
@@ -243,7 +260,9 @@ describe("boot poll", () => {
     await clock.advance(0);
     await boot;
     expect(reconciler.pending()).toEqual([]);
-    expect(host.calls).toHaveLength(0);
+    // The removed catch-up still reads /status once, even though the one
+    // entity on disk is already settled and never becomes pending.
+    expect(host.calls).toHaveLength(1);
   });
 
   it("latches off when graph memory is unavailable and never calls the host", async () => {
@@ -290,6 +309,87 @@ describe("boot poll", () => {
     });
     expect(result).toEqual({ status: "settled", entityId: "e-023" });
     expect(settleOf(store.updates)).toEqual(["rejected"]);
+  });
+});
+
+describe("boot catch-up: removed", () => {
+  it("settles a converged version the host reports removed, at boot, before any pending poll", async () => {
+    const host = scriptedHost([
+      status({ versions: ["0.2.3"], lastOutcome: { version: "0.2.3", result: "removed", at: "2026-09-28T00:00:00Z" } }),
+    ]);
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "converged" }]);
+    const { reconciler } = build({ fetchImpl: host.fetchImpl, getAdapter: () => store.adapter });
+
+    await reconciler.onBoot();
+
+    expect(host.calls).toHaveLength(1);
+    expect(settleOf(store.updates)).toEqual(["removed"]);
+    const meta = store.updates[0]?.properties.custom_metadata as Record<string, unknown>;
+    expect(meta).toMatchObject({ outcome: "removed", settled_at: "2026-09-28T00:00:00Z" });
+    expect(reconciler.pending()).toEqual([]);
+  });
+
+  it("leaves a candidate entity for a version the host did not report removed untouched", async () => {
+    const host = scriptedHost([
+      status({ versions: ["0.2.3"], lastOutcome: { version: "0.2.3", result: "removed", at: "t1" } }),
+    ]);
+    const store = stubAdapter([
+      { id: "e-023", title: "execute-code@0.2.3", outcome: "converged" },
+      { id: "e-030", title: "execute-code@0.3.0", outcome: "candidate" },
+    ]);
+    const { reconciler } = build({
+      fetchImpl: host.fetchImpl,
+      getAdapter: () => store.adapter,
+      discoverLocalVersions: async () => [{ name: "execute-code", version: "0.2.3" }],
+    });
+
+    await reconciler.onBoot();
+
+    expect(settleOf(store.updates)).toEqual(["removed"]);
+    const untouched = store.nodes.get("e-030")?.properties as { metadata?: { custom_metadata?: { outcome?: string } } };
+    expect(untouched?.metadata?.custom_metadata?.outcome).toBe("candidate");
+  });
+
+  it("does nothing when the host is unreachable, and never throws", async () => {
+    const host = scriptedHost([new Error("ECONNREFUSED")]);
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "converged" }]);
+    const { reconciler } = build({ fetchImpl: host.fetchImpl, getAdapter: () => store.adapter });
+
+    await expect(reconciler.onBoot()).resolves.toBeUndefined();
+
+    expect(settleOf(store.updates)).toEqual([]);
+  });
+
+  it("does nothing when the entry still has an active version, even if lastOutcome says removed", async () => {
+    const host = scriptedHost([
+      status({
+        active: "0.2.4",
+        versions: ["0.2.3", "0.2.4"],
+        lastOutcome: { version: "0.2.3", result: "removed", at: "t1" },
+      }),
+    ]);
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "converged" }]);
+    const { reconciler } = build({ fetchImpl: host.fetchImpl, getAdapter: () => store.adapter });
+
+    await reconciler.onBoot();
+
+    expect(settleOf(store.updates)).toEqual([]);
+  });
+
+  it("does not settle a version this agent never produced, even if the host reports it removed", async () => {
+    const host = scriptedHost([
+      status({ versions: ["0.2.3"], lastOutcome: { version: "0.2.3", result: "removed", at: "t1" } }),
+    ]);
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "converged" }]);
+    const { reconciler } = build({
+      fetchImpl: host.fetchImpl,
+      getAdapter: () => store.adapter,
+      discoverLocalVersions: async () => [],
+    });
+
+    await reconciler.onBoot();
+
+    expect(settleOf(store.updates)).toEqual([]);
   });
 });
 
@@ -436,6 +536,56 @@ describe("host push", () => {
         version: "0.2.3",
       }),
     ).toEqual({ status: "already_settled", entityId: "e-023" });
+    expect(store.updates).toHaveLength(0);
+  });
+
+  it("settles removed on an already-converged entity — the host taking back a live version", async () => {
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "converged" }]);
+    const { reconciler } = build({ getAdapter: () => store.adapter });
+
+    const result = await reconciler.onHostOutcome({
+      kind: "removed",
+      agentId: "agent-1",
+      component: "execute-code",
+      version: "0.2.3",
+      at: "2026-09-28T00:00:00Z",
+    });
+
+    expect(result).toEqual({ status: "settled", entityId: "e-023" });
+    expect(settleOf(store.updates)).toEqual(["removed"]);
+    const meta = store.updates[0]?.properties.custom_metadata as Record<string, unknown>;
+    expect(meta).toMatchObject({ outcome: "removed", settled_at: "2026-09-28T00:00:00Z" });
+  });
+
+  it("a second removed push on the same entity is idempotent", async () => {
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "converged" }]);
+    const { reconciler } = build({ getAdapter: () => store.adapter });
+    const frame = {
+      kind: "removed" as const,
+      agentId: "agent-1",
+      component: "execute-code",
+      version: "0.2.3",
+    };
+
+    await reconciler.onHostOutcome(frame);
+    const second = await reconciler.onHostOutcome(frame);
+
+    expect(second).toEqual({ status: "already_settled", entityId: "e-023" });
+    expect(settleOf(store.updates)).toEqual(["removed"]);
+  });
+
+  it("ignores a removed push for another agent", async () => {
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "converged" }]);
+    const { reconciler } = build({ getAdapter: () => store.adapter });
+
+    const result = await reconciler.onHostOutcome({
+      kind: "removed",
+      agentId: "someone-else",
+      component: "execute-code",
+      version: "0.2.3",
+    });
+
+    expect(result).toEqual({ status: "ignored", reason: "other_agent" });
     expect(store.updates).toHaveLength(0);
   });
 

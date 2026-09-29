@@ -468,22 +468,30 @@ not by prompt:
 | edge | `SUPERSEDES`, new version → parent. A component's first version (`create_component`) has no parent and no edge: it is the root of its lineage, and its content says so |
 
 `outcome` is `candidate` → one of `converged`, `reverted`, `failed`,
-`rejected`, `abandoned`. The first four come from the host (`abandoned`
-never does — it is the agent's own conclusion that a candidate's story
-ended with no verdict from anyone): "never announced" when the candidate
-event never reached the host (it may still be under construction
-elsewhere, so this is only ever settled at boot, never during a turn), or
-"replaced by `<version>`" when a newer candidate for the same component
-took its place in the host's slot before this one was decided. Unlike
-`rejected` and `reverted`, `abandoned` carries no judgment on the change
-itself — it is fine to retry or resume the work. Writers:
+`rejected`, `abandoned`, `removed`. The first four come from the host
+(`abandoned` never does — it is the agent's own conclusion that a
+candidate's story ended with no verdict from anyone): "never announced"
+when the candidate event never reached the host (it may still be under
+construction elsewhere, so this is only ever settled at boot, never during
+a turn), or "replaced by `<version>`" when a newer candidate for the same
+component took its place in the host's slot before this one was decided.
+`removed` also comes from the host, but is reachable from `converged` as
+well as from `candidate` — **`converged → removed` is the one transition
+out of an already-settled outcome** — because it means a version that was
+live has since been taken off the machine, not a verdict on a pending one.
+Unlike `rejected` and `reverted`, `abandoned` and `removed` carry no
+judgment on the change itself — it is fine to retry or resume the work, or
+for a later version to build on a removed one. Writers:
 `prepare_component_version` (child as candidate, parent created from its
 manifest if missing), `create_component` (first version as candidate, no
-parent), `announce_component_version` (`announced_at`, or
+parent — the version number is above `0.1.0` when it is re-creating a name
+that has staged versions but nothing live, `COMPONENTS.md` §Authoring a new
+component), `announce_component_version` (`announced_at`, or
 `failed` with the summary as reason — called once, from the self-task
 thread that produced the version), and the lineage reconciler (the host's
 verdict, pushed to the agent or polled from the host — idempotent, so both
-paths agree; `abandoned` is decided locally from the same poll).
+paths agree; `abandoned` is decided locally from the same poll; `removed`
+for an already-settled entity is caught up by one extra boot-time read).
 
 Two search facts shape the convention. The backend indexes title, content
 and tags — never `metadata` — which is why the need, the names and the

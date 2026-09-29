@@ -535,44 +535,66 @@ $SIA_COMPONENTS_DIR/
       0.1.0/                  # component.json, entry.ts, contract.ts — and no `current`
 ```
 
-The version is always `0.1.0`. The manifest is `kind: "tools"`, `depth: 0`,
-`sdk: "^<SDK_VERSION>"` and a `lineage` with `need` and `producedBy` but **no
-`parent`** — a first version is the root of its lineage. The entry
-contributes one tool, named `tool_name` when given and otherwise the
-component name with `-` turned into `_` (`parse-time-expression` →
-`parse_time_expression`), that echoes its input; the contract invokes it
-through `deps.invoke` and checks the echo. So the scaffold **passes its own
-contract before the author touches it** — the analogue of copying the
-current version when iterating — and the author changes entry and contract
-together from a green start. Both generated sources import nothing: a
-version under the host-managed root has no source tree beside it.
+The version is `0.1.0`, unless the name was built before and never went
+live anywhere — see *Re-creating a removed component* below, where it is
+higher. The manifest is `kind: "tools"`, `depth: 0`, `sdk:
+"^<SDK_VERSION>"` and a `lineage` with `need` and `producedBy` but **no
+`parent`** — a first version is always the root of its lineage, whatever
+its number. The entry contributes one tool, named `tool_name` when given
+and otherwise the component name with `-` turned into `_`
+(`parse-time-expression` → `parse_time_expression`), that echoes its
+input; the contract invokes it through `deps.invoke` and checks the echo.
+So the scaffold **passes its own contract before the author touches it** —
+the analogue of copying the current version when iterating — and the
+author changes entry and contract together from a green start. Both
+generated sources import nothing: a version under the host-managed root
+has no source tree beside it.
 
-`create_component` refuses, naming the reason: an invalid component name; a
-tool name outside `^[a-z][a-z0-9_]*$` or already taken by a tool the agent
-has (the assembled pool plus the middleware-provided names); an empty
-intent or need; no host-managed root (or the seed root, directly or through
-a link); and a component of that name present in **any** root, with or
-without a `current` — the message lists the versions staged there and points
-at `prepare_component_version` for a new version of an existing component
-and at `run_component_contract` with an explicit version for one already
-staged. `describe_component` on a component that has versions but no
-`current` says exactly that: the versions present, that one runs through
-`run_component_contract` with an explicit version, and that it becomes
-current only when the host activates it.
+`create_component` refuses, naming the reason, in this order: an invalid
+component name; a tool name outside `^[a-z][a-z0-9_]*$` or already taken by
+a tool the agent has (the assembled pool plus the middleware-provided
+names); an empty intent or need; no host-managed root (or the seed root,
+directly or through a link); a name that ships with the seed root, live or
+not — that can never be created again; and a name any root currently
+resolves a **live** version for, however it got there — the message lists
+the versions staged and points at `prepare_component_version` for a new
+version of an existing component and at `run_component_contract` with an
+explicit version for one already staged. `describe_component` on a
+component that has versions but no `current` says exactly that: the
+versions present, that one runs through `run_component_contract` with an
+explicit version, that it becomes current only when the host activates it,
+and — since nothing on disk can tell "never yet activated" from "the host
+took it back" apart — that a lineage entity reading `removed` means
+`create_component` starts a fresh version above what is staged.
 
 Nothing in the loader changes for a new component: with no `current` it is
-skipped with a warning; once the host activates `0.1.0` and the agent
+skipped with a warning; once the host activates the version and the agent
 restarts, its tool is in the pool like any other. A host that later reverts
 a first version has nothing to go back to; how it leaves the component
 (pointer removed, version directory kept) is the host's business, and the
 agent's `describe_component` reads the result truthfully either way.
+
+**Re-creating a removed component.** A name with no live version anywhere,
+but with versions still staged, is not necessarily new: it may be a
+candidate still waiting on its first verdict, or a version the host once
+activated and later removed from the machine (§6, *Lineage*, outcome
+`removed`). Disk alone cannot tell those apart — both read as "versions
+present, nothing current" — so `create_component` treats them the same way
+rather than refusing: it collects every version staged for that name across
+every root and writes the next **minor** above the highest of them
+(`0.1.0` → `0.2.0`; `0.1.3` → `0.2.0`) as a fresh lineage root, same as any
+other first version — no parent, regardless of what came before. The
+result names the versions it found staged. A version still genuinely
+waiting on a verdict is better continued than re-created; that is what the
+`describe_component` hint above and the `iterate-component` skill's
+guidance are for.
 
 **The tools.**
 
 | Tool | What it does |
 |---|---|
 | `describe_component({ name })` | Read-only: which root wins and why, the current version, the versions present, the manifest and the paths. Root precedence is not visible through `read_file`. |
-| `create_component({ name, intent, need, tool_name?, description? })` | The first version of a component no root has: `.versions/0.1.0/` under the host-managed root with a parentless manifest, a stub tool that echoes its input and a contract that invokes it; then admits that root for the filesystem tools. Returns the paths and the next step. |
+| `create_component({ name, intent, need, tool_name?, description? })` | The first version of a component with no live version anywhere: `.versions/<version>/` under the host-managed root with a parentless manifest, a stub tool that echoes its input and a contract that invokes it; then admits that root for the filesystem tools. `<version>` is `0.1.0` for a genuinely new name, or the next minor above what is already staged when the host removed an earlier lineage for this name. Returns the paths and the next step. |
 | `prepare_component_version({ name, need, bump? })` | The layout above under the host-managed root (created if missing), then admits that root for the filesystem tools. Returns the paths and the next step. |
 | `run_component_contract({ name, version? })` | `runComponentContract` on the named version; `contract passed for …` / `contract FAILED for …: <error>`. |
 | `announce_component_version({ name, version, summary, outcome?, channel? })` | Tells the host about the candidate and, when `SIA_ANNOUNCE_TO_CHAT` is on, posts one message with a link to the thread (`HOST_CONTRACT.md` §3.4). Best-effort: a host without those endpoints is reported, never thrown. |
@@ -592,13 +614,22 @@ tools, not by the model:
 | edge | `SUPERSEDES`, new version → parent; none for a first version, which is the root of its lineage |
 
 `outcome` is one of `candidate`, `converged`, `reverted`, `failed`,
-`rejected`, `abandoned`. `prepare_component_version` stores the child as a
-`candidate` as soon as the version directory exists (a self-task thread
-lives only as long as the process, and a restart mid-iteration must still
-leave a trace), first making sure the parent has an entity — created from
-the parent's own manifest, `converged`, when nobody stored one, so every
-lineage has a root. `create_component` stores `<name>@0.1.0` the same way
-with no parent and no edge; its content says so. `announce_component_version` stamps
+`rejected`, `abandoned`, `removed`. Every one of those except `removed` is
+reachable only from `candidate`; `removed` is the one exception, reachable
+from `converged` too — a version that was live and that the host has since
+taken off the machine. That is the one transition out of an already-settled
+outcome, and it is deliberately narrow: `settleLineageEntity` allows
+`candidate → <anything settled>` and `converged → removed` and nothing
+else, so a stray verdict can never overwrite a `reverted` or `rejected`
+entity. `prepare_component_version` stores the child as a `candidate` as
+soon as the version directory exists (a self-task thread lives only as
+long as the process, and a restart mid-iteration must still leave a
+trace), first making sure the parent has an entity — created from the
+parent's own manifest, `converged`, when nobody stored one, so every
+lineage has a root. `create_component` stores `<name>@<version>` the same
+way with no parent and no edge, whether `<version>` is `0.1.0` or the next
+minor above a removed lineage; its content says so.
+`announce_component_version` stamps
 `provenance.announced_at` or, on `outcome: "failed"`, settles the entity
 with the summary as the reason. It is called once, from the self-task
 thread that built the version: a call from a thread whose metadata is
@@ -616,9 +647,9 @@ server (`HOST_CONTRACT.md` §3.6), and the agent **polls** for it: the
 host-managed root this agent produced whose entity is still a `candidate`,
 reads the host's `GET /status` every 3 s for up to 120 s (a swap's health
 wait) and settles from `lastOutcome` (`activated` → `converged`, `reverted`,
-`failed`). A version the host no longer lists as candidate or active falls
-into one of three buckets, none of which is a verdict from anyone but this
-side:
+`failed`, `removed` → `removed`). A version the host no longer lists as
+candidate or active falls into one of three buckets, none of which is a
+verdict from anyone but this side:
 
 - **never announced** — the candidate event never reached the host, so it
   may simply still be under construction (a self-task in another thread
@@ -634,7 +665,19 @@ side:
   turn, and at boot only once the poll has waited long enough (the cap) for
   a swap in flight to be recorded.
 
-Unlike `rejected` and `reverted`, `abandoned` carries no judgment on the
+`removed` does not fit that pending-version poll: it targets a version
+whose entity is already `converged`, not one the reconciler is watching
+for a first verdict. So a separate, one-time read at boot (before the
+pending-poll loop, and independent of whether anything is pending) checks
+the same `/status` body for any entry whose `lastOutcome.result` is
+`removed`, has no `active`, and names a version this agent produced; a
+matching entity that is `converged` or still `candidate` is settled
+`removed` right there. This is the catch-up for a push that had nobody
+listening — the agent was down when the host removed the version and
+restarted it without one.
+
+Unlike `rejected` and `reverted`, `abandoned` (and `removed`) carries no
+judgment on the
 change itself — the `iterate-component` skill treats it as work that may
 be retried or resumed, not as a verdict to work around. The turn check
 runs from `componentsMiddleware` at most once a minute and only while
