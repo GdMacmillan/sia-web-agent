@@ -184,6 +184,10 @@ Non-tool middleware worth knowing about:
   loopback endpoint (see [`HOST_CONTRACT.md`](docs/HOST_CONTRACT.md))
 - `capExhaustionMiddleware` — guards against runaway recursion
 - `summarizationMiddleware` — compresses context when near token limit
+- `sourceEditNoteMiddleware` — appends a note to a successful
+  `write_file` / `edit_file` of the installed source tree (the next
+  install replaces the edit; it runs unreviewed until then). Silent in a
+  version-controlled working tree; opt-out `SOURCE_EDIT_NOTE_ENABLED=false`
 
 ## Behavioral DNA
 
