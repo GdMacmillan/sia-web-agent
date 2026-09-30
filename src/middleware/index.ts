@@ -63,3 +63,9 @@ export {
   MEMORY_CONTEXT_HEADER,
   type MemoryAugmentationMiddlewareOptions,
 } from "./memory-augmentation.js";
+export {
+  createSourceEditNoteMiddleware,
+  sourceEditNoteText,
+  SOURCE_EDIT_NOTE_TOOLS,
+  type SourceEditNoteMiddlewareOptions,
+} from "./source-edit-note.js";

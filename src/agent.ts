@@ -26,6 +26,7 @@ import { MessagesAnnotation } from "@langchain/langgraph";
 import {
   createFilesystemMiddleware,
   createMemoryAugmentationMiddleware,
+  createSourceEditNoteMiddleware,
   createFilesystemTools,
   createSubAgentMiddleware,
   createPatchToolCallsMiddleware,
@@ -133,6 +134,7 @@ export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
   "todoListMiddleware",
   "FilesystemMiddleware",
   "memoryAugmentationMiddleware",
+  "sourceEditNoteMiddleware",
   "skillsMiddleware",
   "CodeExecutionMiddleware",
   "CodeInterpreterMiddleware",
@@ -367,6 +369,8 @@ export async function createDeepAgent<
     }),
     // Attach related graph-memory entries to search-type tool results
     createMemoryAugmentationMiddleware(),
+    // Note on a successful write/edit of the installed source tree
+    createSourceEditNoteMiddleware({ projectRoot }),
     // Loads skills from /skills directory and injects summaries into system prompt
     ...(projectRoot
       ? [
@@ -421,6 +425,8 @@ export async function createDeepAgent<
     }),
     // Attach related graph-memory entries to search-type tool results
     createMemoryAugmentationMiddleware(),
+    // Note on a successful write/edit of the installed source tree
+    createSourceEditNoteMiddleware({ projectRoot }),
     // Subagent middleware: Skills system for sub-agents (allows reading skill files)
     ...(projectRoot
       ? [

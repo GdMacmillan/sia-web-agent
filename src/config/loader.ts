@@ -226,6 +226,10 @@ function loadFeaturesConfig(): FeaturesConfig {
     outcomeTracking: loadOutcomeTrackingConfig(),
     codeInterpreter: loadCodeInterpreterConfig(),
     memoryAugmentation: loadMemoryAugmentationConfig(),
+    sourceEditNote: {
+      // Opt-out: on unless the literal string "false".
+      enabled: env("SOURCE_EDIT_NOTE_ENABLED") !== "false",
+    },
   };
 }
 

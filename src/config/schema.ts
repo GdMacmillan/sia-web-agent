@@ -136,6 +136,18 @@ export interface FeaturesConfig {
   outcomeTracking: OutcomeTrackingConfig;
   codeInterpreter: CodeInterpreterConfig;
   memoryAugmentation: MemoryAugmentationConfig;
+  sourceEditNote: SourceEditNoteConfig;
+}
+
+export interface SourceEditNoteConfig {
+  /**
+   * Append a short note to a successful `write_file` / `edit_file` result
+   * whose path lies in the agent's installed source tree, saying that the
+   * next install replaces the edit and that it runs unreviewed until then.
+   * Never shown in a version-controlled working tree. Default: true.
+   * Opt-out via `SOURCE_EDIT_NOTE_ENABLED=false`.
+   */
+  enabled: boolean;
 }
 
 export interface MemoryAugmentationConfig {
