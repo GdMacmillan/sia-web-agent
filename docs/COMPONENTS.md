@@ -621,7 +621,17 @@ taken off the machine. That is the one transition out of an already-settled
 outcome, and it is deliberately narrow: `settleLineageEntity` allows
 `candidate → <anything settled>` and `converged → removed` and nothing
 else, so a stray verdict can never overwrite a `reverted` or `rejected`
-entity. `prepare_component_version` stores the child as a `candidate` as
+entity.
+
+An outcome is a verdict on a change, not a statement of what is live now.
+The host may activate any staged version at any time — an earlier
+`converged` one, or the seed — and that settles nothing: the version it
+replaces keeps its `converged`, and no entity is written for the one it
+brings back. What is live is whatever `current` resolves to, and that is
+also the parent of the next version; the newest `SUPERSEDES` tip is not.
+A candidate still waiting for a verdict is untouched by such a switch.
+
+`prepare_component_version` stores the child as a `candidate` as
 soon as the version directory exists (a self-task thread lives only as
 long as the process, and a restart mid-iteration must still leave a
 trace), first making sure the parent has an entity — created from the
