@@ -152,7 +152,8 @@ Highest to lowest:
 
 | Variable         | Default | Description               |
 | ---------------- | ------- | ------------------------- |
-| `TAVILY_API_KEY` | (empty) | Tavily web search API key |
+| `TAVILY_API_KEY`  | (empty) | Tavily web search API key |
+| `TAVILY_BASE_URL` | (unset — uses Tavily's default endpoint) | Optional override base URL for the Tavily API |
 
 > Graph memory is reached through the host daemon adapter
 > (`SiadGraphMemoryAdapter`), not a direct HTTP URL — the adapter carries the

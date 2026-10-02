@@ -334,6 +334,7 @@ function loadServicesConfig(): ServicesConfig {
   return {
     tavily: {
       apiKey: env("TAVILY_API_KEY") || "",
+      baseUrl: env("TAVILY_BASE_URL") || undefined,
     },
   };
 }
