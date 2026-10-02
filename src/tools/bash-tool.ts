@@ -73,9 +73,12 @@ function runCommand(
 
     // `shell: true` resolves cmd.exe on Windows and /bin/sh elsewhere, so the
     // command string is interpreted natively on each platform. Running an
-    // agent-authored shell command is this tool's explicit purpose (a sandboxed
-    // capability, like Claude Code's own bash tool) — the shell interpretation
-    // is intended, not an injection sink.
+    // agent-authored shell command is this tool's explicit, documented
+    // purpose — the shell interpretation is intended, not an injection sink.
+    // This spawns an ordinary child process with the agent's own OS-level
+    // privileges and environment; it has no sandboxing of its own. Any
+    // confinement (container, restricted user, filesystem/network namespace)
+    // has to come from whatever supervises the agent process.
     // nosemgrep: javascript.lang.security.audit.spawn-shell-true.spawn-shell-true,javascript.lang.security.detect-child-process.detect-child-process -- shell command execution is this tool's intended, documented purpose.
     const child = spawn(command, {
       cwd,

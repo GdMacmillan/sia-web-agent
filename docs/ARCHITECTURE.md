@@ -24,7 +24,7 @@ src/
 ├── backend-config.ts        # default filesystem backend factory
 ├── backends/                # filesystem backend implementations
 ├── clients/                 # HTTP clients (graph-memory)
-├── code-execution/          # TS/JS execution sandbox
+├── code-execution/          # TS/JS execution via tsx (plain child process, not sandboxed)
 ├── config/                  # env-driven config loader + model factories
 ├── middleware/              # all middleware (see below)
 ├── schemas/                 # zod schemas
