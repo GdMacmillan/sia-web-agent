@@ -17,7 +17,7 @@
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 
 /** Default command timeout (2 minutes). */
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -25,6 +25,12 @@ const DEFAULT_TIMEOUT_MS = 120000;
 const MIN_TIMEOUT_MS = 1000;
 /** Maximum command timeout (10 minutes). */
 const MAX_TIMEOUT_MS = 600000;
+/**
+ * Grace period between SIGTERM and SIGKILL when reaping a timed-out
+ * command's process group on POSIX. Gives well-behaved descendants a
+ * moment to exit before the follow-up SIGKILL.
+ */
+const PROCESS_GROUP_KILL_GRACE_MS = 1000;
 
 /**
  * Clip long strings to prevent token overflow
@@ -42,6 +48,51 @@ function combineOutput(stdout: string, stderr: string): string {
   if (stdout) parts.push(stdout);
   if (stderr) parts.push(stderr);
   return parts.join("\n").trim();
+}
+
+/**
+ * Reap a timed-out command, matching each platform's process model.
+ *
+ * On Windows `detached` means "own console", not "own process group", and
+ * negative PIDs aren't meaningful — so this stays a plain `child.kill()`,
+ * same as before.
+ *
+ * On POSIX the child was spawned `detached`, which makes its pid double as
+ * its process group id. A bare `child.kill()` only reaches the shell
+ * itself; a command that backgrounds work (`sleep 30 &`) or forks a
+ * long-running descendant leaves it running past the timeout. Killing the
+ * negative pid reaches the whole group instead. SIGTERM first, then a
+ * SIGKILL follow-up after a grace period for anything that ignored it.
+ * Both signals are best-effort: the group (or the whole process) may
+ * already be gone by the time either fires.
+ */
+function killTimedOutChild(child: ChildProcess): void {
+  if (process.platform === "win32") {
+    try {
+      child.kill();
+    } catch {
+      // best effort
+    }
+    return;
+  }
+
+  if (child.pid === undefined) return; // spawn never produced a pid
+
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    // Group already gone (ESRCH) — nothing left to signal.
+  }
+
+  const pid = child.pid;
+  const killer = setTimeout(() => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Already reaped by SIGTERM, or gone — harmless.
+    }
+  }, PROCESS_GROUP_KILL_GRACE_MS);
+  killer.unref?.();
 }
 
 /**
@@ -83,16 +134,21 @@ function runCommand(
       shell: true,
       signal: controller.signal,
       stdio: ["ignore", "pipe", "pipe"],
+      // POSIX only: leads its own process group (pid === gid) so a timeout
+      // can reap the whole tree, not just the shell. Meaningless on
+      // Windows, where it would instead open a new console.
+      detached: process.platform !== "win32",
     });
 
     const timer = setTimeout(() => {
       timedOut = true;
+      // Node's own signal-to-spawn integration reaps the immediate shell
+      // process and surfaces an AbortError on `child.on("error", ...)`
+      // below; keeping it is harmless (the `settled` guard dedupes) and
+      // preserves that path for anything relying on it. The explicit kill
+      // below is what actually reaches the rest of a POSIX process group.
       controller.abort();
-      try {
-        child.kill();
-      } catch {
-        // best effort
-      }
+      killTimedOutChild(child);
     }, timeoutMs);
     timer.unref?.();
 
