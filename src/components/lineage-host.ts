@@ -86,11 +86,14 @@ export function parseHostStatus(body: unknown): HostComponentView[] | null {
 /**
  * Read the host's component store. Never throws: a transport error, a
  * non-2xx answer, a body that is not JSON, or a body without a component
- * store all read as `null`.
+ * store all read as `null`. `daemonToken`, when a non-empty string, is
+ * sent as a bearer token; absent or empty, the request carries no
+ * `authorization` header at all.
  */
 export async function readHostComponents(
   fetchImpl: FetchLike,
   daemonUrl: string,
+  daemonToken?: string,
   timeoutMs = 5_000,
 ): Promise<HostComponentView[] | null> {
   const controller = new AbortController();
@@ -98,7 +101,10 @@ export async function readHostComponents(
   try {
     const res = await fetchImpl(`${daemonUrl.replace(/\/+$/, "")}/status`, {
       method: "GET",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}),
+      },
       signal: controller.signal,
     });
     if (!res.ok) {
