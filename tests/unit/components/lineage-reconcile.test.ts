@@ -66,8 +66,10 @@ function stubAdapter(seed: Array<{ id: string; title: string; outcome: string; t
 function scriptedHost(answers: Array<unknown | Error>) {
   let i = 0;
   const calls: string[] = [];
-  const fetchImpl = jest.fn(async (url: string) => {
+  const inits: Array<RequestInit | undefined> = [];
+  const fetchImpl = jest.fn(async (url: string, init?: RequestInit) => {
     calls.push(url);
+    inits.push(init);
     const answer = answers[Math.min(i, answers.length - 1)];
     i += 1;
     if (answer instanceof Error) throw answer;
@@ -79,7 +81,7 @@ function scriptedHost(answers: Array<unknown | Error>) {
       headers: { "content-type": "application/json" },
     });
   });
-  return { fetchImpl: fetchImpl as unknown as typeof fetch, calls };
+  return { fetchImpl: fetchImpl as unknown as typeof fetch, calls, inits };
 }
 
 const status = (component: Record<string, unknown>) => ({
@@ -143,6 +145,64 @@ function build(overrides: Partial<Parameters<typeof createLineageReconciler>[0]>
   });
   return { clock, store, reconciler };
 }
+
+describe("host token threading", () => {
+  const vanishedWithVerdict = status({
+    active: "0.2.1",
+    lastOutcome: { version: "0.2.3", result: "reverted", error: "x" },
+  });
+
+  it("sends the daemon token given via options as a bearer header", async () => {
+    const host = scriptedHost([vanishedWithVerdict]);
+    const { clock, reconciler } = build({ fetchImpl: host.fetchImpl, daemonToken: "opt-token" });
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+
+    expect(host.inits[0]?.headers).toMatchObject({ authorization: "Bearer opt-token" });
+  });
+
+  it("falls back to SIA_DAEMON_TOKEN when no option is given", async () => {
+    const host = scriptedHost([vanishedWithVerdict]);
+    const previous = process.env.SIA_DAEMON_TOKEN;
+    process.env.SIA_DAEMON_TOKEN = "env-token";
+    try {
+      const { clock, reconciler } = build({ fetchImpl: host.fetchImpl });
+      const boot = reconciler.onBoot();
+      await clock.advance(0);
+      await boot;
+
+      expect(host.inits[0]?.headers).toMatchObject({ authorization: "Bearer env-token" });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.SIA_DAEMON_TOKEN;
+      } else {
+        process.env.SIA_DAEMON_TOKEN = previous;
+      }
+    }
+  });
+
+  it("sends no authorization header when no token is available anywhere", async () => {
+    const host = scriptedHost([vanishedWithVerdict]);
+    const previous = process.env.SIA_DAEMON_TOKEN;
+    delete process.env.SIA_DAEMON_TOKEN;
+    try {
+      const { clock, reconciler } = build({ fetchImpl: host.fetchImpl });
+      const boot = reconciler.onBoot();
+      await clock.advance(0);
+      await boot;
+
+      expect(host.inits[0]?.headers).not.toHaveProperty("authorization");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.SIA_DAEMON_TOKEN;
+      } else {
+        process.env.SIA_DAEMON_TOKEN = previous;
+      }
+    }
+  });
+});
 
 describe("boot poll", () => {
   it("finds the pending version on disk and settles it when the host reports activated", async () => {

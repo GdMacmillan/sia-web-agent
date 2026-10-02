@@ -59,6 +59,8 @@ export interface LineageReconcilerOptions {
   agentId?: string;
   /** Host daemon base url; without one the poll is off and only the push settles. */
   daemonUrl?: string;
+  /** Bearer token for the host's authenticated endpoints; omitted when the host needs none. */
+  daemonToken?: string;
   /** Root the host manages; the boot pending set is read from it. */
   componentsDir?: string;
   getAdapter?: () => IGraphMemoryAdapter;
@@ -174,18 +176,25 @@ function parseFrame(frame: unknown): HostOutcomeFrame | null {
 }
 
 export function createLineageReconciler(opts: LineageReconcilerOptions = {}): LineageReconciler {
-  const runtime = (): { agentId: string; daemonUrl?: string; componentsDir?: string } => {
+  const runtime = (): {
+    agentId: string;
+    daemonUrl?: string;
+    daemonToken?: string;
+    componentsDir?: string;
+  } => {
     try {
       const cfg = getConfig().runtime;
       return {
         agentId: opts.agentId ?? cfg.agentId,
         daemonUrl: Object.hasOwn(opts, "daemonUrl") ? opts.daemonUrl : process.env.SIA_DAEMON_URL,
+        daemonToken: Object.hasOwn(opts, "daemonToken") ? opts.daemonToken : process.env.SIA_DAEMON_TOKEN,
         componentsDir: Object.hasOwn(opts, "componentsDir") ? opts.componentsDir : cfg.componentsDir,
       };
     } catch {
       return {
         agentId: opts.agentId ?? "",
         daemonUrl: opts.daemonUrl,
+        daemonToken: opts.daemonToken,
         componentsDir: opts.componentsDir,
       };
     }
@@ -241,11 +250,11 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
   /** One read of the host, one decision per pending version. */
   const reconcileOnce = async (phase: "boot" | "turn", capReached: boolean): Promise<void> => {
     const a = resolveAdapter();
-    const { daemonUrl } = runtime();
+    const { daemonUrl, daemonToken } = runtime();
     if (!a || !daemonUrl || pending.size === 0) {
       return;
     }
-    const view = await readHostComponents(fetchImpl, daemonUrl, requestTimeoutMs);
+    const view = await readHostComponents(fetchImpl, daemonUrl, daemonToken, requestTimeoutMs);
     for (const tracked of [...pending.values()]) {
       const decision = decideReconcile(tracked, view, phase, capReached);
       if (decision.action !== "settle") {
@@ -302,11 +311,11 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
    */
   const catchUpRemoved = async (): Promise<void> => {
     const a = resolveAdapter();
-    const { agentId, daemonUrl, componentsDir } = runtime();
+    const { agentId, daemonUrl, daemonToken, componentsDir } = runtime();
     if (!a || !daemonUrl) {
       return;
     }
-    const view = await readHostComponents(fetchImpl, daemonUrl, requestTimeoutMs);
+    const view = await readHostComponents(fetchImpl, daemonUrl, daemonToken, requestTimeoutMs);
     if (!view || view.length === 0) {
       return;
     }
