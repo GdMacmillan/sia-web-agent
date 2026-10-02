@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
 import { createBashTool } from "../../../src/tools/bash-tool.js";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 
 describe("Bash Tool (one-shot execution)", () => {
   let bashTool: ReturnType<typeof createBashTool>;
@@ -119,6 +122,57 @@ describe("Bash Tool (one-shot execution)", () => {
       });
       expect(result).toContain("quick command");
     });
+
+    // Windows has no process-group semantics for `detached`/negative PIDs —
+    // this exercises the POSIX-only process-group reap.
+    (process.platform === "win32" ? it.skip : it)(
+      "should kill a backgrounded descendant process on timeout, not just the shell",
+      async () => {
+        const pidFile = path.join(
+          os.tmpdir(),
+          `bash-tool-test-${process.pid}-${Date.now()}.pid`,
+        );
+
+        try {
+          const result = await bashTool.func({
+            command: `(sleep 30 & echo $! > ${pidFile}) ; sleep 30`,
+            timeout: 400,
+          });
+
+          expect(result).toContain("timed out");
+
+          const pid = parseInt(
+            fs.readFileSync(pidFile, "utf8").trim(),
+            10,
+          );
+          expect(Number.isNaN(pid)).toBe(false);
+
+          // The SIGKILL follow-up fires after a grace period, so poll
+          // briefly instead of asserting immediately.
+          const deadline = Date.now() + 1000;
+          let alive = true;
+          while (Date.now() < deadline) {
+            try {
+              process.kill(pid, 0);
+              alive = true;
+            } catch {
+              alive = false;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 100));
+          }
+
+          expect(alive).toBe(false);
+        } finally {
+          try {
+            fs.unlinkSync(pidFile);
+          } catch {
+            // never written, or already cleaned up
+          }
+        }
+      },
+      5000,
+    );
   });
 
   describe("Output Truncation", () => {
