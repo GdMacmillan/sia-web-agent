@@ -57,6 +57,27 @@ exfiltrating anything it can read through its own LLM provider traffic (the mode
 an unavoidable channel for anything the agent has read, no matter how the rest of the process is
 confined).
 
+## When the reference host runs it
+
+The reference host, `siad` (see [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md)), applies each
+of the controls above at its own spawn point. What that buys depends on the operating system:
+
+| Platform | What the host enforces around the agent's whole process tree                                                                                                                                                                                                                                                               |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS    | A generated Seatbelt profile: reads limited to system paths plus the agent's own tree, writes limited to its source tree, component store and a private temp dir, and network limited to loopback on the host's port and the agent's own. Reported as `enforced`.                                                         |
+| Linux    | Landlock + seccomp, plus user and mount namespaces where the kernel allows them. Files are fenced on any Landlock-capable kernel; outbound TCP is restricted by port only on Landlock ABI 4+ (kernel 6.7+); local sockets outside the agent's tree are hidden by the namespace tier or, on ABI 9+, by Landlock. Reported as `partial`. |
+| Windows  | No OS sandbox yet. The curated environment and authenticated local API still apply, but a shell command can read anything the user account can — including the host's own files — so neither is a boundary against a hostile agent. Reported as `not_enforced`.                                                         |
+
+On every platform the host gives the agent an allowlisted environment with no upstream API keys:
+the agent's LLM and search clients point at the host (`{PREFIX}_BASE_URL`, `TAVILY_BASE_URL`),
+which injects the real key on the way out. The agent's bearer token is scoped to that one agent
+and refused on the host's administrative routes, including the one that accepts a new component
+version. The host reports each agent's sandbox status and any gaps it knows of, so a weaker
+posture is visible rather than silent.
+
+If you are a SIA user rather than someone embedding this repo, the plain-language version — and
+how to check your own machine — is at <https://sia-web.fly.dev/docs/security>.
+
 ## Reporting a vulnerability
 
 If you find a way for this agent's own tools to bypass `validatePathInProject`, or another gap in
