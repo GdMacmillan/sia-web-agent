@@ -98,9 +98,9 @@ function runRipgrep(
       }
     }
 
-    // Add the pattern and search path
-    args.push(pattern);
-    args.push(searchPath);
+    // Add the pattern and search path — `--` stops ripgrep from parsing a
+    // model-supplied pattern starting with `-` as a flag.
+    args.push("--", pattern, searchPath);
 
     let output = "";
     let errorOutput = "";
