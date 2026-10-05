@@ -53,7 +53,7 @@ src/                     # agent source
 ├── backend-config.ts    # default filesystem backend factory
 ├── backends/            # filesystem backend implementations
 ├── clients/             # HTTP clients (graph-memory)
-├── code-execution/      # TS/JS execution sandbox
+├── code-execution/      # TS/JS execution via tsx (plain child process, not sandboxed)
 ├── components/          # on-disk component loader, SDK, contract runner
 ├── config/              # env-driven config loader + model factories
 ├── middleware/          # all middleware
@@ -231,13 +231,18 @@ asked to improve itself or repurpose for a new role, it modifies these
 files. Treat changes to them as **behavioral changes**, with the same
 care as code changes.
 
-## Path resolution & sandboxing
+## Path resolution & filesystem confinement
 
 All filesystem tool ops (`read_file`, `write_file`, `edit_file`, `ls`,
 `grep`, `glob`) flow through `FilesystemBackend.resolvePath` in
 `src/backends/filesystem.ts:73-96`, which calls
 `validatePathInProject(resolved)`. The guard prevents the agent from
 accessing files outside its project root.
+
+This boundary covers only the filesystem tools above. `bash` and
+`execute_code` are not covered by it — they run as ordinary child
+processes with the agent's own OS-level privileges and environment, with
+no path confinement of their own.
 
 Project root is resolved by `getProjectRoot()` in
 `src/utils/path-utils.ts` using a 7-strategy hybrid:
