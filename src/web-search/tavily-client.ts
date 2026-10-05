@@ -36,6 +36,7 @@ let clientInstance: ReturnType<typeof tavily> | null = null;
 function getClient(): ReturnType<typeof tavily> {
   if (!clientInstance) {
     const apiKey = getConfig().services.tavily.apiKey;
+    const baseUrl = getConfig().services.tavily.baseUrl;
     if (!apiKey) {
       throw new WebSearchError(
         "TAVILY_API_KEY environment variable is not set. " +
@@ -43,7 +44,10 @@ function getClient(): ReturnType<typeof tavily> {
         "MISSING_API_KEY",
       );
     }
-    clientInstance = tavily({ apiKey });
+    clientInstance = tavily({
+      apiKey,
+      ...(baseUrl ? { apiBaseURL: baseUrl } : {}),
+    });
   }
   return clientInstance;
 }

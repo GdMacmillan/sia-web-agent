@@ -235,6 +235,8 @@ export interface ServicesConfig {
   tavily: {
     /** Tavily API key for web search */
     apiKey: string;
+    /** Optional override base URL for the Tavily API (self-hosted/proxy deployments) */
+    baseUrl?: string;
   };
 }
 

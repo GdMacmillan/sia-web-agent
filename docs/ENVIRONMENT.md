@@ -120,6 +120,7 @@ summary stays in the thread.
 | Variable | Default | Purpose |
 |---|---|---|
 | `TAVILY_API_KEY` | `""` | Tavily API key for the `web_search` tool. Empty disables web search. |
+| `TAVILY_BASE_URL` | (unset) | Optional override base URL for the Tavily API (self-hosted/proxy deployments). Uses Tavily's default endpoint when unset. |
 
 ## Middleware tuning
 

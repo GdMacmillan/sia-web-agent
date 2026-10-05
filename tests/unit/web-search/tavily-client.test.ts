@@ -163,6 +163,39 @@ describe("Tavily Client", () => {
       await expect(search("test")).rejects.toThrow("TAVILY_API_KEY");
     });
 
+    it("should pass apiBaseURL through when TAVILY_BASE_URL is set", async () => {
+      process.env.TAVILY_BASE_URL = "https://tavily.example.com";
+      resetConfig();
+      resetClient();
+
+      mockSearch.mockResolvedValueOnce({
+        query: "test query",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await search("test query");
+
+      expect(mockTavily).toHaveBeenCalledWith({
+        apiKey: "test-api-key",
+        apiBaseURL: "https://tavily.example.com",
+      });
+    });
+
+    it("should not set apiBaseURL when TAVILY_BASE_URL is unset", async () => {
+      mockSearch.mockResolvedValueOnce({
+        query: "test query",
+        results: [],
+        responseTime: 0.1,
+      });
+
+      await search("test query");
+
+      expect(mockTavily).toHaveBeenCalledWith({ apiKey: "test-api-key" });
+      const callArgs = mockTavily.mock.calls[0][0];
+      expect(callArgs).not.toHaveProperty("apiBaseURL");
+    });
+
     it("should wrap API errors", async () => {
       mockSearch.mockRejectedValueOnce(new Error("API rate limit exceeded"));
 
