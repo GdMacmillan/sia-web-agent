@@ -22,6 +22,7 @@ import { tagReplaces } from "../../../src/components/replaces-tag.js";
 import { createHarnessProfile } from "../../../src/profiles/harness.js";
 import { getProjectRoot } from "../../../src/utils/path-utils.js";
 import { logger } from "../../../src/utils/logger.js";
+import { resetConfig } from "../../../src/config/index.js";
 
 type AgentOptions = {
   tools?: Array<{ name: string }>;
@@ -204,5 +205,74 @@ describe("createDeepAgent with component middleware", () => {
       },
     );
     expect(seen?.map((t) => t.name)).toEqual(["bash"]);
+  });
+
+  describe("remote tools", () => {
+    const saved = {
+      serversFile: process.env.SIA_SERVERS_FILE,
+      componentsDir: process.env.SIA_COMPONENTS_DIR,
+    };
+
+    afterEach(() => {
+      for (const [key, value] of [
+        ["SIA_SERVERS_FILE", saved.serversFile],
+        ["SIA_COMPONENTS_DIR", saved.componentsDir],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      resetConfig();
+    });
+
+    function withServersFile() {
+      process.env.SIA_SERVERS_FILE = "/nonexistent/servers.json";
+      delete process.env.SIA_COMPONENTS_DIR;
+      resetConfig();
+    }
+
+    it("is absent with neither a servers file nor a component root", async () => {
+      delete process.env.SIA_SERVERS_FILE;
+      delete process.env.SIA_COMPONENTS_DIR;
+      resetConfig();
+      const options = await assemble();
+      expect(names(options.middleware)).not.toContain("remoteToolsMiddleware");
+    });
+
+    it("sits last in the core segment of the main stack, before the tail", async () => {
+      withServersFile();
+      const options = await assemble();
+      const main = names(options.middleware);
+      const at = MAIN_BASELINE.indexOf("patchToolCallsMiddleware") + 1;
+      expect(main).toEqual([
+        ...MAIN_BASELINE.slice(0, at),
+        "remoteToolsMiddleware",
+        ...MAIN_BASELINE.slice(at),
+      ]);
+    });
+
+    it("is gated on a component root too", async () => {
+      delete process.env.SIA_SERVERS_FILE;
+      process.env.SIA_COMPONENTS_DIR = "/nonexistent/components";
+      resetConfig();
+      const options = await assemble();
+      expect(names(options.middleware)).toContain("remoteToolsMiddleware");
+    });
+
+    it("never reaches the sub-agent stack", async () => {
+      withServersFile();
+      await assemble();
+      expect(names(subagentDefaults())).toEqual(SUBAGENT_BASELINE);
+    });
+
+    it("runs before the tool-exclusion middleware", async () => {
+      withServersFile();
+      const overlay = createHarnessProfile({ excludedTools: ["mcp__docs"] });
+      const options = await assemble([], { profileOverlays: [overlay] });
+      const main = names(options.middleware);
+      expect(main.indexOf("remoteToolsMiddleware")).toBeGreaterThanOrEqual(0);
+      expect(main.indexOf("remoteToolsMiddleware")).toBeLessThan(
+        main.indexOf("_ToolExclusionMiddleware"),
+      );
+    });
   });
 });

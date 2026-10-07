@@ -269,6 +269,14 @@ export interface RuntimeConfig {
    */
   componentsDir: string | undefined;
   /**
+   * Remote tool servers file (`SIA_SERVERS_FILE`).
+   *
+   * Lists the remote (MCP over HTTP) servers whose tools the agent may call.
+   * Undefined means `<componentsDir>/servers.json` when a component root is
+   * set, else no remote tools. See `docs/COMPONENTS.md` §7.
+   */
+  serversFile: string | undefined;
+  /**
    * Base URL of the server this agent runs inside (`SIA_SERVER_URL`).
    *
    * Used by the agent to open threads on itself. Optional: when unset the

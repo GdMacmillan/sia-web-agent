@@ -91,13 +91,13 @@ Tokens are dropped when the child exits.
 
 The agent can assemble versioned code components and remote tool servers
 from disk. Full spec: [`COMPONENTS.md`](./COMPONENTS.md); the loader and
-contract runner live in `src/components/` (remote tool servers are not
-built yet).
+contract runner live in `src/components/`; remote tool servers are read by
+`src/middleware/remote-tools.ts` (`COMPONENTS.md` §7).
 
 | Variable | Purpose | Required |
 |---|---|---|
 | `SIA_COMPONENTS_DIR` | Root directory of host-managed component versions (`<name>/current/component.json`). Shadows the seed components shipped in the agent source. | No — absent means only the shipped seed components load |
-| `SIA_SERVERS_FILE` | Path to the JSON list of remote tool servers. Defaults to `$SIA_COMPONENTS_DIR/servers.json`. Must resolve inside the components root. | No — absent means no remote tools |
+| `SIA_SERVERS_FILE` | Path to the JSON object of remote (HTTP) tool servers, keyed by server name. Defaults to `$SIA_COMPONENTS_DIR/servers.json`. Must resolve inside the components root when one is set. Header values may reference `${VAR}`, expanded from the agent's process env. | No — absent means no remote tools |
 
 Both paths are read by the agent; the host owns their contents. A host
 that stamps `SIA_COMPONENTS_DIR` should expect the agent to write new
