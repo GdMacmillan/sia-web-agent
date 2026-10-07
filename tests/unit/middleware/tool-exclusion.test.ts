@@ -2,7 +2,78 @@
  * Tool-exclusion middleware (Phase 5).
  */
 import { describe, it, expect } from "@jest/globals";
-import { createToolExclusionMiddleware } from "../../../src/middleware/tool_exclusion.js";
+import {
+  createToolExclusionMiddleware,
+  isToolExcluded,
+} from "../../../src/middleware/tool_exclusion.js";
+
+describe("isToolExcluded", () => {
+  const cases: Array<[string, string[], boolean]> = [
+    ["grep", ["grep"], true],
+    ["grep", ["glob"], false],
+    ["mcp__docs__search", ["mcp__docs__search"], true],
+    ["mcp__docs__fetch", ["mcp__docs__search"], false],
+    ["mcp__docs__search", ["mcp__docs"], true],
+    ["mcp__docs__search", ["mcp__docs__*"], true],
+    // Whole-segment server match: a prefix of a server name is not a match.
+    ["mcp__docs2__search", ["mcp__docs"], false],
+    ["mcp__docs2__search", ["mcp__docs__*"], false],
+    ["mcp__docs__search", ["mcp__doc"], false],
+    // Names with no server segment are only ever matched exactly.
+    ["mcp__lonely", ["mcp__"], false],
+    ["mcp____x", ["mcp__"], false],
+    // Server-level entries never reach built-ins.
+    ["docs_search", ["mcp__docs"], false],
+  ];
+
+  it.each(cases)("%s with %j -> %s", (name, excluded, expected) => {
+    expect(isToolExcluded(name, new Set(excluded))).toBe(expected);
+  });
+});
+
+describe("createToolExclusionMiddleware with remote tools", () => {
+  async function filtered(excluded: string[], tools: string[]) {
+    const mw = createToolExclusionMiddleware(new Set(excluded));
+    let seen: unknown[] | undefined;
+    await mw.wrapModelCall!(
+      { tools: tools.map((name) => ({ name })) } as any,
+      (async (req: { tools?: unknown[] }) => {
+        seen = req.tools;
+        return { content: "" };
+      }) as any,
+    );
+    return (seen ?? []).map((t: any) => t.name);
+  }
+
+  const tools = [
+    "read_file",
+    "mcp__docs__search",
+    "mcp__docs__fetch",
+    "mcp__docs2__search",
+  ];
+
+  it("strips every tool of a server by bare server name", async () => {
+    expect(await filtered(["mcp__docs"], tools)).toEqual([
+      "read_file",
+      "mcp__docs2__search",
+    ]);
+  });
+
+  it("strips every tool of a server by the __* form", async () => {
+    expect(await filtered(["mcp__docs__*"], tools)).toEqual([
+      "read_file",
+      "mcp__docs2__search",
+    ]);
+  });
+
+  it("strips one remote tool by exact name", async () => {
+    expect(await filtered(["mcp__docs__fetch"], tools)).toEqual([
+      "read_file",
+      "mcp__docs__search",
+      "mcp__docs2__search",
+    ]);
+  });
+});
 
 describe("createToolExclusionMiddleware", () => {
   it("filters excluded tools out of the request at the model-call boundary", async () => {

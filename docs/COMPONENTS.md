@@ -7,8 +7,8 @@ proves a version works, and an **entry** that builds the thing it contributes.
 
 This document is the spec for the component loader and for the runtime
 registration of remote tools. The loader, SDK and contract runner are
-implemented in `src/components/`; the remote-tool registrar (§7) is not
-built yet. The rejected alternatives are recorded so they are not
+implemented in `src/components/`; the remote-tool registrar (§7) is
+`src/middleware/remote-tools.ts`. The rejected alternatives are recorded so they are not
 re-litigated.
 
 Vocabulary used here: *component*, *version*, *manifest*, *contract*,
@@ -705,31 +705,47 @@ shadowed by a higher-level hit on the same words, so filter by
 ## 7. Remote tools
 
 Tools can also come from **servers** the agent talks to over the Model
-Context Protocol. The same registrar carries them and the `kind: tools`
-components of §4.
+Context Protocol, over HTTP (Streamable HTTP). A middleware advertises them
+to the model next to the built-in tools and routes calls to them.
 
 ### Configuration
 
 `SIA_SERVERS_FILE` names a JSON file. When unset it defaults to
 `$SIA_COMPONENTS_DIR/servers.json`; when neither exists, no remote tools are
-registered. The file is subject to the same containment rule as manifests
-(it must resolve inside the components root) and, like manifests, is
-re-read on every agent turn.
+registered. When a components root is set, the file is subject to the same
+containment rule as manifests (it must resolve inside that root, through any
+link); with no root, an explicit `SIA_SERVERS_FILE` is used as given. The
+file is re-read on every model call.
 
 ```json
 {
   "<server>": {
-    "transport": "stdio" | "http",
-    "command": "…",  "args": ["…"],      // stdio
-    "url": "http://127.0.0.1:…",         // http
-    "scope": ["tag-a", "tag-b"]          // optional
+    "transport": "http",
+    "url": "https://…/mcp",
+    "headers": { "Authorization": "Bearer ${SOME_TOKEN}" },  // optional
+    "scope": "tag-a"                                          // optional; or ["tag-a", "tag-b"]
   }
 }
 ```
 
 Server names follow the same `^[a-z][a-z0-9-]*$` rule as component names.
-The client is `MultiServerMCPClient` from `@langchain/mcp-adapters` (already
-a dependency), one connection per server, sessions established per call.
+`url` must be an absolute `http:` or `https:` URL. Each entry is validated on
+its own: a bad entry is dropped with a warning and its siblings still load.
+A missing file is "no servers"; a file that is not a JSON object is ignored
+with a warning. Nothing about the file can fail boot or a turn.
+
+**Headers and `${VAR}`.** A header value may reference `${NAME}`, expanded
+from the agent's process env each time the file is read. No secret has to be
+written in the file: the host puts a reference, the process env supplies the
+value. An entry that references an unset (or empty) variable is dropped
+whole — the literal reference is never sent.
+
+The client is `MultiServerMCPClient` from `@langchain/mcp-adapters`, loaded
+only when the file names at least one server. One client serves one
+resolved configuration: an unchanged file (after expansion) reuses it, a
+changed one closes it and connects the next, one rebuild at a time. A server
+that fails to connect contributes no tools; the others still do. Each remote
+call times out after 60 s.
 
 **Rejected:** a JSON blob in an environment variable (the config is
 otherwise flat scalars and env is not re-readable at runtime), and a server
@@ -740,20 +756,22 @@ list inside each component (a server is not a version of anything).
 A server with no `scope` is always active. A server with scopes is active
 for a run only if at least one of them appears in
 `config.configurable.scopes` (a `string[]` the caller passes per
-invocation). The agent never interprets a scope; it is an opaque tag that
-the caller and the server agree on.
+invocation; any other value counts as no scopes). The agent never
+interprets a scope; it is an opaque tag that the caller and the server agree
+on. A call to a tool whose server is not active for the run is answered as
+an unknown tool.
 
 ### Naming and ordering
 
 Every remote tool is registered as `mcp__<server>__<tool>`. The tool pool
-presented to the model is: built-in tools first, then tools from
-components and servers, deduplicated by name with the first occurrence
-winning. The order is stable across turns so prompt caches stay warm.
+presented to the model is: built-in tools first, then remote tools by server
+name, each server's tools in the order it lists them. On a name collision
+the built-in wins and the remote tool is not advertised. The order is stable
+across turns so prompt caches stay warm.
 
 ### Exclusion grammar
 
-`excludedTools` (harness profile and manifest `profile`) currently matches
-exact tool names. It is widened so that an entry may be:
+`excludedTools` (harness profile and manifest `profile`) entries may be:
 
 | Entry | Excludes |
 |---|---|
@@ -762,24 +780,32 @@ exact tool names. It is widened so that an entry may be:
 | `mcp__<server>__*` | same, explicit form |
 | `mcp__<server>__<tool>` | that one remote tool |
 
-Matching becomes a function in `src/middleware/tool_exclusion.ts` rather
-than a `Set.has` lookup.
+A server entry matches the whole server segment only: `mcp__docs` does not
+exclude `mcp__docs2__search`. Matching is `isToolExcluded` in
+`src/middleware/tool_exclusion.ts`.
+
+Exclusion is enforced on both sides. The tool-exclusion middleware strips
+excluded tools from what the model is shown, and the remote-tools middleware
+refuses to route an excluded name, so a call the model invents for a hidden
+tool still never reaches its server — it gets an error tool result instead.
 
 ### The registrar
 
-`createRemoteToolsMiddleware` (`src/middleware/remote-tools.ts`) does both
-halves that runtime tool registration requires:
+`createRemoteToolsMiddleware` (`src/middleware/remote-tools.ts`, named
+`remoteToolsMiddleware`) does both halves that runtime tool registration
+requires:
 
-- `wrapModelCall` appends the active tools to `request.tools`.
-- `wrapToolCall` routes a call whose name matches a registered tool to the
-  server (or to the component's `StructuredTool`), and passes everything
-  else through.
+- `wrapModelCall` appends the active remote tools to `request.tools`.
+- `wrapToolCall` routes a call whose name is an active remote tool to its
+  server, and passes everything else — built-in tools and unknown names —
+  through untouched. A remote call that throws becomes an error tool
+  result; it never fails the run.
 
-It is inserted as a novel middleware, which places it before the tail
-segment — and therefore before the tool-exclusion middleware, so exclusions
-apply to remote tools too.
-
-### Not built yet
+It is the last entry of the main stack's core segment, which places it
+before the tail — and therefore before the tool-exclusion middleware, so
+exclusions apply to remote tools too. It is registered only when a servers
+file or a components root is configured. For now it is in the **main stack
+only**: sub-agents and the code-execution tool API do not see remote tools.
 
 Deferred tool schemas (advertising a name and loading the schema on first
 use) are a known optimisation for large tool pools. The naming and ordering
@@ -795,7 +821,7 @@ These are the properties every change that touches this area must keep:
 2. **Fail closed on contracts.** Every unclassifiable outcome is
    `ok: false` (§6).
 3. **Containment.** Nothing is read from outside a component root, through
-   any link (§2). The servers file is inside the root too (§7).
+   any link (§2). The servers file is inside the root too, when there is one (§7).
 4. **The code is restart-gated.** No in-process hot swap of loaded modules;
    the manifest is the only live surface (§4).
 5. **Scaffolding cannot be replaced.** `replaces` never names a required
@@ -811,6 +837,12 @@ Explicitly not part of this design, so nobody has to decide them again
 before the loader ships:
 
 - deferred tool schemas (§7)
+- `stdio` remote servers. A stdio server is a child process of the agent,
+  so it would inherit the agent's own sandbox — the filesystem and network
+  limits the host applies to the agent would bound the server too, and a
+  server that needs more could not get it without widening the agent's.
+  Entries with `"transport": "stdio"` are skipped with a warning.
+- remote tools in the sub-agent stack and the code-execution tool API (§7)
 - lifecycle hooks around tool calls or turns
 - permission modes or approval prompts for tools
 - any registry or marketplace of components

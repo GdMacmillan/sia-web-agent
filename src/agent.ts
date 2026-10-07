@@ -42,6 +42,10 @@ import {
 import { mergeMiddlewareStack } from "./middleware/utils.js";
 import { createToolExclusionMiddleware } from "./middleware/tool_exclusion.js";
 import {
+  createRemoteToolsMiddleware,
+  REMOTE_TOOLS_MIDDLEWARE_NAME,
+} from "./middleware/remote-tools.js";
+import {
   resolveHarnessProfile,
   mergeHarnessProfile,
   REQUIRED_MIDDLEWARE_NAMES,
@@ -144,6 +148,7 @@ export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
   "PromptCachingMiddleware",
   "knowledgeFormationMiddleware",
   "HumanInTheLoopMiddleware",
+  REMOTE_TOOLS_MIDDLEWARE_NAME,
 ]);
 
 /**
@@ -405,6 +410,17 @@ export async function createDeepAgent<
     }),
     // Patches tool calls to ensure compatibility across different model providers
     createPatchToolCallsMiddleware(),
+    // Tools from the servers file (docs/COMPONENTS.md §7). Main stack only;
+    // absent unless a servers file or component root is configured, so the
+    // agent is unchanged without one. Sits before the tail and the exclusion
+    // middleware, so exclusions strip remote tools too.
+    ...(runtimeConfig.runtime.serversFile || runtimeConfig.runtime.componentsDir
+      ? [
+          createRemoteToolsMiddleware({
+            excludedTools: harnessProfile.excludedTools,
+          }),
+        ]
+      : []),
   ];
 
   // The sub-agent stack. Same shape as the main core minus delegation, with

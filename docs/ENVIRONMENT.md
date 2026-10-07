@@ -94,7 +94,7 @@ spec: [`COMPONENTS.md`](./COMPONENTS.md).
 | Variable | Default | Purpose |
 |---|---|---|
 | `SIA_COMPONENTS_DIR` | unset | Host-managed component root (`<name>/current/component.json`). Shadows the seed components in `<projectRoot>/components`. Unset → seed components only. Read once at assembly by `src/components/assemble.ts` (`getConfig().runtime.componentsDir`); see [`COMPONENTS.md`](./COMPONENTS.md). |
-| `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON list of remote tool servers with optional scope tags. Missing → no remote tools. |
+| `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON object of remote (HTTP) tool servers keyed by server name, with optional scope tags. Missing → no remote tools. Re-read on every model call by `src/middleware/remote-tools.ts`; see [`COMPONENTS.md`](./COMPONENTS.md) §7. |
 
 New component versions (`prepare_component_version`) and new components
 (`create_component`) are written under `SIA_COMPONENTS_DIR` only; with it
