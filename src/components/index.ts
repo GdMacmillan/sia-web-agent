@@ -41,6 +41,13 @@ export {
   type InvokeOptions,
 } from "./sdk.js";
 export {
+  createComponentHost,
+  upstreamNotConfiguredMessage,
+  type ComponentHost,
+  type CreateComponentHostOptions,
+  type HostUpstream,
+} from "./host.js";
+export {
   defaultImportModule,
   isMiddlewareLike,
   isToolLike,

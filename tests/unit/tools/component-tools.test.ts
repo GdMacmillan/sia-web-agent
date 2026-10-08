@@ -142,6 +142,39 @@ describe("component tools", () => {
       expect(text).toContain(`winning root: ${host} (host-managed root`);
       expect(text).toContain(`shadowed roots: ${seed}`);
     });
+
+    const egress = (status: number, body: unknown = {}) =>
+      jest.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+
+    it("lists the host's upstreams, read live, and omits the line when the host cannot say", async () => {
+      const listing = egress(200, { upstreams: [{ name: "github", host: "api.github.com" }] });
+      const withHost = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        daemonUrl: "http://127.0.0.1:7700",
+        daemonToken: "t",
+        fetchImpl: listing,
+      });
+      const text = await byName(withHost, "describe_component").invoke({ name: "hello" });
+      expect(text).toContain("  host upstreams: github (a component calls one by name with deps.host.fetch(name, path)");
+      expect(listing).toHaveBeenCalledWith("http://127.0.0.1:7700/egress", expect.anything());
+
+      const none = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        daemonToken: "t",
+        env: {},
+        fetchImpl: egress(200, { upstreams: [] }),
+      });
+      expect(await byName(none, "describe_component").invoke({ name: "hello" })).toContain("host upstreams: none");
+
+      for (const tools of [
+        createComponentTools({ projectRoot: project, componentsDir: host, daemonToken: "t", env: {}, fetchImpl: egress(404) }),
+        createComponentTools({ projectRoot: project, componentsDir: host, env: {}, fetchImpl: egress(200) }),
+      ]) {
+        expect(await byName(tools, "describe_component").invoke({ name: "hello" })).not.toContain("host upstreams");
+      }
+    });
   });
 
   it("offers the five tools in working order", () => {
@@ -212,6 +245,29 @@ describe("component tools", () => {
         else process.env.SIA_COMPONENTS_DIR = previous;
         resetConfig();
       }
+    });
+
+    it("names the host's upstreams so the first version can use one", async () => {
+      const listing = jest.fn(
+        async () =>
+          new Response(JSON.stringify({ upstreams: [{ name: "github", host: "api.github.com" }, { name: "issues", host: "x" }] }), {
+            status: 200,
+          }),
+      ) as unknown as typeof fetch;
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        daemonToken: "t",
+        env: {},
+        fetchImpl: listing,
+      });
+      const text = await byName(tools, "create_component").invoke({
+        name: "list-repos",
+        intent: INTENT,
+        need: NEED,
+      });
+      expect(text).toContain("  host upstreams: github, issues (a component calls one by name");
     });
 
     it("takes an explicit tool name and description", async () => {

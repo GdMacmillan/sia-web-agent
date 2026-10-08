@@ -7,7 +7,10 @@
  * 1. The servers file — a JSON record keyed by server name. Each entry is
  *    parsed on its own; a bad entry is dropped with a warning and never takes
  *    its siblings down. Header values may reference `${VAR}`, expanded from
- *    the process env at read time, so no secret has to be written in the file.
+ *    the process env at read time. That is not a credential channel: a host
+ *    that holds an upstream's credential points the entry at its own egress
+ *    route and references only the agent's own host token; the real
+ *    credential never enters this process's env.
  * 2. The client — one `MultiServerMCPClient` per distinct resolved config
  *    (its fingerprint). The file is re-read on every model call; an unchanged
  *    fingerprint reuses the client, a changed one closes it and builds the

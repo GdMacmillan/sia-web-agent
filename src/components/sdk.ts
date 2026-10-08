@@ -20,6 +20,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
 } from "../code-execution/index.js";
+import { createComponentHost, type ComponentHost } from "./host.js";
 import type { ComponentManifest } from "./manifest.js";
 import { MIDDLEWARE_ONLY_TOOL_NAMES } from "./names.js";
 import { getActiveToolPool } from "./registry.js";
@@ -28,8 +29,9 @@ import { getActiveToolPool } from "./registry.js";
  * The SDK version a manifest's `sdk` range is checked against.
  *
  * 1.1.0: `internals.codeExecution.getExposableTools`.
+ * 1.2.0: `host` — authenticated upstreams through the host.
  */
-export const SDK_VERSION = "1.1.0";
+export const SDK_VERSION = "1.2.0";
 
 /** Per-agent configuration handed to every component. */
 export interface ComponentConfig {
@@ -89,6 +91,12 @@ export interface ComponentDeps {
    * A frozen snapshot: no component can alter another's view.
    */
   services: Readonly<Record<string, unknown>>;
+  /**
+   * Authenticated APIs reached through the host, by upstream name. The
+   * credential stays with the host and never enters this process. Since
+   * SDK 1.2.0.
+   */
+  host: ComponentHost;
   internals: ComponentInternals;
 }
 
@@ -136,6 +144,8 @@ export interface BuildComponentDepsInput {
   config: ComponentConfig;
   services: Record<string, unknown>;
   internals: ComponentInternals;
+  /** Defaults to a host bound to `SIA_DAEMON_URL` / `SIA_DAEMON_TOKEN`. */
+  host?: ComponentHost;
 }
 
 /** Build the dependency bundle for one component. */
@@ -153,6 +163,7 @@ export function buildComponentDeps(
     manifest: input.manifest,
     componentDir: input.componentDir,
     services: Object.freeze({ ...input.services }),
+    host: input.host ?? createComponentHost(),
     internals: input.internals,
   };
 }

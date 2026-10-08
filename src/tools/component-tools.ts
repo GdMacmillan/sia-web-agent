@@ -33,6 +33,7 @@ import {
   type RunContractOptions,
   type VersionBump,
 } from "../components/index.js";
+import { createComponentHost } from "../components/host.js";
 import { lineageTitle } from "../components/lineage.js";
 import { getLineageReconciler, type LineageReconciler } from "../components/lineage-reconcile.js";
 import {
@@ -255,6 +256,25 @@ export function createComponentTools(
   const nowIso = (): string => (opts.now ?? (() => new Date()))().toISOString();
 
   /**
+   * The upstreams a component may call through `deps.host`, read live from
+   * the host. `undefined` — no line at all — when the host cannot say.
+   */
+  const upstreamsLine = async (): Promise<string | undefined> => {
+    const upstreams = await createComponentHost({
+      url: opts.daemonUrl,
+      token: opts.daemonToken,
+      env,
+      fetchImpl: opts.fetchImpl,
+      listTimeoutMs: Math.min(timeoutMs, 5_000),
+    }).upstreams();
+    if (upstreams === undefined) {
+      return undefined;
+    }
+    const names = upstreams.map((u) => u.name).join(", ") || "none";
+    return `  host upstreams: ${names} (a component calls one by name with deps.host.fetch(name, path); the host holds the credential)`;
+  };
+
+  /**
    * Record a prepared version in graph memory: the parent (when there is
    * one) gets an entity if it has none, the version is stored as a
    * candidate superseding it, and the reconciler watches for the verdict.
@@ -439,6 +459,10 @@ export function createComponentTools(
       } else {
         lines.push(`  host-managed root: ${host} (new versions are written there, never here: ${seedRoot()})`);
       }
+      const upstreams = await upstreamsLine();
+      if (upstreams !== undefined) {
+        lines.push(upstreams);
+      }
       return lines.join("\n");
     },
   });
@@ -528,6 +552,7 @@ export function createComponentTools(
         need: need.trim(),
         threadId: threadIdFrom(config),
       });
+      const upstreams = await upstreamsLine();
       return [
         `Created ${p.name}@${p.version} under ${p.root} (a new component: no parent, nothing live yet).`,
         `  tool: ${p.toolName} (a stub that echoes its input; the contract invokes it)`,
@@ -541,6 +566,7 @@ export function createComponentTools(
               `  earlier versions staged: ${p.previousVersions.join(", ")} — the host removed the component; ${p.version} starts a fresh lineage (no parent)`,
             ]
           : []),
+        ...(upstreams !== undefined ? [upstreams] : []),
         `\`current\` does not exist yet and you must not create it — the component runs only after the host activates ${p.version}, after which the agent restarts.`,
         `Next: run_component_contract({ name: "${p.name}", version: "${p.version}" }) to see the stub pass, then edit ${p.entryPath} so ${p.toolName} answers the need and make ${path.basename(p.contractPath)} prove it.`,
       ].join("\n");
