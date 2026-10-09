@@ -53,7 +53,7 @@ src/                     # agent source
 ├── backend-config.ts    # default filesystem backend factory
 ├── backends/            # filesystem backend implementations
 ├── clients/             # HTTP clients (graph-memory)
-├── code-execution/      # TS/JS execution sandbox
+├── code-execution/      # TS/JS execution via tsx (plain child process, not sandboxed)
 ├── components/          # on-disk component loader, SDK, contract runner
 ├── config/              # env-driven config loader + model factories
 ├── middleware/          # all middleware
@@ -63,6 +63,7 @@ src/                     # agent source
 ├── types/               # shared types
 ├── utils/               # shared utilities
 └── web-search/          # Tavily backend
+components/              # seed component versions (execute-code)
 prompts/                 # manager / planner / researcher / answer system prompts
 skills/                  # extended capabilities loaded on demand
 tests/                   # unit, integration, debugging
@@ -74,7 +75,7 @@ docs/                    # reference documentation
 | File | Purpose |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Runtime, middleware composition order, sub-agent stack |
-| [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md) | Env-var schema + `POST /v1/agent/events/usage` endpoint a host must honor + the `/rpc/call` graph-memory endpoint |
+| [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md) | Env-var schema + `POST /v1/agent/events/usage` endpoint a host must honor + the `/rpc/call` graph-memory endpoint + `/egress` to host-held upstream credentials |
 | [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | Versioned on-disk components: manifest, dependency-injected entry, contract runner, remote tool servers + scopes |
 | [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | Every env var the agent reads, grounded in `src/config/loader.ts` |
 | [`docs/GRAPH_MEMORY.md`](docs/GRAPH_MEMORY.md) | Memory tool surface + REST reference |
@@ -133,7 +134,19 @@ the orchestrator:
   name (progressive disclosure)
 - **Checklists** (`tools/checklist-tools.ts`): `create_checklist`,
   `check_item`, `get_checklist`, and others
-- **Code Execution** (`code-execution.ts`): `execute_code` —
+- **Self-task** (`tools/self-task-tool.ts`): `start_self_task` — open a
+  thread on the agent's own server and start a run in it (background
+  work; one per conversation, no nesting). The server URL comes from
+  `SIA_SERVER_URL`, else the agent's own `--port`, else `:2024`.
+- **Component authoring** (`tools/component-tools.ts`, pure part in
+  `components/authoring.ts`): `describe_component`,
+  `prepare_component_version`, `run_component_contract`,
+  `announce_component_version` — iterate a component version under
+  `SIA_COMPONENTS_DIR` (never the seed root, never `current`); the
+  `iterate-component` skill is the procedure. See
+  [`docs/COMPONENTS.md`](docs/COMPONENTS.md) §6 *Authoring a version*.
+- **Code Execution** (`components/execute-code`, the seed component;
+  `code-execution.ts` is its bundled twin): `execute_code` —
   TypeScript/JavaScript via `tsx` (the default surface)
 - **Code Interpreter** (`src/code-interpreter/`, opt-in via
   `ENABLE_CODE_INTERPRETER=true`): `eval` — JavaScript in a sandboxed
@@ -171,6 +184,10 @@ Non-tool middleware worth knowing about:
   loopback endpoint (see [`HOST_CONTRACT.md`](docs/HOST_CONTRACT.md))
 - `capExhaustionMiddleware` — guards against runaway recursion
 - `summarizationMiddleware` — compresses context when near token limit
+- `sourceEditNoteMiddleware` — appends a note to a successful
+  `write_file` / `edit_file` of the installed source tree (the next
+  install replaces the edit; it runs unreviewed until then). Silent in a
+  version-controlled working tree; opt-out `SOURCE_EDIT_NOTE_ENABLED=false`
 
 ## Behavioral DNA
 
@@ -192,29 +209,40 @@ The agent's runtime behavior is defined by:
 - **Components** (`src/components/`) — versioned units of agent code
   loaded from disk at assembly, from `SIA_COMPONENTS_DIR` and then
   `<projectRoot>/components`. Each version ships a strict `component.json`
-  manifest, a dependency-injected `entry.ts` factory (it imports nothing;
-  everything arrives on `ComponentDeps`, `SDK_VERSION = "1.0.0"`) and a
-  `contract.ts` the agent runs in-process (`runComponentContract`,
-  exported from `src/graph.ts` beside `graph`). A `kind: middleware`
-  component with `replaces` swaps a bundled middleware by name at both
-  the main and the sub-agent site; `kind: tools` appends tools after the
-  built-ins; `kind: service` publishes a value for other components. A
-  bad component is skipped with a warning, never fatal; with no component
-  root present the stack assembles exactly as before. See
-  [`docs/COMPONENTS.md`](docs/COMPONENTS.md).
+  manifest, a dependency-injected `entry.ts` factory (it imports nothing
+  at runtime; everything arrives on `ComponentDeps`,
+  `SDK_VERSION = "1.1.0"`) and a `contract.ts` the agent runs in-process
+  (`runComponentContract`, exported from `src/graph.ts` beside `graph`).
+  A `kind: middleware` component with `replaces` swaps a bundled
+  middleware by name at both the main and the sub-agent site;
+  `kind: tools` appends tools after the built-ins; `kind: service`
+  publishes a value for other components. A bad component is skipped
+  with a warning, never fatal; with no component root present the stack
+  assembles exactly as before. The first component ships as the **seed**
+  `components/execute-code` (the `execute_code` wrapper, with a six-case
+  black-box contract); its bundled registration
+  (`src/middleware/code-execution.ts`) evaluates a byte-identical in-tree
+  twin (`src/components/seed/`, refreshed by `yarn sync:seed`, pinned by
+  `tests/unit/components/seed-parity.test.ts`) so a broken seed can never
+  remove the tool. See [`docs/COMPONENTS.md`](docs/COMPONENTS.md).
 
 Both are first-class self-modification surfaces. When the agent is
 asked to improve itself or repurpose for a new role, it modifies these
 files. Treat changes to them as **behavioral changes**, with the same
 care as code changes.
 
-## Path resolution & sandboxing
+## Path resolution & filesystem confinement
 
 All filesystem tool ops (`read_file`, `write_file`, `edit_file`, `ls`,
 `grep`, `glob`) flow through `FilesystemBackend.resolvePath` in
 `src/backends/filesystem.ts:73-96`, which calls
 `validatePathInProject(resolved)`. The guard prevents the agent from
 accessing files outside its project root.
+
+This boundary covers only the filesystem tools above. `bash` and
+`execute_code` are not covered by it — they run as ordinary child
+processes with the agent's own OS-level privileges and environment, with
+no path confinement of their own.
 
 Project root is resolved by `getProjectRoot()` in
 `src/utils/path-utils.ts` using a 7-strategy hybrid:
@@ -241,11 +269,12 @@ the agent via the `load_skill` tool — the progressive-disclosure
 pattern keeps token usage bounded while exposing a wide capability
 surface.
 
-Current skills (16): `bash-usage`, `checklist`, `code-execution`,
-`codebase-navigation`, `find-replace`, `memory-management`,
-`meta-awareness`, `planning`, `prompt-engineering`, `rapids-research`,
-`research`, `solid`, `system-prompt-review`, `task-delegation`,
-`task-management`, `web-search`. Plus `skills/README.md` for orientation.
+Current skills (17): `bash-usage`, `checklist`, `code-execution`,
+`codebase-navigation`, `find-replace`, `iterate-component`,
+`memory-management`, `meta-awareness`, `planning`, `prompt-engineering`,
+`rapids-research`, `research`, `solid`, `system-prompt-review`,
+`task-delegation`, `task-management`, `web-search`. Plus
+`skills/README.md` for orientation.
 
 To add a skill: create `skills/<name>/SKILL.md` with the required
 frontmatter (see existing skills for the schema). The agent will
@@ -267,9 +296,19 @@ Standalone use needs neither — only an LLM API key.
 ## Code execution
 
 The `execute_code` tool runs TypeScript/JavaScript via `tsx`.
-TypeScript only — Python will fail. Default timeout 60s, max 5 min.
-Sessions are thread-isolated at `.code-workspace/{thread_id}/`. See
+TypeScript only — Python will fail. Default timeout 60s, max 5 min; a
+timed-out run returns `Execution timed out after <n> ms`. Sessions are
+thread-isolated at `.code-workspace/{thread_id}/`. See
 `skills/code-execution/SKILL.md` for the full guide.
+
+The tool's wrapper is the seed component
+`components/execute-code/.versions/<version>/entry.ts`; the heavy
+internals (session manager, IPC bridge, tool-API generator) stay in
+`src/code-execution/` and reach it through `deps.internals.codeExecution`.
+Change the wrapper by adding a new version directory and running its
+contract, not by editing `src/middleware/code-execution.ts` — that file
+only evaluates the in-tree twin. After editing the seed's current entry,
+run `yarn sync:seed`.
 
 ## Implementation patterns
 

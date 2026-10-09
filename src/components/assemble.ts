@@ -21,29 +21,14 @@ import {
   type LoadComponentsResult,
 } from "./loader.js";
 import type { ComponentConfig, ComponentInternals } from "./sdk.js";
+import { MIDDLEWARE_ONLY_TOOL_NAMES, MIDDLEWARE_TOOL_NAMES } from "./names.js";
+import { getLineageReconciler } from "./lineage-reconcile.js";
 import { createComponentsMiddleware, setActiveComponents } from "./registry.js";
+
+export { MIDDLEWARE_ONLY_TOOL_NAMES, MIDDLEWARE_TOOL_NAMES };
 
 /** The seed root, relative to the project root. */
 export const SEED_COMPONENTS_DIRNAME = "components";
-
-/**
- * Tool names the bundled middleware stack contributes. A component tool
- * with one of these names would collide at the model boundary, so it is
- * skipped like a collision with a built-in tool.
- */
-export const MIDDLEWARE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "write_todos",
-  "ls",
-  "read_file",
-  "write_file",
-  "edit_file",
-  "glob",
-  "grep",
-  "load_skill",
-  "execute_code",
-  "eval",
-  "task",
-]);
 
 export interface ResolveComponentRootsInput {
   projectRoot: string;
@@ -96,6 +81,11 @@ export interface PrepareComponentAssemblyOptions {
   config: ComponentConfig;
   internals: ComponentInternals;
   importModule?: ImportModule;
+  /**
+   * Runs before each agent turn once components are loaded (default: the
+   * lineage reconciler's turn check). Injectable for tests.
+   */
+  beforeTurn?: () => Promise<void> | void;
 }
 
 export interface ComponentAssembly {
@@ -188,7 +178,9 @@ export async function prepareComponentAssembly(
     loaded.components.length > 0
       ? [
           ...loaded.middleware.map((entry) => entry.middleware),
-          createComponentsMiddleware(),
+          createComponentsMiddleware({
+            beforeTurn: options.beforeTurn ?? (() => getLineageReconciler().onTurn()),
+          }),
         ]
       : [];
 

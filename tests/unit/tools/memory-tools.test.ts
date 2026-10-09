@@ -16,6 +16,7 @@ import {
   storeEntityTool,
   retrieveEntityTool,
   searchEntitiesTool,
+  updateEntityTool,
   _resetMemoryAdapterForTests,
   _setMemoryAdapterForTests,
 } from "../../../src/tools/memory-tools.js";
@@ -130,6 +131,52 @@ describe("memory-tools — thin-shell wiring", () => {
     expect(response.count).toBe(0);
     expect(response.next_step).toMatch(/^Next: /);
     expect(response.next_step).toContain("store_entity");
+  });
+
+  it("updateEntityTool passes metadata and relationships through to the handler", async () => {
+    const node = {
+      id: "n_1",
+      type: "Conversation",
+      properties: {
+        metadata: {
+          entity_type: "component_version",
+          title: "hello@0.1.1",
+          tags: ["outcome:candidate"],
+          custom_metadata: { outcome: "candidate", need: "louder" },
+        },
+      },
+    };
+    const retrieveMock = jest.fn(async () => node) as any;
+    const updateMock = jest.fn(async (req: { nodeId: string; properties: Record<string, unknown> }) => ({
+      id: req.nodeId,
+      properties: { metadata: { ...node.properties.metadata, ...req.properties } },
+      version: 2,
+      changed_fields: Object.keys(req.properties),
+    })) as any;
+    const edgesMock = jest.fn(async (req: Record<string, unknown>) => ({ id: "e_1", ...req })) as any;
+    _setMemoryAdapterForTests(
+      makeStubAdapter({ retrieveEntity: retrieveMock, updateEntity: updateMock, graphEdges: edgesMock }),
+    );
+
+    const raw = await updateEntityTool.func({
+      entity_id: "n_1",
+      metadata: { outcome: "converged" },
+      related_entity_ids: ["n_0"],
+      relationship_types: ["SUPERSEDES"],
+    } as any);
+
+    // The custom metadata is merged client-side: untouched keys survive.
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock.mock.calls[0][0].properties.custom_metadata).toEqual({
+      outcome: "converged",
+      need: "louder",
+    });
+    expect(edgesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fromNodeId: "n_1", toNodeId: "n_0", type: "SUPERSEDES" }),
+    );
+    const response = JSON.parse(raw);
+    expect(response.entity.id).toBe("n_1");
+    expect(response.edge_errors).toBeUndefined();
   });
 
   it("fails fast when SIA_WORKSPACE_ID is unset", async () => {

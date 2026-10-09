@@ -157,6 +157,12 @@ export function describeComponentVersion(
   };
 }
 
+/**
+ * What a one-line `current` file may contain: a single version directory
+ * name, no separators, never `.` or `..`.
+ */
+export const CURRENT_FILE_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/;
+
 /** Whether a `current` pointer exists at all (a link, even a dangling one). */
 function hasPointer(currentPath: string): boolean {
   try {
@@ -167,19 +173,51 @@ function hasPointer(currentPath: string): boolean {
   }
 }
 
+/** Whether `current` is a regular file (a one-line pointer) rather than a link. */
+function isFilePointer(currentPath: string): boolean {
+  try {
+    return lstatSync(currentPath).isFile();
+  } catch (_error) {
+    return false;
+  }
+}
+
 /**
  * Resolve `<root>/<name>/current` to a version directory, enforcing that the
  * pointer exists, stays inside the root, and lands inside `.versions/`.
+ *
+ * The pointer is a link (or junction) to the version directory, or a
+ * regular file whose one line names the `.versions/<version>` directory —
+ * the form a source tree can carry to platforms where links need
+ * privileges. Both resolve under the same containment rules.
  */
 function resolveCurrentVersion(
   root: string,
   name: string,
 ): { ok: true; versionDir: string; versionDirName: string } | { ok: false; reason: string } {
   const componentDir = path.join(root, name);
-  const currentPath = path.join(componentDir, CURRENT_LINK);
+  let currentPath = path.join(componentDir, CURRENT_LINK);
 
   if (!hasPointer(currentPath)) {
     return { ok: false, reason: `no "${CURRENT_LINK}" pointer` };
+  }
+  if (isFilePointer(currentPath)) {
+    let text: string;
+    try {
+      text = readFileSync(currentPath, "utf-8").trim();
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        reason: `"${CURRENT_LINK}" file unreadable: ${errorMessage(error)}`,
+      };
+    }
+    if (!CURRENT_FILE_PATTERN.test(text)) {
+      return {
+        ok: false,
+        reason: `"${CURRENT_LINK}" file must name a version directory inside "${VERSIONS_DIR}" (got ${JSON.stringify(text)})`,
+      };
+    }
+    currentPath = path.join(componentDir, VERSIONS_DIR, text);
   }
   if (!existsSync(currentPath)) {
     return {

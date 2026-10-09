@@ -111,12 +111,33 @@ export function refreshActiveManifests(): void {
   }
 }
 
+export interface ComponentsMiddlewareOptions {
+  /**
+   * Runs before each agent turn, after the manifests are refreshed (the
+   * lineage reconciler's turn check). It must not throw; if it does, the
+   * turn still runs.
+   */
+  beforeTurn?: () => Promise<void> | void;
+}
+
 /** Middleware that refreshes active manifests before each agent turn. */
-export function createComponentsMiddleware(): AgentMiddleware {
+export function createComponentsMiddleware(
+  options: ComponentsMiddlewareOptions = {},
+): AgentMiddleware {
   return createMiddleware({
     name: COMPONENTS_MIDDLEWARE_NAME,
-    beforeAgent: () => {
+    beforeAgent: async () => {
       refreshActiveManifests();
+      if (options.beforeTurn) {
+        try {
+          await options.beforeTurn();
+        } catch (error: unknown) {
+          logger.warn(
+            { error: error instanceof Error ? error.message : String(error) },
+            "component turn hook failed",
+          );
+        }
+      }
       return undefined;
     },
   });

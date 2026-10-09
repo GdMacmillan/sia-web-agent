@@ -134,6 +134,22 @@ describe("Search Tool", () => {
     });
   });
 
+  describe("Argument Injection", () => {
+    it("should treat a pattern starting with '-' as a literal, not a ripgrep flag", async () => {
+      fs.writeFileSync(
+        path.join(tmpDir, "flaglike.txt"),
+        "-nonexistent-flag-xyz literal match\n",
+      );
+
+      const tool = createSearchTool(tmpDir);
+      const result = await tool.invoke({ pattern: "-nonexistent-flag-xyz" });
+
+      expect(result).toContain("literal match");
+      expect(result).not.toContain("unrecognized");
+      expect(result).not.toMatch(/^Error/);
+    });
+  });
+
   describe("Output Clipping", () => {
     it("should clip very large results with truncation marker", async () => {
       // Create many files with matching content to generate large output

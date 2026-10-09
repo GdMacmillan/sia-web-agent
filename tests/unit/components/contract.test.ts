@@ -13,6 +13,7 @@ import {
   setActiveToolPool,
 } from "../../../src/components/registry.js";
 import { SDK_VERSION } from "../../../src/components/sdk.js";
+import { resetConfig } from "../../../src/config/loader.js";
 import { clearAllowedPathRoots } from "../../../src/utils/path-utils.js";
 import {
   FAILING_CONTRACT,
@@ -213,6 +214,41 @@ describe("runComponentContract", () => {
       });
       const result = await run("hello", { version: "0.1.0" });
       expect(result).toMatchObject({ ok: true, version: "0.1.0" });
+    });
+  });
+
+  describe("roots", () => {
+    it("searches a host-managed root that appeared after assembly", async () => {
+      // The active set recorded only `root`; a host root configured later
+      // (and created after assembly) carries the candidate version.
+      writeComponent(root, "hello", "0.1.0", {
+        entry: SERVICE_ENTRY,
+        contract: PASSING_CONTRACT,
+      });
+      const host = makeRoot("host-");
+      const previous = process.env.SIA_COMPONENTS_DIR;
+      process.env.SIA_COMPONENTS_DIR = host;
+      resetConfig();
+      try {
+        writeComponent(host, "hello", "0.1.0", {
+          entry: SERVICE_ENTRY,
+          contract: PASSING_CONTRACT,
+          currentFile: true,
+        });
+        writeComponent(host, "hello", "0.1.1", {
+          entry: SERVICE_ENTRY,
+          contract: FAILING_CONTRACT,
+          current: false,
+        });
+        const candidate = await run("hello", { version: "0.1.1" });
+        expect(candidate).toMatchObject({ ok: false, version: "0.1.1" });
+        expect(candidate.error).toMatch(/deliberately failed/);
+      } finally {
+        if (previous === undefined) delete process.env.SIA_COMPONENTS_DIR;
+        else process.env.SIA_COMPONENTS_DIR = previous;
+        resetConfig();
+        removeRoot(host);
+      }
     });
   });
 

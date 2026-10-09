@@ -7,8 +7,8 @@ proves a version works, and an **entry** that builds the thing it contributes.
 
 This document is the spec for the component loader and for the runtime
 registration of remote tools. The loader, SDK and contract runner are
-implemented in `src/components/`; the remote-tool registrar (§7) is not
-built yet. The rejected alternatives are recorded so they are not
+implemented in `src/components/`; the remote-tool registrar (§7) is
+`src/middleware/remote-tools.ts`. The rejected alternatives are recorded so they are not
 re-litigated.
 
 Vocabulary used here: *component*, *version*, *manifest*, *contract*,
@@ -36,10 +36,15 @@ Three things drive the design:
   the same process, on demand.
 
 The first component is the `execute_code` wrapper: the middleware that
-defines the tool, formats results, and manages the executor lifecycle
-(`src/middleware/code-execution.ts`, registered as `CodeExecutionMiddleware`).
-The heavy internals (session manager, IPC bridge, tool-API generator) stay
-in the source tree and reach the component through the SDK.
+defines the tool, formats results, and manages the executor lifecycle. It
+ships as the seed `components/execute-code` (registered as
+`CodeExecutionMiddleware`, with a six-case black-box contract), and the
+bundled registration in `src/middleware/code-execution.ts` evaluates a
+byte-identical in-tree twin of the same entry (see §2, *The seed and its
+in-tree twin*). The heavy internals (session manager, IPC bridge, tool-API
+generator) stay in the source tree and reach the component through the
+SDK. The next change to the wrapper is a new `.versions/<version>/`
+directory, not a source edit.
 
 ---
 
@@ -63,7 +68,8 @@ Inside a root:
 ```
 <root>/
   <name>/
-    current -> .versions/<version>       # symlink (or junction); the pointer
+    current -> .versions/<version>       # the pointer: a link, a junction, or
+                                         # a one-line file naming the version
     .versions/
       0.1.0/
         component.json                   # manifest
@@ -78,6 +84,14 @@ The loader lists `<root>/*/current/component.json`. It never reads
 versions; old versions are never deleted by the loader, so a revert is a
 pointer flip back.
 
+**Two pointer forms.** `current` is either a link (or junction) to the
+version directory, or a regular file whose single line names the
+`.versions/<version>` directory (`0.1.0\n`). The file form exists for
+source trees that ship through archives to platforms where creating a
+link needs a privilege; the seed root uses it. Its content must match
+`^[0-9A-Za-z][0-9A-Za-z.+-]*$` — no separators, never `.` or `..` — and it
+resolves under exactly the containment rules a link does.
+
 **Containment.** Every path the loader touches is resolved with
 `realpathSync` and must remain inside the root (`relative(root, real)` must
 not start with `..`). This is the same check `isSafePath` applies to skills
@@ -90,7 +104,36 @@ the project root (`validatePathInProject`, `src/utils/path-utils.ts`). At
 assembly each component root that exists is added to the allowed roots
 (`allowPathRoot`), both as given and fully resolved, so the agent can read
 and author component versions that live outside its own source tree. The
-allow-list is process-global by design.
+allow-list is process-global by design; `prepare_component_version` admits
+a host-managed root that appeared after assembly the same way (§6,
+*Authoring a version*).
+
+### The seed and its in-tree twin
+
+The seed root ships `components/execute-code/.versions/0.1.0/` with a
+one-line `current` file. The bundled `CodeExecutionMiddleware`
+registration stays at both assembly sites: it is the `replaces` target and
+the fallback that keeps the tool available when the seed is absent, fails
+to load, or is shadowed by a broken host-managed version. To keep that
+fallback from becoming a second, divergent wrapper, the bundled module
+(`src/middleware/code-execution.ts`) does not carry the wrapper itself: it
+evaluates `src/components/seed/execute-code/entry.ts` — a byte-for-byte
+copy of the seed's current entry — with an in-tree dependency bundle whose
+`getExposableTools` returns the call-site tools.
+
+- `yarn sync:seed` (`scripts/sync-seed-components.mjs`) copies each seed's
+  current `entry.ts` to its twin; `--check` reports drift without writing.
+- `tests/unit/components/seed-parity.test.ts` fails when a twin differs
+  from its seed, or the bundled version constant differs from `current`.
+- The bundled module does not `import()` the seed at runtime on purpose:
+  a seed that throws would then break boot, which §4 forbids.
+- A source-tree TypeScript build cannot compile files under `components/`
+  (they sit outside `rootDir`), which is the other reason the twin lives
+  under `src/`.
+
+With the seed root present, the loader's instance replaces the bundled one
+by name at both sites and the bundled instance never runs; a host-managed
+root shadows the seed by name.
 
 ---
 
@@ -178,9 +221,10 @@ Example — the seed `execute_code` component:
   "name": "execute-code",
   "version": "0.1.0",
   "kind": "middleware",
-  "intent": "Run TypeScript the agent writes, in an isolated session per thread, and return stdout, stderr and the final value as text.",
+  "intent": "Run the TypeScript the agent writes, one fresh process per call in a per-conversation workspace with typed access to the agent's other tools, and hand back stdout, stderr and the exit status as text — including a clear timeout message instead of a silent kill.",
   "sdk": "^1.0.0",
   "replaces": "CodeExecutionMiddleware",
+  "depth": 0,
   "lineage": { "producedBy": "seed" }
 }
 ```
@@ -278,7 +322,7 @@ present at all, the agent behaves exactly as it does today.
 `src/components/sdk.ts` defines the only surface component code sees.
 
 ```ts
-export const SDK_VERSION = "1.0.0";
+export const SDK_VERSION = "1.2.0";
 
 export interface ComponentDeps {
   sdkVersion: string;                 // SDK_VERSION
@@ -291,6 +335,11 @@ export interface ComponentDeps {
   manifest: ComponentManifest;        // this component's parsed manifest
   componentDir: string;               // the resolved version directory
   services: Readonly<Record<string, unknown>>;  // frozen snapshot, see §4
+  /** Authenticated APIs through the host, by upstream name. Since 1.2.0. */
+  host: {
+    fetch(upstream: string, path: string, init?: RequestInit): Promise<Response>;
+    upstreams(): Promise<{ name: string; host: string }[] | undefined>;
+  };
   /** Bundled internals exposed for specific components. Unstable. */
   internals: {
     codeExecution: {
@@ -299,21 +348,62 @@ export interface ComponentDeps {
       formatCodePreview: typeof formatCodePreview;
       DEFAULT_TIMEOUT_MS: number;
       MAX_TIMEOUT_MS: number;
+      /** The assembled pool minus the middleware-only tools. Since 1.1.0. */
+      getExposableTools: () => StructuredToolInterface[];
     };
   };
 }
 ```
 
-`internals.codeExecution` carries exactly the symbols the bundled
-`execute_code` wrapper imports (`src/middleware/code-execution.ts`), so the
-wrapper can be ported to a component without reaching past the SDK.
-`logger` is a child of the agent's pino logger named `component:<name>`.
+`internals.codeExecution` carries exactly the symbols the `execute_code`
+wrapper uses, so it needs nothing past the SDK. `getExposableTools()`
+returns the tools a code-execution session may call through its generated
+tool API: the assembled agent's pool (`getActiveToolPool`) minus
+`MIDDLEWARE_ONLY_TOOL_NAMES` (`write_todos`, `load_skill`, `task`,
+`execute_code`, `eval`) — a script cannot delegate, load a skill, or nest
+another execution. It is empty before assembly and populated after, which
+is why the wrapper creates its executor lazily on first call. `logger` is
+a child of the agent's pino logger named `component:<name>`.
+
+**`host`** is how a component calls an API that needs a credential without
+ever holding it. The host configures each such API as an **upstream** — a
+name, a pinned base URL, and a credential it keeps to itself — and
+`host.fetch(upstream, path, init)` sends the request to the host's egress
+route (`HOST_CONTRACT.md` §3.7), which injects the credential and forwards
+it. The result is the upstream's `Response`, as returned by the host.
+
+- `path` is relative to the upstream's base URL and may carry a query; a
+  `.` or `..` segment (percent-encoded or not) throws before anything is
+  sent. The upstream name is percent-encoded into the route.
+- The request carries the agent's own host bearer (`SIA_DAEMON_TOKEN`);
+  any `Authorization` the caller sets is replaced. There is nothing else to
+  authenticate with — the agent has no credential to send.
+- `host.upstreams()` reads `GET /egress`: the names this host will call for
+  the agent and the `host[:port]` each is pinned to, never a credential.
+  `undefined` means "unknown": no host token, a host that predates the
+  listing (404/405), or a failed read.
+- `host.fetch` checks the name against that listing first (reused for 30 s)
+  and, when the listing is known and lacks it, throws
+  `upstream "<name>" is not configured on this host (available: a, b) — ask the host's owner to configure it`
+  (`available: none` when empty). With the listing unknown it sends the
+  request and the host's own answer stands (an unknown upstream is a 404).
+- `describe_component` and `create_component` print the live listing as a
+  `host upstreams:` line, and omit it when the listing is unknown.
+
+A component never asks a person for a credential and never writes one
+anywhere; a missing upstream is something the host's owner configures.
 
 `entry.ts` is:
 
 ```ts
 export default function (deps: ComponentDeps): AgentMiddleware | StructuredTool[] | unknown;
 ```
+
+An entry may carry a **type-only** import of the SDK types for editors and
+type checkers (`import type { ComponentDeps } from "<path to>/src/components/sdk.js"`).
+Type-only imports are erased before execution, so the rule that an entry
+imports nothing at runtime still holds; the path only has to resolve where
+the file is type-checked. A value import of anything is still an error.
 
 The return type follows `kind`: `middleware` → one `AgentMiddleware`;
 `tools` → `StructuredTool[]`; `service` → any value, published as-is.
@@ -324,7 +414,8 @@ removals or signature changes bump the major. `internals` is the one
 unstable namespace and is documented as such — a component that reaches
 into it accepts that a minor SDK bump may break it. The manifest's `sdk`
 range is checked against `SDK_VERSION` at load; a mismatch skips the
-component with a warning (§4).
+component with a warning (§4). History: 1.0.0 the initial surface; 1.1.0
+added `internals.codeExecution.getExposableTools`; 1.2.0 added `host`.
 
 **Component-to-component use** goes only through `deps.services`. There is
 no import path between components.
@@ -409,36 +500,293 @@ The runner never throws. Anything that cannot be classified is
 contract is not a conversation), and shipping a test runner to production
 installs.
 
+**Which roots the runner searches.** In precedence order: the host-managed
+root as configured at the time of the call, then the roots recorded at
+assembly, then whatever else exists on disk now — deduplicated by real
+path. A host-managed root that appeared after assembly is therefore
+searched first, which is what lets a version written during this process
+be checked (see *Authoring a version* below).
+
+### Authoring a version
+
+The agent can write the next version of one of its components itself. The
+pure part is `src/components/authoring.ts`; five tools
+(`src/tools/component-tools.ts`) put it in the agent's hands, and the
+`iterate-component` skill (`skills/iterate-component/SKILL.md`) is the
+procedure. A version is authored in a thread of the agent's own — see
+`start_self_task` (`src/tools/self-task-tool.ts`), which opens a thread on
+the agent's own server and starts a run in it.
+
+**Host-managed root only.** A new version is written under
+`SIA_COMPONENTS_DIR`, never under the seed root shipped with the source
+tree (the host re-stages that tree, and anything written there would run
+unreviewed until it did). With no host-managed root configured,
+`prepare_component_version` and `create_component` refuse; there is
+nowhere to write.
+
+**Layout.** On the first iteration the whole component directory is
+copied from the root that currently wins into the host-managed root —
+`current` (still naming the previous version) and `.versions/<previous>/`
+travel with it — and then `.versions/<next>/` is written from the current
+version with its manifest rewritten: `version`, `lineage.parent =
+"<name>@<current>"`, `lineage.need`, `lineage.producedBy`; everything else
+(intent, kind, `replaces`, `depth`, profile) is carried over untouched for
+the author to edit. `<next>` bumps the **highest version already present
+under the host copy** (candidates still awaiting activation included),
+never below the current one, so back-to-back candidates number `0.1.1`,
+`0.1.2`, … while every one of them records `current` as its parent — the
+version its code actually came from. The copy is self-contained on purpose: the runner and
+the loader stop at the first root that carries `<name>/`, so a host copy
+holding only the new version would hide the previous one from both. The
+seed then shows up as *shadowed* — the intended precedence.
+
+```
+$SIA_COMPONENTS_DIR/
+  execute-code/
+    current                 # copied; still names 0.1.0
+    .versions/
+      0.1.0/                # copied from the seed
+      0.1.1/                # the candidate: entry.ts, contract.ts, component.json
+```
+
+**`current` is never written by the agent.** Activating a version is the
+host's deliberate, separate step, after which the agent restarts. The
+version is described now and runs after activation and restart; a passing
+contract ran it inside the agent's own process, without loading it into the
+live agent, and proves behaviour, not liveness.
+
+### Authoring a new component
+
+A need can also be for a tool the agent does not have. `create_component`
+(pure part: `planNewComponent` in `src/components/authoring.ts`, sources in
+`src/components/scaffold.ts`) lays out the **first** version of a component
+that exists in no root:
+
+```
+$SIA_COMPONENTS_DIR/
+  parse-time-expression/
+    .versions/
+      0.1.0/                  # component.json, entry.ts, contract.ts — and no `current`
+```
+
+The version is `0.1.0`, unless the name was built before and never went
+live anywhere — see *Re-creating a removed component* below, where it is
+higher. The manifest is `kind: "tools"`, `depth: 0`, `sdk:
+"^<SDK_VERSION>"` and a `lineage` with `need` and `producedBy` but **no
+`parent`** — a first version is always the root of its lineage, whatever
+its number. The entry contributes one tool, named `tool_name` when given
+and otherwise the component name with `-` turned into `_`
+(`parse-time-expression` → `parse_time_expression`), that echoes its
+input; the contract invokes it through `deps.invoke` and checks the echo.
+So the scaffold **passes its own contract before the author touches it** —
+the analogue of copying the current version when iterating — and the
+author changes entry and contract together from a green start. Both
+generated sources import nothing: a version under the host-managed root
+has no source tree beside it.
+
+`create_component` refuses, naming the reason, in this order: an invalid
+component name; a tool name outside `^[a-z][a-z0-9_]*$` or already taken by
+a tool the agent has (the assembled pool plus the middleware-provided
+names); an empty intent or need; no host-managed root (or the seed root,
+directly or through a link); a name that ships with the seed root, live or
+not — that can never be created again; and a name any root currently
+resolves a **live** version for, however it got there — the message lists
+the versions staged and points at `prepare_component_version` for a new
+version of an existing component and at `run_component_contract` with an
+explicit version for one already staged. `describe_component` on a
+component that has versions but no `current` says exactly that: the
+versions present, that one runs through `run_component_contract` with an
+explicit version, that it becomes current only when the host activates it,
+and — since nothing on disk can tell "never yet activated" from "the host
+took it back" apart — that a lineage entity reading `removed` means
+`create_component` starts a fresh version above what is staged.
+
+Nothing in the loader changes for a new component: with no `current` it is
+skipped with a warning; once the host activates the version and the agent
+restarts, its tool is in the pool like any other. A host that later reverts
+a first version has nothing to go back to; how it leaves the component
+(pointer removed, version directory kept) is the host's business, and the
+agent's `describe_component` reads the result truthfully either way.
+
+**Re-creating a removed component.** A name with no live version anywhere,
+but with versions still staged, is not necessarily new: it may be a
+candidate still waiting on its first verdict, or a version the host once
+activated and later removed from the machine (§6, *Lineage*, outcome
+`removed`). Disk alone cannot tell those apart — both read as "versions
+present, nothing current" — so `create_component` treats them the same way
+rather than refusing: it collects every version staged for that name across
+every root and writes the next **minor** above the highest of them
+(`0.1.0` → `0.2.0`; `0.1.3` → `0.2.0`) as a fresh lineage root, same as any
+other first version — no parent, regardless of what came before. The
+result names the versions it found staged. A version still genuinely
+waiting on a verdict is better continued than re-created; that is what the
+`describe_component` hint above and the `iterate-component` skill's
+guidance are for.
+
+**The tools.**
+
+| Tool | What it does |
+|---|---|
+| `describe_component({ name })` | Read-only: which root wins and why, the current version, the versions present, the manifest and the paths. Root precedence is not visible through `read_file`. |
+| `create_component({ name, intent, need, tool_name?, description? })` | The first version of a component with no live version anywhere: `.versions/<version>/` under the host-managed root with a parentless manifest, a stub tool that echoes its input and a contract that invokes it; then admits that root for the filesystem tools. `<version>` is `0.1.0` for a genuinely new name, or the next minor above what is already staged when the host removed an earlier lineage for this name. Returns the paths and the next step. |
+| `prepare_component_version({ name, need, bump? })` | The layout above under the host-managed root (created if missing), then admits that root for the filesystem tools. Returns the paths and the next step. |
+| `run_component_contract({ name, version? })` | `runComponentContract` on the named version; `contract passed for …` / `contract FAILED for …: <error>`. |
+| `announce_component_version({ name, version, summary, outcome?, channel? })` | Tells the host about the candidate and, when `SIA_ANNOUNCE_TO_CHAT` is on, posts one message with a link to the thread (`HOST_CONTRACT.md` §3.4). Best-effort: a host without those endpoints is reported, never thrown. |
+
+**Lineage.** It lives in two places: `manifest.lineage` on disk (one node's
+view), and a `component_version` entity in graph memory (the workspace's
+view, readable by every agent that shares it). The entity is written by the
+tools, not by the model:
+
+| Entity field | Value |
+|---|---|
+| `entity_type` / `title` | `component_version` / `<name>@<version>` — exact-title lookups depend on it |
+| `content` | prose a stranger can use: the component under both spellings (`execute-code`, `execute_code`), the parent, the need verbatim, the thread, the producer, the outcome and its reason |
+| `tags` | `component_version`, `component:<name>`, both spellings, `version:<v>`, `outcome:<o>`, `produced-by:<agent>`, `announced` |
+| `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at? }` |
+| `status` | `active` while a candidate, `completed` once settled — never archived; a reverted version is exactly the memory worth keeping |
+| edge | `SUPERSEDES`, new version → parent; none for a first version, which is the root of its lineage |
+
+`outcome` is one of `candidate`, `converged`, `reverted`, `failed`,
+`rejected`, `abandoned`, `removed`. Every one of those except `removed` is
+reachable only from `candidate`; `removed` is the one exception, reachable
+from `converged` too — a version that was live and that the host has since
+taken off the machine. That is the one transition out of an already-settled
+outcome, and it is deliberately narrow: `settleLineageEntity` allows
+`candidate → <anything settled>` and `converged → removed` and nothing
+else, so a stray verdict can never overwrite a `reverted` or `rejected`
+entity.
+
+An outcome is a verdict on a change, not a statement of what is live now.
+The host may activate any staged version at any time — an earlier
+`converged` one, or the seed — and that settles nothing: the version it
+replaces keeps its `converged`, and no entity is written for the one it
+brings back. What is live is whatever `current` resolves to, and that is
+also the parent of the next version; the newest `SUPERSEDES` tip is not.
+A candidate still waiting for a verdict is untouched by such a switch.
+
+`prepare_component_version` stores the child as a `candidate` as
+soon as the version directory exists (a self-task thread lives only as
+long as the process, and a restart mid-iteration must still leave a
+trace), first making sure the parent has an entity — created from the
+parent's own manifest, `converged`, when nobody stored one, so every
+lineage has a root. `create_component` stores `<name>@<version>` the same
+way with no parent and no edge, whether `<version>` is `0.1.0` or the next
+minor above a removed lineage; its content says so.
+`announce_component_version` stamps
+`provenance.announced_at` or, on `outcome: "failed"`, settles the entity
+with the summary as the reason. It is called once, from the self-task
+thread that built the version: a call from a thread whose metadata is
+readable and is not a self-task is refused, and a second candidate
+announcement for the same component from the same thread while the first
+is still pending is refused too, naming the earlier version. Memory
+failing never fails either tool; the result's `lineage:` line says what
+happened.
+
+The host's verdict arrives two ways, and both settle the same entity
+idempotently — whichever lands first wins, the other finds nothing left to
+do. The host **pushes** it to `POST /components/outcome` on the agent's own
+server (`HOST_CONTRACT.md` §3.6), and the agent **polls** for it: the
+`lineageReconciler` starts after assembly with every version under the
+host-managed root this agent produced whose entity is still a `candidate`,
+reads the host's `GET /status` every 3 s for up to 120 s (a swap's health
+wait) and settles from `lastOutcome` (`activated` → `converged`, `reverted`,
+`failed`, `removed` → `removed`). A version the host no longer lists as
+candidate or active falls into one of three buckets, none of which is a
+verdict from anyone but this side:
+
+- **never announced** — the candidate event never reached the host, so it
+  may simply still be under construction (a self-task in another thread
+  can be mid-edit when a turn elsewhere runs this check). A turn never
+  settles it; only a boot pass may, since a restart ends any self-task
+  that was still running: `abandoned`, "never announced".
+- **displaced** — it was announced, but a different, newer candidate for
+  the same component now occupies the host's slot: `abandoned`, "replaced
+  by `<version>`". Nobody rejected this one; it was simply superseded
+  before a verdict arrived.
+- **genuinely gone**, with nothing having taken its place — a keeper's
+  reject leaves no outcome behind, so this is `rejected`: at once during a
+  turn, and at boot only once the poll has waited long enough (the cap) for
+  a swap in flight to be recorded.
+
+`removed` does not fit that pending-version poll: it targets a version
+whose entity is already `converged`, not one the reconciler is watching
+for a first verdict. So a separate, one-time read at boot (before the
+pending-poll loop, and independent of whether anything is pending) checks
+the same `/status` body for any entry whose `lastOutcome.result` is
+`removed`, has no `active`, and names a version this agent produced; a
+matching entity that is `converged` or still `candidate` is settled
+`removed` right there. This is the catch-up for a push that had nobody
+listening — the agent was down when the host removed the version and
+restarted it without one.
+
+Unlike `rejected` and `reverted`, `abandoned` (and `removed`) carries no
+judgment on the
+change itself — the `iterate-component` skill treats it as work that may
+be retried or resumed, not as a verdict to work around. The turn check
+runs from `componentsMiddleware` at most once a minute and only while
+something is pending. Nothing here can break boot: no memory adapter or no
+`SIA_DAEMON_URL` latches the reconciler off for the process, and every
+failure is logged and dropped.
+
+Search is by words, not metadata: the need, the names and the outcome are
+in the title, content and tags for that reason. A raw entity can be
+shadowed by a higher-level hit on the same words, so filter by
+`entity_type: "component_version"` when looking lineage up.
+
 ---
 
 ## 7. Remote tools
 
 Tools can also come from **servers** the agent talks to over the Model
-Context Protocol. The same registrar carries them and the `kind: tools`
-components of §4.
+Context Protocol, over HTTP (Streamable HTTP). A middleware advertises them
+to the model next to the built-in tools and routes calls to them.
 
 ### Configuration
 
 `SIA_SERVERS_FILE` names a JSON file. When unset it defaults to
 `$SIA_COMPONENTS_DIR/servers.json`; when neither exists, no remote tools are
-registered. The file is subject to the same containment rule as manifests
-(it must resolve inside the components root) and, like manifests, is
-re-read on every agent turn.
+registered. When a components root is set, the file is subject to the same
+containment rule as manifests (it must resolve inside that root, through any
+link); with no root, an explicit `SIA_SERVERS_FILE` is used as given. The
+file is re-read on every model call.
 
 ```json
 {
   "<server>": {
-    "transport": "stdio" | "http",
-    "command": "…",  "args": ["…"],      // stdio
-    "url": "http://127.0.0.1:…",         // http
-    "scope": ["tag-a", "tag-b"]          // optional
+    "transport": "http",
+    "url": "https://…/mcp",
+    "headers": { "Authorization": "Bearer ${SOME_TOKEN}" },  // optional
+    "scope": "tag-a"                                          // optional; or ["tag-a", "tag-b"]
   }
 }
 ```
 
 Server names follow the same `^[a-z][a-z0-9-]*$` rule as component names.
-The client is `MultiServerMCPClient` from `@langchain/mcp-adapters` (already
-a dependency), one connection per server, sessions established per call.
+`url` must be an absolute `http:` or `https:` URL. Each entry is validated on
+its own: a bad entry is dropped with a warning and its siblings still load.
+A missing file is "no servers"; a file that is not a JSON object is ignored
+with a warning. Nothing about the file can fail boot or a turn.
+
+**Headers and `${VAR}`.** A header value may reference `${NAME}`, expanded
+from the agent's process env each time the file is read. An entry that
+references an unset (or empty) variable is dropped whole — the literal
+reference is never sent.
+
+`${VAR}` expansion is **not a credential channel.** Anything in the agent's
+env is readable by the agent (and by any component or shell command it
+runs), so a real upstream credential must never be put there for a header to
+expand. A host that holds the credential points the entry's `url` at its own
+egress route (`HOST_CONTRACT.md` §3.7) and references only the agent's own
+host token — `"Authorization": "Bearer ${SIA_DAEMON_TOKEN}"` — and injects
+the real credential on the way out, exactly as for `deps.host` (§5).
+
+The client is `MultiServerMCPClient` from `@langchain/mcp-adapters`, loaded
+only when the file names at least one server. One client serves one
+resolved configuration: an unchanged file (after expansion) reuses it, a
+changed one closes it and connects the next, one rebuild at a time. A server
+that fails to connect contributes no tools; the others still do. Each remote
+call times out after 60 s.
 
 **Rejected:** a JSON blob in an environment variable (the config is
 otherwise flat scalars and env is not re-readable at runtime), and a server
@@ -449,20 +797,22 @@ list inside each component (a server is not a version of anything).
 A server with no `scope` is always active. A server with scopes is active
 for a run only if at least one of them appears in
 `config.configurable.scopes` (a `string[]` the caller passes per
-invocation). The agent never interprets a scope; it is an opaque tag that
-the caller and the server agree on.
+invocation; any other value counts as no scopes). The agent never
+interprets a scope; it is an opaque tag that the caller and the server agree
+on. A call to a tool whose server is not active for the run is answered as
+an unknown tool.
 
 ### Naming and ordering
 
 Every remote tool is registered as `mcp__<server>__<tool>`. The tool pool
-presented to the model is: built-in tools first, then tools from
-components and servers, deduplicated by name with the first occurrence
-winning. The order is stable across turns so prompt caches stay warm.
+presented to the model is: built-in tools first, then remote tools by server
+name, each server's tools in the order it lists them. On a name collision
+the built-in wins and the remote tool is not advertised. The order is stable
+across turns so prompt caches stay warm.
 
 ### Exclusion grammar
 
-`excludedTools` (harness profile and manifest `profile`) currently matches
-exact tool names. It is widened so that an entry may be:
+`excludedTools` (harness profile and manifest `profile`) entries may be:
 
 | Entry | Excludes |
 |---|---|
@@ -471,24 +821,32 @@ exact tool names. It is widened so that an entry may be:
 | `mcp__<server>__*` | same, explicit form |
 | `mcp__<server>__<tool>` | that one remote tool |
 
-Matching becomes a function in `src/middleware/tool_exclusion.ts` rather
-than a `Set.has` lookup.
+A server entry matches the whole server segment only: `mcp__docs` does not
+exclude `mcp__docs2__search`. Matching is `isToolExcluded` in
+`src/middleware/tool_exclusion.ts`.
+
+Exclusion is enforced on both sides. The tool-exclusion middleware strips
+excluded tools from what the model is shown, and the remote-tools middleware
+refuses to route an excluded name, so a call the model invents for a hidden
+tool still never reaches its server — it gets an error tool result instead.
 
 ### The registrar
 
-`createRemoteToolsMiddleware` (`src/middleware/remote-tools.ts`) does both
-halves that runtime tool registration requires:
+`createRemoteToolsMiddleware` (`src/middleware/remote-tools.ts`, named
+`remoteToolsMiddleware`) does both halves that runtime tool registration
+requires:
 
-- `wrapModelCall` appends the active tools to `request.tools`.
-- `wrapToolCall` routes a call whose name matches a registered tool to the
-  server (or to the component's `StructuredTool`), and passes everything
-  else through.
+- `wrapModelCall` appends the active remote tools to `request.tools`.
+- `wrapToolCall` routes a call whose name is an active remote tool to its
+  server, and passes everything else — built-in tools and unknown names —
+  through untouched. A remote call that throws becomes an error tool
+  result; it never fails the run.
 
-It is inserted as a novel middleware, which places it before the tail
-segment — and therefore before the tool-exclusion middleware, so exclusions
-apply to remote tools too.
-
-### Not built yet
+It is the last entry of the main stack's core segment, which places it
+before the tail — and therefore before the tool-exclusion middleware, so
+exclusions apply to remote tools too. It is registered only when a servers
+file or a components root is configured. For now it is in the **main stack
+only**: sub-agents and the code-execution tool API do not see remote tools.
 
 Deferred tool schemas (advertising a name and loading the schema on first
 use) are a known optimisation for large tool pools. The naming and ordering
@@ -504,7 +862,7 @@ These are the properties every change that touches this area must keep:
 2. **Fail closed on contracts.** Every unclassifiable outcome is
    `ok: false` (§6).
 3. **Containment.** Nothing is read from outside a component root, through
-   any link (§2). The servers file is inside the root too (§7).
+   any link (§2). The servers file is inside the root too, when there is one (§7).
 4. **The code is restart-gated.** No in-process hot swap of loaded modules;
    the manifest is the only live surface (§4).
 5. **Scaffolding cannot be replaced.** `replaces` never names a required
@@ -520,6 +878,12 @@ Explicitly not part of this design, so nobody has to decide them again
 before the loader ships:
 
 - deferred tool schemas (§7)
+- `stdio` remote servers. A stdio server is a child process of the agent,
+  so it would inherit the agent's own sandbox — the filesystem and network
+  limits the host applies to the agent would bound the server too, and a
+  server that needs more could not get it without widening the agent's.
+  Entries with `"transport": "stdio"` are skipped with a warning.
+- remote tools in the sub-agent stack and the code-execution tool API (§7)
 - lifecycle hooks around tool calls or turns
 - permission modes or approval prompts for tools
 - any registry or marketplace of components

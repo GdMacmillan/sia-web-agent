@@ -483,7 +483,7 @@ export const updateEntityStatusTool = new DynamicStructuredTool({
 export const updateEntityTool = new DynamicStructuredTool({
   name: "update_entity",
   description:
-    "Update one or more fields of an existing entity with optional update modes (replace, append, merge). Maintains version history (last 3 versions) for audit and potential rollback. Use this for comprehensive entity updates; use update_entity_status for status-only changes.",
+    "Update one or more fields of an existing entity with optional update modes (replace, append, merge), merge keys into its custom metadata, and link it to other entities. Maintains version history (last 3 versions) for audit and potential rollback. Use this for comprehensive entity updates; use update_entity_status for status-only changes.",
   schema: z.object({
     entity_id: z.string().describe("The ID of the entity to update"),
     title: z.string().optional().describe("New title (replaces existing)"),
@@ -507,6 +507,24 @@ export const updateEntityTool = new DynamicStructuredTool({
       .describe("New priority level"),
     context: z.string().optional().describe("New context"),
     status: z.string().optional().describe("New status"),
+    metadata: z
+      .record(z.string(), z.any())
+      .optional()
+      .describe(
+        "Custom metadata keys to set; merged into the entity's existing metadata (other keys are kept)",
+      ),
+    related_entity_ids: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Existing entity IDs to link this entity to (edges go from this entity to each target)",
+      ),
+    relationship_types: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Relationship types parallel to related_entity_ids (e.g., 'SUPERSEDES', 'DEPENDS_ON'); defaults to 'RELATED_TO'",
+      ),
     notes: z
       .string()
       .optional()

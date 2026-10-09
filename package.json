@@ -1,6 +1,6 @@
 {
   "name": "@sia-web/agent",
-  "version": "0.12.2",
+  "version": "0.13.0",
   "description": "SIA agent runtime — a LangGraph deep-agent with prompts, skills, and tool middleware. Extracted from sia-web.",
   "license": "MIT",
   "type": "module",
@@ -18,7 +18,8 @@
     "test:interpreter": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.interpreter.js",
     "test:integration": "RUN_INTEGRATION=true jest tests/integration --forceExit",
     "lint": "eslint src",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sync:seed": "node scripts/sync-seed-components.mjs"
   },
   "dependencies": {
     "@huggingface/inference": "4.13.28",

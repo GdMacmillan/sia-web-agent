@@ -10,6 +10,7 @@ describe("File Tools", () => {
   let fileEditTool: any;
   let fileCreateTool: any;
   let fileDeleteTool: any;
+  let searchTool: any;
   let testDir: string;
 
   beforeEach(async () => {
@@ -18,7 +19,8 @@ describe("File Tools", () => {
 
     // Create fresh tool instances
     tools = createFileTools(testDir);
-    [fileReadTool, fileEditTool, fileCreateTool, fileDeleteTool] = tools;
+    [fileReadTool, fileEditTool, fileCreateTool, fileDeleteTool, searchTool] =
+      tools;
   });
 
   afterEach(async () => {
@@ -542,6 +544,23 @@ describe("File Tools", () => {
 
       // Should fail because unlink doesn't work on directories
       expect(result).toContain("Error");
+    });
+  });
+
+  describe("search", () => {
+    it("should treat a pattern starting with '-' as a literal, not a ripgrep flag", async () => {
+      await fs.writeFile(
+        path.join(testDir, "flaglike.txt"),
+        "-nonexistent-flag-xyz literal match\n",
+      );
+
+      const result = await searchTool.func({
+        pattern: "-nonexistent-flag-xyz",
+      });
+
+      expect(result).toContain("literal match");
+      expect(result).not.toContain("unrecognized");
+      expect(result).not.toMatch(/^Error/);
     });
   });
 

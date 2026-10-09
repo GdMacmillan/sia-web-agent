@@ -14,6 +14,7 @@ export {
   type ParseManifestResult,
 } from "./manifest.js";
 export {
+  CURRENT_FILE_PATTERN,
   CURRENT_LINK,
   MANIFEST_FILE,
   MAX_MANIFEST_BYTES,
@@ -40,6 +41,13 @@ export {
   type InvokeOptions,
 } from "./sdk.js";
 export {
+  createComponentHost,
+  upstreamNotConfiguredMessage,
+  type ComponentHost,
+  type CreateComponentHostOptions,
+  type HostUpstream,
+} from "./host.js";
+export {
   defaultImportModule,
   isMiddlewareLike,
   isToolLike,
@@ -64,6 +72,7 @@ export {
   type ActiveComponentsState,
 } from "./registry.js";
 export {
+  MIDDLEWARE_ONLY_TOOL_NAMES,
   MIDDLEWARE_TOOL_NAMES,
   SEED_COMPONENTS_DIRNAME,
   prepareComponentAssembly,
@@ -72,8 +81,79 @@ export {
   type PrepareComponentAssemblyOptions,
 } from "./assemble.js";
 export {
+  VERSION_BUMPS,
+  bumpVersion,
+  describeComponent,
+  isVersionBump,
+  listComponentVersions,
+  planComponentVersion,
+  planNewComponent,
+  readComponentVersion,
+  type ComponentDescription,
+  type DescribeComponentInput,
+  type DescribeComponentResult,
+  type PlanComponentVersionInput,
+  type PlanComponentVersionResult,
+  type PlanNewComponentInput,
+  type PlanNewComponentResult,
+  type PlannedComponentVersion,
+  type PlannedNewComponent,
+  type ReadComponentVersionInput,
+  type ReadComponentVersionResult,
+  type VersionBump,
+} from "./authoring.js";
+export {
+  NEW_COMPONENT_VERSION,
+  TOOL_NAME_PATTERN,
+  defaultToolName,
+  newComponentManifest,
+  stubContractSource,
+  stubEntrySource,
+  type NewComponentManifestInput,
+} from "./scaffold.js";
+export {
   DEFAULT_CONTRACT_TIMEOUT_MS,
   runComponentContract,
   type ContractResult,
+  type LoadedFile,
   type RunContractOptions,
 } from "./contract.js";
+export {
+  LINEAGE_ENTITY_TYPE,
+  OUTCOMES,
+  SUPERSEDES,
+  buildLineageEntity,
+  buildParentEntity,
+  decideReconcile,
+  lineageTitle,
+  outcomeFromHostResult,
+  parseLineageRef,
+  settlePayload,
+  type HostComponentView,
+  type LineageEntityInput,
+  type LineageOutcome,
+  type PendingVersion,
+  type ReconcileDecision,
+  type SettledOutcome,
+  type TrackedPendingVersion,
+  type Verdict,
+} from "./lineage.js";
+export { parseHostStatus, readHostComponents } from "./lineage-host.js";
+export {
+  ensureParentEntity,
+  findLineageEntity,
+  markLineageAnnounced,
+  settleLineageEntity,
+  storeLineageEntity,
+} from "./lineage-store.js";
+export {
+  _setLineageReconcilerForTests,
+  createLineageReconciler,
+  discoverProducedVersions,
+  getLineageReconciler,
+  type HostOutcomeFrame,
+  type HostOutcomeResult,
+  type LineageReconciler,
+  type LineageReconcilerOptions,
+  type TrackedVersion,
+} from "./lineage-reconcile.js";

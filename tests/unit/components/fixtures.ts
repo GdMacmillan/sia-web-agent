@@ -29,6 +29,12 @@ export interface ComponentFixtureOptions {
   current?: boolean;
   /** Where `current` points, relative to the component dir (default `.versions/<version>`). */
   currentTarget?: string;
+  /**
+   * Write `current` as a one-line regular file naming the version instead
+   * of a link (default false). `currentText` overrides the file content.
+   */
+  currentFile?: boolean;
+  currentText?: string;
 }
 
 export interface ComponentFixture {
@@ -142,7 +148,12 @@ export function writeComponent(
     writeFileSync(contractPath, options.contract);
   }
 
-  if (options.current !== false) {
+  if (options.currentFile) {
+    writeFileSync(
+      path.join(componentDir, "current"),
+      options.currentText ?? `${version}\n`,
+    );
+  } else if (options.current !== false) {
     const target = options.currentTarget ?? path.join(".versions", version);
     symlinkSync(target, path.join(componentDir, "current"), "dir");
   }

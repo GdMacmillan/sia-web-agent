@@ -6,8 +6,8 @@
  * the error text. The runner never throws.
  */
 
-import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import semver from "semver";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -19,12 +19,8 @@ import {
   normalizeToolResult,
 } from "../code-execution/ipc-bridge.js";
 import { resolveComponentRoots } from "./assemble.js";
-import {
-  VERSIONS_DIR,
-  describeComponentVersion,
-  discoverComponents,
-  type DiscoveredComponent,
-} from "./discovery.js";
+import { readComponentVersion } from "./authoring.js";
+import { discoverComponents, type DiscoveredComponent } from "./discovery.js";
 import {
   defaultImportModule,
   isMiddlewareLike,
@@ -47,12 +43,25 @@ import {
 /** Default contract timeout. */
 export const DEFAULT_CONTRACT_TIMEOUT_MS = 30_000;
 
+/** A file the runner read, identified by its content. */
+export interface LoadedFile {
+  /** Path relative to the version directory. */
+  file: string;
+  /** First 12 hex digits of the sha256 of the bytes on disk. */
+  sha256: string;
+}
+
 export interface ContractResult {
   ok: boolean;
   durationMs: number;
   /** The targeted version, once its manifest parsed; null before that. */
   version: string | null;
   sdkVersion: string;
+  /**
+   * The entry and contract as they were on disk just before this run
+   * imported them; absent when the run stopped before that point.
+   */
+  loaded?: { entry: LoadedFile; contract: LoadedFile };
   error?: string;
 }
 
@@ -76,16 +85,49 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The roots to search: the active set's, else whatever exists on disk now. */
-function contractRoots(): string[] {
-  const active = getActiveComponents().roots;
-  if (active.length > 0) {
-    return [...active];
+function describeFile(filePath: string, versionDir: string): LoadedFile {
+  let sha256: string;
+  try {
+    sha256 = createHash("sha256").update(readFileSync(filePath)).digest("hex").slice(0, 12);
+  } catch (_error) {
+    sha256 = "unreadable";
   }
-  return resolveComponentRoots({
+  return { file: path.relative(versionDir, filePath), sha256 };
+}
+
+/**
+ * The roots to search, in precedence order: the host-managed root as
+ * configured now (so one that appeared after assembly is searched, and a
+ * version written into it during this process can be checked), then the
+ * roots recorded at assembly, then whatever else exists on disk now.
+ * Deduplicated by real path.
+ */
+function contractRoots(): string[] {
+  const componentsDir = getConfig().runtime.componentsDir;
+  const now = resolveComponentRoots({
     projectRoot: getProjectRoot(),
-    componentsDir: getConfig().runtime.componentsDir,
+    componentsDir,
   });
+  const host =
+    componentsDir === undefined
+      ? []
+      : now.filter((root) => root === path.resolve(componentsDir));
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const root of [...host, ...getActiveComponents().roots, ...now]) {
+    let key: string;
+    try {
+      key = realpathSync(root);
+    } catch (_error) {
+      key = path.resolve(root);
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    roots.push(root);
+  }
+  return roots;
 }
 
 /** Resolve `name` (and optionally `version`) to a described component. */
@@ -107,46 +149,7 @@ function resolveTarget(
     return { ok: false, reason: `unknown component "${name}"` };
   }
 
-  if (semver.valid(version) === null) {
-    return { ok: false, reason: `invalid version "${version}"` };
-  }
-  for (const rawRoot of roots) {
-    const root = path.resolve(rawRoot);
-    const componentDir = path.join(root, name);
-    if (!existsSync(componentDir)) {
-      continue;
-    }
-    if (!isSafePath(componentDir, root)) {
-      return {
-        ok: false,
-        reason: "component directory resolves outside the component root",
-      };
-    }
-    const target = path.join(componentDir, VERSIONS_DIR, version);
-    if (!existsSync(target)) {
-      return {
-        ok: false,
-        reason: `version "${version}" of "${name}" not found`,
-      };
-    }
-    if (!isSafePath(target, root)) {
-      return {
-        ok: false,
-        reason: `version "${version}" resolves outside the component root`,
-      };
-    }
-    let versionDir: string;
-    try {
-      versionDir = realpathSync(target);
-      if (!statSync(versionDir).isDirectory()) {
-        return { ok: false, reason: `version "${version}" is not a directory` };
-      }
-    } catch (error: unknown) {
-      return { ok: false, reason: errorMessage(error) };
-    }
-    return describeComponentVersion(root, name, versionDir, version);
-  }
-  return { ok: false, reason: `unknown component "${name}"` };
+  return readComponentVersion({ name, version, roots });
 }
 
 /** The tools a component value itself contributes, by kind. */
@@ -227,12 +230,14 @@ export async function runComponentContract(
   const started = Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_CONTRACT_TIMEOUT_MS;
   let version: string | null = null;
+  let loaded: ContractResult["loaded"];
 
   const fail = (error: string): ContractResult => ({
     ok: false,
     durationMs: Date.now() - started,
     version,
     sdkVersion: SDK_VERSION,
+    ...(loaded !== undefined ? { loaded } : {}),
     error,
   });
 
@@ -265,6 +270,10 @@ export async function runComponentContract(
       return fail(`no contract file: ${manifest.contract}`);
     }
 
+    loaded = {
+      entry: describeFile(component.entryPath, component.versionDir),
+      contract: describeFile(component.contractPath, component.versionDir),
+    };
     const importModule = opts.importModule ?? defaultImportModule;
     const run = async (): Promise<void> => {
       const entryModule = (await importModule(component.entryPath)) as {
@@ -316,6 +325,7 @@ export async function runComponentContract(
       durationMs: Date.now() - started,
       version,
       sdkVersion: SDK_VERSION,
+      loaded,
     };
   } catch (error: unknown) {
     return fail(errorMessage(error));

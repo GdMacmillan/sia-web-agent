@@ -29,3 +29,5 @@ export {
   traverseGraphTool,
 } from "./memory-tools.js";
 export { createChecklistTools } from "./checklist-tools.js";
+export { createSelfTaskTool, resolveOwnServerUrl } from "./self-task-tool.js";
+export { createComponentTools } from "./component-tools.js";

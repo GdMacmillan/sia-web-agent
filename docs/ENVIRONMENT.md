@@ -94,13 +94,33 @@ spec: [`COMPONENTS.md`](./COMPONENTS.md).
 | Variable | Default | Purpose |
 |---|---|---|
 | `SIA_COMPONENTS_DIR` | unset | Host-managed component root (`<name>/current/component.json`). Shadows the seed components in `<projectRoot>/components`. Unset → seed components only. Read once at assembly by `src/components/assemble.ts` (`getConfig().runtime.componentsDir`); see [`COMPONENTS.md`](./COMPONENTS.md). |
-| `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON list of remote tool servers with optional scope tags. Missing → no remote tools. |
+| `SIA_SERVERS_FILE` | `$SIA_COMPONENTS_DIR/servers.json` | JSON object of remote (HTTP) tool servers keyed by server name, with optional scope tags. Missing → no remote tools. Re-read on every model call by `src/middleware/remote-tools.ts`; see [`COMPONENTS.md`](./COMPONENTS.md) §7. |
+
+New component versions (`prepare_component_version`) and new components
+(`create_component`) are written under `SIA_COMPONENTS_DIR` only; with it
+unset both tools refuse. The
+`announce_component_version` tool posts to
+`{SIA_DAEMON_URL}/chat/component-version` and, when enabled, to
+`{SIA_DAEMON_URL}/chat/publish` with `SIA_DAEMON_TOKEN` (see
+[`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §3.4); with either unset the
+summary stays in the thread.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIA_ANNOUNCE_TO_CHAT` | unset (off) | Truthy (`1`/`true`/`yes`/`on`) lets `announce_component_version` also post one announcement to the room the need was raised in (none when it was not raised in a room). Off keeps announcements to the host event and the thread. |
+
+### Own server
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIA_SERVER_URL` | derived from `--port`, else `http://127.0.0.1:2024` | Base URL of the server the agent runs inside. `start_self_task` opens threads on it. Read by `src/tools/self-task-tool.ts` (`resolveOwnServerUrl`); also `getConfig().runtime.serverUrl`. |
 
 ### Web search
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `TAVILY_API_KEY` | `""` | Tavily API key for the `web_search` tool. Empty disables web search. |
+| `TAVILY_BASE_URL` | (unset) | Optional override base URL for the Tavily API (self-hosted/proxy deployments). Uses Tavily's default endpoint when unset. |
 
 ## Middleware tuning
 
@@ -153,6 +173,7 @@ Outcome tracking ranks memory results by historical success rate.
 | `ENABLE_CODE_INTERPRETER` | `false` | Set to `true` to enable the opt-in QuickJS-sandboxed `eval` tool (parallel subagent fan-out + programmatic tool calling). The default tsx `execute_code` tool is unaffected. See [`ARCHITECTURE.md`](./ARCHITECTURE.md#code-interpreter-quickjs). |
 | `MEMORY_AUGMENTATION_ENABLED` | `true` | Set to `false` to stop attaching related graph-memory entries to `grep` / `glob` / `search` / `bash` search results. On by default; silently inactive when graph memory is unavailable (no `SIA_WORKSPACE_ID` / host daemon). |
 | `MEMORY_AUGMENTATION_BUDGET_MS` | `500` | Hard ceiling on the per-search memory lookup; a slow lookup yields no context, never a slow tool. |
+| `SOURCE_EDIT_NOTE_ENABLED` | `true` | Set to `false` to stop appending the installed-source note to successful `write_file` / `edit_file` results inside the project root. The note never appears when the project root is a version-controlled working tree (it holds `.git`). |
 
 ## Runtime
 

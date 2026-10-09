@@ -24,7 +24,7 @@ src/
 ├── backend-config.ts        # default filesystem backend factory
 ├── backends/                # filesystem backend implementations
 ├── clients/                 # HTTP clients (graph-memory)
-├── code-execution/          # TS/JS execution sandbox
+├── code-execution/          # TS/JS execution via tsx (plain child process, not sandboxed)
 ├── config/                  # env-driven config loader + model factories
 ├── middleware/              # all middleware (see below)
 ├── schemas/                 # zod schemas
@@ -79,8 +79,9 @@ the source of truth; the order matters.
 | 3 | `usageEventsMiddleware` | Posts raw token usage to the host's `SIAD_EVENTS_URL` after every LLM call. No-ops when env unset. See [`HOST_CONTRACT.md`](./HOST_CONTRACT.md). |
 | 4 | `todoListMiddleware()` | LangChain built-in. Provides `write_todos` / `update_todo_status` tools for structured task tracking. |
 | 5 | `createFilesystemMiddleware` | Provides `ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep` tools backed by the configured `BackendProtocol`. |
+| 5a | `createSourceEditNoteMiddleware` | After a successful `write_file` / `edit_file` inside the installed source tree, appends a note that an update of the installed version replaces the tree (so the edit will not carry forward) and that the edit runs unreviewed until then. Never touches the request or a failed result; silent in a version-controlled working tree, in `.code-workspace/` and `node_modules/`, and when `SOURCE_EDIT_NOTE_ENABLED=false`. Registered in the sub-agent stack too. |
 | 6 | `createSkillsMiddleware` *(if projectRoot set)* | Indexes `/skills/SKILL.md` files, injects their summaries into the system prompt, exposes `load_skill` for on-demand expansion. |
-| 7 | `createCodeExecutionMiddleware` *(if projectRoot set)* | Provides `execute_code` for TypeScript/JavaScript execution via tsx. Max execution time: 120s. |
+| 7 | `createCodeExecutionMiddleware` *(if projectRoot set)* | Provides `execute_code` for TypeScript/JavaScript execution via tsx. Max execution time: 120s. The bundled registration evaluates the in-tree twin of the seed component `components/execute-code`; with the seed root present the loader's instance replaces it by name (see [`COMPONENTS.md`](./COMPONENTS.md)). |
 | 7a | `createCodeInterpreterMiddleware` *(opt-in, `ENABLE_CODE_INTERPRETER=true`)* | Provides the sandboxed QuickJS `eval` tool with in-REPL `task()` subagent fan-out. Lazily loaded. See [Code interpreter (QuickJS)](#code-interpreter-quickjs). |
 | 8 | `createSubAgentMiddleware` | Provides the `task` tool. Delegates work to sub-agents (see [Sub-agents](#sub-agents)). |
 | 9 | `summarizationMiddleware` | LangChain built-in. Compresses conversation history when token usage approaches a configured threshold. |
@@ -217,8 +218,9 @@ Additional tools come from middleware (not from `createStandardTools`):
 - **Todos** — `write_todos`, `update_todo_status` (via `todoListMiddleware`).
 - **Skills** — `load_skill` (via `createSkillsMiddleware`, only when
   `projectRoot` is set).
-- **Code execution** — `execute_code` (via `createCodeExecutionMiddleware`,
-  only when `projectRoot` is set).
+- **Code execution** — `execute_code` (via the seed component
+  `components/execute-code`, or its bundled twin
+  `createCodeExecutionMiddleware`; only when `projectRoot` is set).
 - **Sub-agent delegation** — `task` (via `createSubAgentMiddleware`).
 
 ## Backends

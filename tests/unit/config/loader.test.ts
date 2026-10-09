@@ -597,6 +597,24 @@ describe("loadConfig", () => {
 
       expect(config.runtime.siaProjectRoot).toBeUndefined();
     });
+
+    it("reads SIA_SERVERS_FILE when set", () => {
+      process.env.OPENROUTER_API_KEY = "sk-key";
+      process.env.SIA_SERVERS_FILE = "/tmp/servers.json";
+
+      const config = loadConfig();
+
+      expect(config.runtime.serversFile).toBe("/tmp/servers.json");
+    });
+
+    it("leaves serversFile undefined when SIA_SERVERS_FILE is unset or empty", () => {
+      process.env.OPENROUTER_API_KEY = "sk-key";
+      delete process.env.SIA_SERVERS_FILE;
+      expect(loadConfig().runtime.serversFile).toBeUndefined();
+
+      process.env.SIA_SERVERS_FILE = "";
+      expect(loadConfig().runtime.serversFile).toBeUndefined();
+    });
   });
 });
 

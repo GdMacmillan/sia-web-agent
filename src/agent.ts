@@ -26,6 +26,7 @@ import { MessagesAnnotation } from "@langchain/langgraph";
 import {
   createFilesystemMiddleware,
   createMemoryAugmentationMiddleware,
+  createSourceEditNoteMiddleware,
   createFilesystemTools,
   createSubAgentMiddleware,
   createPatchToolCallsMiddleware,
@@ -40,6 +41,10 @@ import {
 } from "./middleware/index.js";
 import { mergeMiddlewareStack } from "./middleware/utils.js";
 import { createToolExclusionMiddleware } from "./middleware/tool_exclusion.js";
+import {
+  createRemoteToolsMiddleware,
+  REMOTE_TOOLS_MIDDLEWARE_NAME,
+} from "./middleware/remote-tools.js";
 import {
   resolveHarnessProfile,
   mergeHarnessProfile,
@@ -133,6 +138,7 @@ export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
   "todoListMiddleware",
   "FilesystemMiddleware",
   "memoryAugmentationMiddleware",
+  "sourceEditNoteMiddleware",
   "skillsMiddleware",
   "CodeExecutionMiddleware",
   "CodeInterpreterMiddleware",
@@ -142,6 +148,7 @@ export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
   "PromptCachingMiddleware",
   "knowledgeFormationMiddleware",
   "HumanInTheLoopMiddleware",
+  REMOTE_TOOLS_MIDDLEWARE_NAME,
 ]);
 
 /**
@@ -367,6 +374,8 @@ export async function createDeepAgent<
     }),
     // Attach related graph-memory entries to search-type tool results
     createMemoryAugmentationMiddleware(),
+    // Note on a successful write/edit of the installed source tree
+    createSourceEditNoteMiddleware({ projectRoot }),
     // Loads skills from /skills directory and injects summaries into system prompt
     ...(projectRoot
       ? [
@@ -381,7 +390,6 @@ export async function createDeepAgent<
           createCodeExecutionMiddleware({
             projectRoot,
             tools: [...tools, ...filesystemTools],
-            maxExecutionTime: 120000,
           }),
         ]
       : []),
@@ -402,6 +410,17 @@ export async function createDeepAgent<
     }),
     // Patches tool calls to ensure compatibility across different model providers
     createPatchToolCallsMiddleware(),
+    // Tools from the servers file (docs/COMPONENTS.md §7). Main stack only;
+    // absent unless a servers file or component root is configured, so the
+    // agent is unchanged without one. Sits before the tail and the exclusion
+    // middleware, so exclusions strip remote tools too.
+    ...(runtimeConfig.runtime.serversFile || runtimeConfig.runtime.componentsDir
+      ? [
+          createRemoteToolsMiddleware({
+            excludedTools: harnessProfile.excludedTools,
+          }),
+        ]
+      : []),
   ];
 
   // The sub-agent stack. Same shape as the main core minus delegation, with
@@ -422,6 +441,8 @@ export async function createDeepAgent<
     }),
     // Attach related graph-memory entries to search-type tool results
     createMemoryAugmentationMiddleware(),
+    // Note on a successful write/edit of the installed source tree
+    createSourceEditNoteMiddleware({ projectRoot }),
     // Subagent middleware: Skills system for sub-agents (allows reading skill files)
     ...(projectRoot
       ? [
@@ -436,7 +457,6 @@ export async function createDeepAgent<
           createCodeExecutionMiddleware({
             projectRoot,
             tools: [...tools, ...filesystemTools],
-            maxExecutionTime: 120000,
           }),
         ]
       : []),

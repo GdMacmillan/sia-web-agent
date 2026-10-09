@@ -136,6 +136,18 @@ export interface FeaturesConfig {
   outcomeTracking: OutcomeTrackingConfig;
   codeInterpreter: CodeInterpreterConfig;
   memoryAugmentation: MemoryAugmentationConfig;
+  sourceEditNote: SourceEditNoteConfig;
+}
+
+export interface SourceEditNoteConfig {
+  /**
+   * Append a short note to a successful `write_file` / `edit_file` result
+   * whose path lies in the agent's installed source tree, saying that the
+   * next install replaces the edit and that it runs unreviewed until then.
+   * Never shown in a version-controlled working tree. Default: true.
+   * Opt-out via `SOURCE_EDIT_NOTE_ENABLED=false`.
+   */
+  enabled: boolean;
 }
 
 export interface MemoryAugmentationConfig {
@@ -223,6 +235,8 @@ export interface ServicesConfig {
   tavily: {
     /** Tavily API key for web search */
     apiKey: string;
+    /** Optional override base URL for the Tavily API (self-hosted/proxy deployments) */
+    baseUrl?: string;
   };
 }
 
@@ -254,6 +268,21 @@ export interface RuntimeConfig {
    * seed root is read. See `docs/COMPONENTS.md`.
    */
   componentsDir: string | undefined;
+  /**
+   * Remote tool servers file (`SIA_SERVERS_FILE`).
+   *
+   * Lists the remote (MCP over HTTP) servers whose tools the agent may call.
+   * Undefined means `<componentsDir>/servers.json` when a component root is
+   * set, else no remote tools. See `docs/COMPONENTS.md` §7.
+   */
+  serversFile: string | undefined;
+  /**
+   * Base URL of the server this agent runs inside (`SIA_SERVER_URL`).
+   *
+   * Used by the agent to open threads on itself. Optional: when unset the
+   * agent derives it from its own `--port` argument, else `:2024`.
+   */
+  serverUrl: string | undefined;
   /** Unique agent identifier (default: "self-improving-agent") */
   agentId: string;
   /** Human-friendly agent name (default: "Self-Improving Agent") */

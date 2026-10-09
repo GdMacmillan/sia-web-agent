@@ -7,6 +7,8 @@ that spawns it) for three things only:
 2. One **loopback HTTP endpoint** the agent can POST usage events to.
 3. One **loopback RPC endpoint** the graph-memory adapter calls (§3).
    Optional: without it the agent runs with graph memory unavailable.
+   The same loopback API optionally carries chat, component status and
+   upstream egress (§3.4–§3.7).
 
 Anything beyond that — DB connections, message buses, deployment topology —
 is the host's concern, not the agent's. A host that honors this contract
@@ -91,26 +93,52 @@ Tokens are dropped when the child exits.
 
 The agent can assemble versioned code components and remote tool servers
 from disk. Full spec: [`COMPONENTS.md`](./COMPONENTS.md); the loader and
-contract runner live in `src/components/` (remote tool servers are not
-built yet).
+contract runner live in `src/components/`; remote tool servers are read by
+`src/middleware/remote-tools.ts` (`COMPONENTS.md` §7).
 
 | Variable | Purpose | Required |
 |---|---|---|
 | `SIA_COMPONENTS_DIR` | Root directory of host-managed component versions (`<name>/current/component.json`). Shadows the seed components shipped in the agent source. | No — absent means only the shipped seed components load |
-| `SIA_SERVERS_FILE` | Path to the JSON list of remote tool servers. Defaults to `$SIA_COMPONENTS_DIR/servers.json`. Must resolve inside the components root. | No — absent means no remote tools |
+| `SIA_SERVERS_FILE` | Path to the JSON object of remote (HTTP) tool servers, keyed by server name. Defaults to `$SIA_COMPONENTS_DIR/servers.json`. Must resolve inside the components root when one is set. Header values may reference `${VAR}`, expanded from the agent's process env. | No — absent means no remote tools |
 
 Both paths are read by the agent; the host owns their contents. A host
 that stamps `SIA_COMPONENTS_DIR` should expect the agent to write new
 version directories under it (never to touch `current` itself — flipping
 the pointer is the host's act) and should gate a restart on
-`runComponentContract` (exported from `src/graph.ts`) when it does.
+`runComponentContract` (exported from `src/graph.ts`) when it does. Once
+it has a verdict on a version it should tell the agent through
+`recordComponentOutcome` (same module; §3.6), and it should answer
+`GET /status` (§3.5) so an agent that was off when the verdict landed can
+find it.
 
 ### 1.6 Host RPC endpoint (optional)
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `SIA_DAEMON_URL` | Base URL of the host's RPC endpoint. Defaults to `http://127.0.0.1:7700`. | No |
-| `SIA_DAEMON_TOKEN` | Bearer token for `POST {SIA_DAEMON_URL}/rpc/call`. Empty disables graph memory (calls are rejected by the host). | Required iff graph memory should work |
+| `SIA_DAEMON_URL` | Base URL of the host's loopback API. Defaults to `http://127.0.0.1:7700`. | No |
+| `SIA_DAEMON_TOKEN` | The agent's own bearer token for that API. Empty disables graph memory and `deps.host` (calls are refused before they are sent). | Required iff graph memory or host upstreams should work |
+
+The one base URL and token serve every agent → host call: graph memory
+(`POST /rpc/call`, §3.1), the optional chat endpoints (§3.4) and egress
+to host-configured upstreams (`/egress`, §3.7). The token identifies the
+agent to its host; it is not a credential for anything beyond the host,
+and the host must not accept it anywhere but its agent-facing routes.
+
+### 1.7 Own server (optional)
+
+| Variable | Purpose | Required |
+|---|---|---|
+| `SIA_SERVER_URL` | Base URL of the server the agent runs inside. `start_self_task` opens threads there (`POST /threads`, `POST /threads/{id}/runs/stream`) and the component tools read the current thread's metadata from it. | No — when unset the agent uses the `--port` its server was started with (`--port <n>`, `--port=<n>`, `-p <n>`), else `http://127.0.0.1:2024` |
+
+Threads the agent opens on itself carry `X-SIA-Agent-Id: {SIA_AGENT_ID}`
+and `metadata.self_task = true` (plus `agent_id`, `sia_agent_id`,
+`parent_thread_id`, `task`, and `channel` / `skill` when known). A host
+that attributes threads by that header or by `metadata.agent_id` sees them
+as the agent's own. A self-task run lives only as long as the agent
+process: the agent reads the run's stream to its end in the background,
+and a restart mid-run leaves the thread without a persisted result — which
+is why `prepare_component_version` and `create_component` record lineage in
+graph memory before anything is edited (`COMPONENTS.md` §6).
 
 ---
 
@@ -238,6 +266,200 @@ them against the definition it serves and refuses a mismatch.
 Every throw surfaces to the tool as a string result; graph-memory
 failures never crash a run. The adapter has no retry.
 
+### 3.4 Chat endpoints (agent → host, optional)
+
+`announce_component_version` (see [`COMPONENTS.md`](./COMPONENTS.md) §6,
+*Authoring a version*) uses the same base URL and bearer as §3. Both calls
+are best-effort: any failure is reported in the tool result, never
+thrown, and with `SIA_DAEMON_URL` or `SIA_DAEMON_TOKEN` unset neither is
+attempted.
+
+**Room message** — an endpoint the host implements. Sent **only when
+`SIA_ANNOUNCE_TO_CHAT` is truthy** (`1`, `true`, `yes`, `on`) **and a room
+is known**: the `channel` argument, else the `metadata.channel` of the
+thread the work came from. A need raised outside a room posts nowhere in
+the room. Off by default, because a message in a shared room reaches every
+participant. The candidate event below is sent regardless:
+
+```
+POST {SIA_DAEMON_URL}/chat/publish
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+Content-Type: application/json
+
+{
+  "agentId": "<SIA_AGENT_ID>",
+  "channel": "<room>",            // the argument, else the thread's channel
+  "sender": "<SIA_AGENT_NAME>",
+  "isAgent": true,
+  "threadId": "<thread id>",       // the self-task thread; lets the host link the sender
+  "text": "**<name>@<version>** — <summary>\nNeed: <need> · from <parent>\n\n[Open the thread](/chat?agentId=<id>&threadId=<thread id>)",
+  "kind": "announcement",
+  "announcement": {
+    "component": "<name>",
+    "version": "<version>",
+    "outcome": "candidate",        // or "failed"
+    "parentVersion": "<parent>",   // optional
+    "need": "<need>",              // optional, clipped
+    "summary": "<summary>",        // clipped
+    "threadId": "<thread id>"      // optional
+  },
+  "timestamp": "<ISO 8601>"
+}
+```
+
+`text` stands on its own for a host that ignores `kind`; `announcement`
+carries the same content as structured fields.
+
+**Candidate version event** — an endpoint the host *may* implement. A
+`404` is expected from a host that does not, and is reported as such:
+
+```
+POST {SIA_DAEMON_URL}/chat/component-version
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+Content-Type: application/json
+
+{
+  "agentId": "<SIA_AGENT_ID>",
+  "name": "execute-code",
+  "version": "0.1.1",
+  "parentVersion": "execute-code@0.1.0",
+  "need": "<lineage.need>",
+  "summary": "<what changed and why>",
+  "threadId": "<thread id>",
+  "timestamp": "<ISO 8601>"
+}
+```
+
+The event is sent only for a candidate (a version whose contract passed);
+a failed outcome posts the room message alone. Activating the version
+remains the host's step (§1.5).
+
+### 3.5 Component status (agent → host, optional)
+
+The agent reads the host's view of its components to learn what became of
+the versions it prepared (`COMPONENTS.md` §6, *Lineage*). No bearer: the
+endpoint is loopback and read-only.
+
+```
+GET {SIA_DAEMON_URL}/status
+```
+
+The agent looks only at `node.components.components[]`, one entry per
+component:
+
+```json
+{
+  "name": "execute-code",
+  "active": "0.1.0",
+  "previous": "0.0.9",
+  "candidate": { "version": "0.1.1", "threadId": "…", "announcedAt": "…" },
+  "lastOutcome": { "version": "0.1.1", "result": "activated", "at": "…", "error": "…" },
+  "versions": ["0.0.9", "0.1.0", "0.1.1"],
+  "retired": false
+}
+```
+
+`lastOutcome.result` is `activated`, `reverted`, `failed` or `removed`;
+`error` is the reason when it is not `activated`. `removed` means the host
+took a version that was live and removed it from the machine — `active`
+and `version` read empty on that entry, `retired` (optional boolean) may
+be `true`, and neither is an error: `.versions/` and the entry's own
+`versions` list stay as they were. Everything else in the response is
+ignored, a missing `components` array means the host does not report them
+(the agent stops polling), and any transport or non-2xx failure is treated
+as "no answer yet". The read runs every 3 s for up to 120 s after the agent
+starts and at most once a minute during turns, only while a version of this
+agent's is unsettled — plus one extra read at boot to catch a `removed`
+verdict for a version that was already settled `converged` (see
+`COMPONENTS.md` §6).
+
+### 3.6 Component outcome (host → agent, optional)
+
+When the host decides a version — the swap converged, was reverted, failed,
+or the person rejected it — it tells the agent's own server, and the agent
+settles the version's lineage entity at once. This is the same seam as the
+contract gate: the graph module exports `recordComponentOutcome(frame)`,
+and the server the agent runs inside serves it.
+
+```
+POST {SIA_SERVER_URL}/components/outcome
+Authorization: Bearer <the token the host gates agent-side routes with>
+Content-Type: application/json
+
+{
+  "kind": "converged" | "reverted" | "failed" | "rejected" | "removed",
+  "agentId": "<SIA_AGENT_ID>",
+  "component": "execute-code",
+  "version": "0.1.1",
+  "reason": "<why, when not converged>",
+  "at": "<ISO 8601>",
+  "threadId": "<thread id>",
+  "parentVersion": "execute-code@0.1.0"
+}
+```
+
+`agentId` must equal the agent's own `SIA_AGENT_ID`; a frame for anyone
+else is ignored, never applied. The push is best-effort on the host's side:
+the agent may be off (a swap restarts it), and §3.5 exists so the verdict is
+found anyway. A push and a poll that both carry the verdict settle the
+entity once — the second finds it already settled.
+
+`removed` is the one kind that can arrive for a version whose lineage
+entity is already settled `converged` — it was live, then the host removed
+it. It is not a judgment on the change: a later version may still build on
+it. Because it targets a settled entity rather than a pending one, a push
+that lands while the agent is down has no pending record to poll for; the
+boot-time read of `/status` (§3.5) checks for exactly this case as well as
+the ordinary pending one.
+
+### 3.7 Upstream egress (agent → host, optional)
+
+A host may hold credentials for APIs the agent's components call, and
+make those calls on the agent's behalf. Each such API is an **upstream**:
+a name (`^[a-z][a-z0-9-]*$`), a base URL the host pins, and a credential
+only the host can read. Components reach them through `deps.host`
+(`COMPONENTS.md` §5); remote tool servers (`COMPONENTS.md` §7) can be
+pointed at the same route.
+
+```
+GET {SIA_DAEMON_URL}/egress
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+
+200 { "upstreams": [ { "name": "github", "host": "api.github.com" } ] }
+```
+
+Lists every upstream the host will call **for this agent** — names and the
+pinned `host[:port]`, never a credential or anything derived from one. A
+host that does not implement the listing answers 404 or 405, and the agent
+treats the list as unknown rather than empty.
+
+```
+<METHOD> {SIA_DAEMON_URL}/egress/<name>/<path>?<query>
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+```
+
+The host:
+
+- authenticates the agent's bearer, then **drops the caller's
+  `Authorization`** and injects the upstream's stored credential;
+- resolves `<path>` against the pinned base URL and refuses anything that
+  would leave it (the agent rejects `.` / `..` segments before sending, but
+  the host must not rely on that);
+- forwards the method, query, body and remaining headers, and does not
+  follow redirects;
+- **scrubs the response** — any occurrence of the stored credential in the
+  headers or body is replaced before it reaches the agent, so an upstream
+  that echoes its request headers cannot hand the credential back;
+- answers an **identical 404** for every name it does not know for this
+  agent, so the route is not an oracle for what other agents or hosts have
+  configured.
+
+Credentials are configured on the host by its owner, out of band; there is
+no agent-facing route that accepts, returns or reports one. When a
+component names an upstream the listing does not contain, the agent throws
+`upstream "<name>" is not configured on this host (available: …) — ask the
+host's owner to configure it` before sending anything.
+
 ---
 
 ## 4. Security model
@@ -251,6 +473,10 @@ failures never crash a run. The adapter has no retry.
   host validates it matches the workspace the agent was spawned for.
 - **Constant-time compare.** Reference implementation uses
   `subtle.ConstantTimeCompare` on the bearer to prevent timing oracles.
+- **Credentials stay with the host.** Upstream credentials (§3.7) are
+  injected by the host on the way out and scrubbed from what comes back;
+  the agent can use an upstream but never holds its credential, and none
+  is ever placed in the agent's env.
 
 The agent does not sign payloads, does not establish a TLS session
 (loopback), and does not persist credentials. All trust derives from the
@@ -274,7 +500,8 @@ Explicitly out of scope of this contract:
   `~/.siad/`-style state. The one on-disk surface is the component roots
   of §1.5, and only when the host chooses to stamp them.
 
-A host that satisfies §1 + §2 above is sufficient; §3 adds graph memory.
+A host that satisfies §1 + §2 above is sufficient; §3 adds graph memory
+and, with §3.4, the announcements of authored component versions.
 Anything more is implementation detail.
 
 ---

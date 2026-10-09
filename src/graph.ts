@@ -7,6 +7,7 @@
 
 import { createDeepAgentWithDefaults } from "./deep-agent-setup.js";
 import { getProjectRoot } from "./backend-config.js";
+import { getLineageReconciler } from "./components/lineage-reconcile.js";
 
 // Create the agent graph
 const projectRoot = getProjectRoot();
@@ -23,3 +24,9 @@ export const graph: any = agent.graph;
 // §6). A host that only knows about `graph` never sees it; one that does can
 // gate a component version on it.
 export { runComponentContract } from "./components/contract.js";
+
+// The host pushes a component version's verdict here (docs/HOST_CONTRACT.md,
+// `POST /components/outcome`); the reconciler settles the version's entity in
+// graph memory. A frame for another agent is ignored.
+export const recordComponentOutcome = (frame: unknown) =>
+  getLineageReconciler().onHostOutcome(frame);

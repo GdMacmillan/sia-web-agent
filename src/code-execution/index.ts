@@ -18,6 +18,9 @@ tools: myTools, * }); * * // Code can import and use tool APIs * const code =`
  * `; * * const result = await executor.execute("thread-123", code); *```
  */
 
+// Timeout bounds for the execute_code tool
+export { DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS } from "./timeouts.js";
+
 // Session management
 export {
   CodeExecutionSession,
