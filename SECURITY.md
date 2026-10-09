@@ -81,12 +81,20 @@ version. The host reports each agent's sandbox status and any gaps it knows of, 
 posture is visible rather than silent.
 
 If you are a SIA user rather than someone embedding this repo, the plain-language version — and
-how to check your own machine — is at <https://sia-web.fly.dev/docs/security>.
+how to check your own machine — is at <https://sia-web.fly.dev/docs/security>. The full threat
+model for the hosted platform (what is protected, from whom, per-OS guarantees and accepted gaps)
+is at <https://sia-web.fly.dev/docs/security-model>.
 
 ## Reporting a vulnerability
 
 If you find a way for this agent's own tools to bypass `validatePathInProject`, or another gap in
 what this repository itself is responsible for, please report it rather than assuming it's covered
-by a host-level mitigation you may not control. Don't post a working exploit in a public issue:
-open an issue that says you have a security report and asks for a private contact, and the
-details can follow there.
+by a host-level mitigation you may not control. Please don't open a public issue. Report it
+privately through GitHub's private vulnerability reporting — the repository's **Security** tab →
+**Report a vulnerability**, or directly at
+<https://github.com/gdmacmillan/sia-web-agent/security/advisories/new>. Only the maintainers can
+see the report, and we can work on a fix with you there before anything is published.
+
+If the gap is in the hosted SIA platform rather than in this repository, you can also use **Report
+a problem** in the SIA app (choose "Something else" and start the description with "Security:").
+Either way reaches the same people.
