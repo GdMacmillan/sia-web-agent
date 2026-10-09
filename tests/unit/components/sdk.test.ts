@@ -36,7 +36,7 @@ describe("component SDK", () => {
   it("is a 1.x version that satisfies the seed manifest range", () => {
     expect(semver.valid(SDK_VERSION)).toBe(SDK_VERSION);
     expect(semver.satisfies(SDK_VERSION, "^1.0.0")).toBe(true);
-    expect(semver.gte(SDK_VERSION, "1.1.0")).toBe(true);
+    expect(semver.gte(SDK_VERSION, "1.2.0")).toBe(true);
   });
 
   it("carries the code-execution internals the seed entry uses", () => {

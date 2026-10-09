@@ -49,6 +49,15 @@ describe("scaffold sources", () => {
     expect(contract).not.toMatch(/^\s*import /m);
   });
 
+  it("types deps.host in the entry and the contract and says the credential stays with the host", () => {
+    const entry = stubEntrySource("when_is", "x");
+    expect(entry).toMatch(/host: \{\n\s+fetch: \(upstream: string, path: string, init\?: RequestInit\) => Promise<Response>;/);
+    expect(entry).toContain("upstreams: () => Promise<Array<{ name: string; host: string }> | undefined>;");
+    expect(entry).toContain("Call an authenticated API through the host by upstream name; the\n   * credential never enters this process.");
+    const contract = stubContractSource("when_is");
+    expect(contract).toContain("fetch: (upstream: string, path: string, init?: RequestInit) => Promise<Response>;");
+  });
+
   it("builds a strict, parentless manifest for 0.1.0", () => {
     const raw = newComponentManifest({
       name: "parse-time-expression",

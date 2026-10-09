@@ -76,6 +76,15 @@ type Deps = {
   tool: (fn: (input: any, config?: any) => Promise<string> | string, options: any) => unknown;
   z: any;
   logger: { info: (message: string, meta?: Record<string, unknown>) => void };
+  /**
+   * Call an authenticated API through the host by upstream name; the
+   * credential never enters this process. \`upstreams()\` lists the names
+   * the host has configured (\`undefined\` when it cannot say).
+   */
+  host: {
+    fetch: (upstream: string, path: string, init?: RequestInit) => Promise<Response>;
+    upstreams: () => Promise<Array<{ name: string; host: string }> | undefined>;
+  };
 };
 
 export default function (deps: Deps) {
@@ -110,6 +119,11 @@ export function stubContractSource(toolName: string): string {
 type ContractDeps = {
   invoke: (toolName: string, args: unknown) => Promise<string>;
   component: unknown;
+  /** The same host as the entry's \`deps.host\`, for cases that need it. */
+  host: {
+    fetch: (upstream: string, path: string, init?: RequestInit) => Promise<Response>;
+    upstreams: () => Promise<Array<{ name: string; host: string }> | undefined>;
+  };
 };
 
 function check(condition: boolean, message: string): void {

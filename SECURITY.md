@@ -70,8 +70,13 @@ of the controls above at its own spawn point. What that buys depends on the oper
 
 On every platform the host gives the agent an allowlisted environment with no upstream API keys:
 the agent's LLM and search clients point at the host (`{PREFIX}_BASE_URL`, `TAVILY_BASE_URL`),
-which injects the real key on the way out. The agent's bearer token is scoped to that one agent
-and refused on the host's administrative routes, including the one that accepts a new component
+which injects the real key on the way out. Credentials for the other APIs a component calls are
+held the same way: the host configures each as a named upstream, and the agent gets the use of it
+through the host's egress route (`deps.host.fetch`, [`docs/HOST_CONTRACT.md`](docs/HOST_CONTRACT.md)
+§3.7) — never the value, which the host also scrubs from every response. Where there is no OS
+sandbox (Windows, above) the host's own credential store is as readable as any of its files, so
+this keeps credentials out of the agent's env and conversation but is not a boundary against a
+hostile agent. The agent's bearer token is scoped to that one agent and refused on the host's administrative routes, including the one that accepts a new component
 version. The host reports each agent's sandbox status and any gaps it knows of, so a weaker
 posture is visible rather than silent.
 

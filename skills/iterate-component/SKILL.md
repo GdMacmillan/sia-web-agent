@@ -4,7 +4,7 @@ description: Write, check and announce a new version of one of your own componen
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.4.0"
+  version: "1.5.0"
 ---
 
 # Iterate a component
@@ -14,8 +14,8 @@ one change that answers a stated need, proven by its contract, described so a pe
 whether to activate it. When the need is for a tool you do not have, the "next version" is the
 first one: a brand-new component whose `0.1.0` starts from a stub that already passes its contract.
 Either way the version you write is **described now and runs only after the host activates it and
-you restart**. A passing contract ran the candidate out-of-process; nothing you do here changes
-what is live.
+you restart**. A passing contract ran the candidate inside this agent's own process, beside the
+live version, without loading it into the agent; nothing you do here changes what is live.
 
 ## Tools
 
@@ -24,7 +24,7 @@ what is live.
 | `describe_component`         | Which root wins, the current version, the versions present, the manifest, the paths         |
 | `create_component`           | Lay out `.versions/<version>/` of a component with no live version anywhere: a manifest with no parent, an entry with one stub tool that echoes its input, and a contract that invokes it. `<version>` is `0.1.0` for a genuinely new name, or the next minor above whatever is already staged when the host removed an earlier lineage for it |
 | `prepare_component_version`  | Lay out `.versions/<next>/` under the host-managed root with the manifest already rewritten |
-| `run_component_contract`     | Run a version's contract out-of-process; pass/fail with the error text                      |
+| `run_component_contract`     | Run a version's contract in this process, apart from the live agent; pass/fail with the error text |
 | `announce_component_version` | Tell the host about the candidate (and, when enabled, post one announcement linking this thread to the room the need was raised in; a need raised in a direct conversation stays there) |
 
 Plus `read_file` / `edit_file` / `write_file` for the copied `entry.ts` and `contract.ts`, and
@@ -114,9 +114,28 @@ memory being unreachable never stops an iteration.
    self-task itself — the tool is how the work that produced a version tells the host about it, not
    a general-purpose way to talk about one.
 6. **Say what is true.** In this thread and in the announcement: the version is described now and
-   runs after the host activates it and you restart. The contract passed against the candidate,
-   out-of-process; nothing is live. For a new component say also that you have no such tool yet:
+   runs after the host activates it and you restart. The contract passed against the candidate in
+   this process, without it ever being loaded into the agent; nothing is live. For a new component say also that you have no such tool yet:
    the announcement is for a tool you will gain, not one that changes.
+
+## Calling an authenticated API
+
+When the need is for a tool that talks to an API that needs a credential, the component never
+holds that credential. The host keeps it and calls the API on the component's behalf, by an
+**upstream name** it has configured: `deps.host.fetch("<name>", "/path?query", init)` returns the
+API's `Response`, and `deps.host.upstreams()` lists the names this host offers.
+`describe_component` and `create_component` print that list as `host upstreams:` when the host can
+say.
+
+- You MUST NOT ask anyone to paste a key, token or password into a conversation, a file, a
+  memory or a component, and you MUST NOT put one in `init.headers` — the host replaces
+  `Authorization` anyway.
+- If the upstream you need is not listed, `deps.host.fetch` throws a message naming it and the ones
+  that are. Do not work around it: tell the person which name to ask the host's owner to configure
+  (say so in the announcement too), and make the contract fail with that message rather than
+  pretend.
+- A contract that calls the upstream proves the real thing — but it runs against the live API, so
+  keep its cases read-only.
 
 ## What the seed component gives you
 

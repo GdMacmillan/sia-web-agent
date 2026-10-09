@@ -7,6 +7,8 @@ that spawns it) for three things only:
 2. One **loopback HTTP endpoint** the agent can POST usage events to.
 3. One **loopback RPC endpoint** the graph-memory adapter calls (§3).
    Optional: without it the agent runs with graph memory unavailable.
+   The same loopback API optionally carries chat, component status and
+   upstream egress (§3.4–§3.7).
 
 Anything beyond that — DB connections, message buses, deployment topology —
 is the host's concern, not the agent's. A host that honors this contract
@@ -113,10 +115,14 @@ find it.
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `SIA_DAEMON_URL` | Base URL of the host's RPC endpoint. Defaults to `http://127.0.0.1:7700`. | No |
-| `SIA_DAEMON_TOKEN` | Bearer token for `POST {SIA_DAEMON_URL}/rpc/call`. Empty disables graph memory (calls are rejected by the host). | Required iff graph memory should work |
+| `SIA_DAEMON_URL` | Base URL of the host's loopback API. Defaults to `http://127.0.0.1:7700`. | No |
+| `SIA_DAEMON_TOKEN` | The agent's own bearer token for that API. Empty disables graph memory and `deps.host` (calls are refused before they are sent). | Required iff graph memory or host upstreams should work |
 
-The same base URL and token are used for the optional chat endpoints of §3.4.
+The one base URL and token serve every agent → host call: graph memory
+(`POST /rpc/call`, §3.1), the optional chat endpoints (§3.4) and egress
+to host-configured upstreams (`/egress`, §3.7). The token identifies the
+agent to its host; it is not a credential for anything beyond the host,
+and the host must not accept it anywhere but its agent-facing routes.
 
 ### 1.7 Own server (optional)
 
@@ -406,6 +412,54 @@ that lands while the agent is down has no pending record to poll for; the
 boot-time read of `/status` (§3.5) checks for exactly this case as well as
 the ordinary pending one.
 
+### 3.7 Upstream egress (agent → host, optional)
+
+A host may hold credentials for APIs the agent's components call, and
+make those calls on the agent's behalf. Each such API is an **upstream**:
+a name (`^[a-z][a-z0-9-]*$`), a base URL the host pins, and a credential
+only the host can read. Components reach them through `deps.host`
+(`COMPONENTS.md` §5); remote tool servers (`COMPONENTS.md` §7) can be
+pointed at the same route.
+
+```
+GET {SIA_DAEMON_URL}/egress
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+
+200 { "upstreams": [ { "name": "github", "host": "api.github.com" } ] }
+```
+
+Lists every upstream the host will call **for this agent** — names and the
+pinned `host[:port]`, never a credential or anything derived from one. A
+host that does not implement the listing answers 404 or 405, and the agent
+treats the list as unknown rather than empty.
+
+```
+<METHOD> {SIA_DAEMON_URL}/egress/<name>/<path>?<query>
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+```
+
+The host:
+
+- authenticates the agent's bearer, then **drops the caller's
+  `Authorization`** and injects the upstream's stored credential;
+- resolves `<path>` against the pinned base URL and refuses anything that
+  would leave it (the agent rejects `.` / `..` segments before sending, but
+  the host must not rely on that);
+- forwards the method, query, body and remaining headers, and does not
+  follow redirects;
+- **scrubs the response** — any occurrence of the stored credential in the
+  headers or body is replaced before it reaches the agent, so an upstream
+  that echoes its request headers cannot hand the credential back;
+- answers an **identical 404** for every name it does not know for this
+  agent, so the route is not an oracle for what other agents or hosts have
+  configured.
+
+Credentials are configured on the host by its owner, out of band; there is
+no agent-facing route that accepts, returns or reports one. When a
+component names an upstream the listing does not contain, the agent throws
+`upstream "<name>" is not configured on this host (available: …) — ask the
+host's owner to configure it` before sending anything.
+
 ---
 
 ## 4. Security model
@@ -419,6 +473,10 @@ the ordinary pending one.
   host validates it matches the workspace the agent was spawned for.
 - **Constant-time compare.** Reference implementation uses
   `subtle.ConstantTimeCompare` on the bearer to prevent timing oracles.
+- **Credentials stay with the host.** Upstream credentials (§3.7) are
+  injected by the host on the way out and scrubbed from what comes back;
+  the agent can use an upstream but never holds its credential, and none
+  is ever placed in the agent's env.
 
 The agent does not sign payloads, does not establish a TLS session
 (loopback), and does not persist credentials. All trust derives from the

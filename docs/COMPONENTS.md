@@ -322,7 +322,7 @@ present at all, the agent behaves exactly as it does today.
 `src/components/sdk.ts` defines the only surface component code sees.
 
 ```ts
-export const SDK_VERSION = "1.1.0";
+export const SDK_VERSION = "1.2.0";
 
 export interface ComponentDeps {
   sdkVersion: string;                 // SDK_VERSION
@@ -335,6 +335,11 @@ export interface ComponentDeps {
   manifest: ComponentManifest;        // this component's parsed manifest
   componentDir: string;               // the resolved version directory
   services: Readonly<Record<string, unknown>>;  // frozen snapshot, see §4
+  /** Authenticated APIs through the host, by upstream name. Since 1.2.0. */
+  host: {
+    fetch(upstream: string, path: string, init?: RequestInit): Promise<Response>;
+    upstreams(): Promise<{ name: string; host: string }[] | undefined>;
+  };
   /** Bundled internals exposed for specific components. Unstable. */
   internals: {
     codeExecution: {
@@ -360,6 +365,34 @@ another execution. It is empty before assembly and populated after, which
 is why the wrapper creates its executor lazily on first call. `logger` is
 a child of the agent's pino logger named `component:<name>`.
 
+**`host`** is how a component calls an API that needs a credential without
+ever holding it. The host configures each such API as an **upstream** — a
+name, a pinned base URL, and a credential it keeps to itself — and
+`host.fetch(upstream, path, init)` sends the request to the host's egress
+route (`HOST_CONTRACT.md` §3.7), which injects the credential and forwards
+it. The result is the upstream's `Response`, as returned by the host.
+
+- `path` is relative to the upstream's base URL and may carry a query; a
+  `.` or `..` segment (percent-encoded or not) throws before anything is
+  sent. The upstream name is percent-encoded into the route.
+- The request carries the agent's own host bearer (`SIA_DAEMON_TOKEN`);
+  any `Authorization` the caller sets is replaced. There is nothing else to
+  authenticate with — the agent has no credential to send.
+- `host.upstreams()` reads `GET /egress`: the names this host will call for
+  the agent and the `host[:port]` each is pinned to, never a credential.
+  `undefined` means "unknown": no host token, a host that predates the
+  listing (404/405), or a failed read.
+- `host.fetch` checks the name against that listing first (reused for 30 s)
+  and, when the listing is known and lacks it, throws
+  `upstream "<name>" is not configured on this host (available: a, b) — ask the host's owner to configure it`
+  (`available: none` when empty). With the listing unknown it sends the
+  request and the host's own answer stands (an unknown upstream is a 404).
+- `describe_component` and `create_component` print the live listing as a
+  `host upstreams:` line, and omit it when the listing is unknown.
+
+A component never asks a person for a credential and never writes one
+anywhere; a missing upstream is something the host's owner configures.
+
 `entry.ts` is:
 
 ```ts
@@ -382,7 +415,7 @@ unstable namespace and is documented as such — a component that reaches
 into it accepts that a minor SDK bump may break it. The manifest's `sdk`
 range is checked against `SDK_VERSION` at load; a mismatch skips the
 component with a warning (§4). History: 1.0.0 the initial surface; 1.1.0
-added `internals.codeExecution.getExposableTools`.
+added `internals.codeExecution.getExposableTools`; 1.2.0 added `host`.
 
 **Component-to-component use** goes only through `deps.services`. There is
 no import path between components.
@@ -519,7 +552,8 @@ $SIA_COMPONENTS_DIR/
 **`current` is never written by the agent.** Activating a version is the
 host's deliberate, separate step, after which the agent restarts. The
 version is described now and runs after activation and restart; a passing
-contract ran it out-of-process and proves behaviour, not liveness.
+contract ran it inside the agent's own process, without loading it into the
+live agent, and proves behaviour, not liveness.
 
 ### Authoring a new component
 
@@ -735,10 +769,17 @@ A missing file is "no servers"; a file that is not a JSON object is ignored
 with a warning. Nothing about the file can fail boot or a turn.
 
 **Headers and `${VAR}`.** A header value may reference `${NAME}`, expanded
-from the agent's process env each time the file is read. No secret has to be
-written in the file: the host puts a reference, the process env supplies the
-value. An entry that references an unset (or empty) variable is dropped
-whole — the literal reference is never sent.
+from the agent's process env each time the file is read. An entry that
+references an unset (or empty) variable is dropped whole — the literal
+reference is never sent.
+
+`${VAR}` expansion is **not a credential channel.** Anything in the agent's
+env is readable by the agent (and by any component or shell command it
+runs), so a real upstream credential must never be put there for a header to
+expand. A host that holds the credential points the entry's `url` at its own
+egress route (`HOST_CONTRACT.md` §3.7) and references only the agent's own
+host token — `"Authorization": "Bearer ${SIA_DAEMON_TOKEN}"` — and injects
+the real credential on the way out, exactly as for `deps.host` (§5).
 
 The client is `MultiServerMCPClient` from `@langchain/mcp-adapters`, loaded
 only when the file names at least one server. One client serves one
