@@ -1,7 +1,8 @@
 /**
- * The one read the lineage reconciler makes of the host: `GET /status`,
- * reduced to the component store it reports. See `docs/HOST_CONTRACT.md`
- * §3.5.
+ * The one read the agent makes of the host's `GET /status`: the component
+ * store it reports (for the lineage reconciler) and the drift of the
+ * agent's own source tree against what the host staged (for the situation
+ * context). See `docs/HOST_CONTRACT.md` §3.5.
  *
  * `null` means the host reported no component store at all — an older
  * daemon, or a request that failed — and the caller must not decide
@@ -35,6 +36,7 @@ export function parseHostComponent(raw: unknown): HostComponentView | null {
   const outcomeRecord = asRecord(record.lastOutcome);
   const outcomeVersion = outcomeRecord ? asString(outcomeRecord.version) : undefined;
   const outcomeResult = outcomeRecord ? asString(outcomeRecord.result) : undefined;
+  const rejected = parseRejected(record.rejected);
   const versions = Array.isArray(record.versions)
     ? record.versions.filter((v): v is string => typeof v === "string")
     : [];
@@ -63,24 +65,106 @@ export function parseHostComponent(raw: unknown): HostComponentView | null {
             result: outcomeResult,
             ...(asString(outcomeRecord.at) ? { at: asString(outcomeRecord.at) } : {}),
             ...(asString(outcomeRecord.error) ? { error: asString(outcomeRecord.error) } : {}),
+            ...(asString(outcomeRecord.decisionReason)
+              ? { decisionReason: asString(outcomeRecord.decisionReason) }
+              : {}),
           },
         }
       : {}),
+    ...(rejected ? { rejected } : {}),
     versions,
+  };
+}
+
+/** Rebuild the declined-versions map; entries that are not objects are dropped. */
+function parseRejected(raw: unknown): HostComponentView["rejected"] | undefined {
+  const record = asRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+  const out: NonNullable<HostComponentView["rejected"]> = {};
+  for (const [version, value] of Object.entries(record)) {
+    const entry = asRecord(value);
+    if (!version || !entry) {
+      continue;
+    }
+    out[version] = {
+      ...(asString(entry.at) ? { at: asString(entry.at) } : {}),
+      ...(asString(entry.decisionReason) ? { decisionReason: asString(entry.decisionReason) } : {}),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Drift of the agent's own source tree against the tree the host staged.
+ * `baseline` is the host's word for whether the comparison could be made
+ * at all; only `"ok"` means the path lists are meaningful.
+ */
+export interface HostAgentSourceView {
+  version?: string;
+  checkedAt?: string;
+  baseline: string;
+  modified: string[];
+  added: string[];
+  removed: string[];
+  truncated: number;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string" && v !== "")
+    : [];
+}
+
+/** Rebuild the drift report field by field; `null` when it has no baseline word. */
+export function parseHostAgentSource(raw: unknown): HostAgentSourceView | null {
+  const record = asRecord(raw);
+  const baseline = record ? asString(record.baseline) : undefined;
+  if (!record || !baseline) {
+    return null;
+  }
+  const truncated =
+    typeof record.truncated === "number" && Number.isInteger(record.truncated) && record.truncated > 0
+      ? record.truncated
+      : 0;
+  return {
+    ...(asString(record.version) ? { version: asString(record.version) } : {}),
+    ...(asString(record.checkedAt) ? { checkedAt: asString(record.checkedAt) } : {}),
+    baseline,
+    modified: stringList(record.modified),
+    added: stringList(record.added),
+    removed: stringList(record.removed),
+    truncated,
   };
 }
 
 /** Reduce a `/status` body to the component store, or `null` when it has none. */
 export function parseHostStatus(body: unknown): HostComponentView[] | null {
+  return parseHostStatusView(body).components;
+}
+
+/** Everything the agent reads from one `/status` body. Each half is `null` when absent. */
+export interface HostStatusView {
+  components: HostComponentView[] | null;
+  agentSource: HostAgentSourceView | null;
+}
+
+/** Reduce a `/status` body to both halves the agent reads. */
+export function parseHostStatusView(body: unknown): HostStatusView {
   const root = asRecord(body);
   const node = root ? asRecord(root.node) : undefined;
-  const components = node ? asRecord(node.components) : undefined;
-  if (!components || !Array.isArray(components.components)) {
-    return null;
-  }
-  return components.components
-    .map((entry) => parseHostComponent(entry))
-    .filter((entry): entry is HostComponentView => entry !== null);
+  const store = node ? asRecord(node.components) : undefined;
+  const components =
+    store && Array.isArray(store.components)
+      ? store.components
+          .map((entry) => parseHostComponent(entry))
+          .filter((entry): entry is HostComponentView => entry !== null)
+      : null;
+  return {
+    components,
+    agentSource: node ? parseHostAgentSource(node.agentSource) : null,
+  };
 }
 
 /**
@@ -96,8 +180,26 @@ export async function readHostComponents(
   daemonToken?: string,
   timeoutMs = 5_000,
 ): Promise<HostComponentView[] | null> {
+  return (await readHostStatus(fetchImpl, daemonUrl, daemonToken, timeoutMs)).components;
+}
+
+const NOTHING_REPORTED: HostStatusView = { components: null, agentSource: null };
+
+/**
+ * Read the host's `/status` once and return both halves. Same failure
+ * rules as {@link readHostComponents}: never throws, and anything that
+ * goes wrong reads as nothing reported.
+ */
+export async function readHostStatus(
+  fetchImpl: FetchLike,
+  daemonUrl: string,
+  daemonToken?: string,
+  timeoutMs = 5_000,
+): Promise<HostStatusView> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // A stuck read must never be what keeps the process alive.
+  timer.unref?.();
   try {
     const res = await fetchImpl(`${daemonUrl.replace(/\/+$/, "")}/status`, {
       method: "GET",
@@ -108,11 +210,11 @@ export async function readHostComponents(
       signal: controller.signal,
     });
     if (!res.ok) {
-      return null;
+      return NOTHING_REPORTED;
     }
-    return parseHostStatus(await res.json());
+    return parseHostStatusView(await res.json());
   } catch {
-    return null;
+    return NOTHING_REPORTED;
   } finally {
     clearTimeout(timer);
   }

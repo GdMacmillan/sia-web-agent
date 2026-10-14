@@ -121,6 +121,7 @@ supplied the text before the text itself:
 |---|---|---|---|
 | `host` | `skills` | The skills list (read once per process). | First message of every request. |
 | `host` | `briefing` | A system-role message the host wrote into the history (a chat-room briefing, say). | Where it sits in the history. |
+| `host` | `situation` | What the host currently reports about this process: source drift against the staged version, the upstreams it offers components (`src/middleware/situation-context.ts`, cached stale-while-revalidate). | Just before the date. |
 | `host` | `date` | `Today's date: YYYY-MM-DD`, local time. | Last message of every request. |
 | `memory` | `memory` | Related graph-memory entries attached to a search-type tool result. | Appended to that tool result. |
 

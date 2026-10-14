@@ -71,4 +71,54 @@ describe("buildSystemContext", () => {
     ).toBe(true);
     expect(nameOnly).not.toContain("cutoff");
   });
+
+  it("renders the host's account of the process inside the env block", () => {
+    const context = buildSystemContext({
+      workingDirectory: WORKDIR,
+      nodeId: "node-3f2c",
+      sandboxStatus: "partial",
+      sandboxMechanism: "landlock+seccomp",
+      agentSourceVersion: "0.13.0",
+      provider: "openrouter",
+    });
+
+    expect(context).toMatch(
+      /\nOS Version: .+\nNode: node-3f2c\nSandbox: partial \(landlock\+seccomp\)\nAgent source version: 0\.13\.0 \(as staged by the host\)\nModel provider: openrouter\n<\/env>$/,
+    );
+  });
+
+  it("omits each missing host fact individually", () => {
+    const context = buildSystemContext({
+      workingDirectory: WORKDIR,
+      sandboxStatus: "disabled_by_operator",
+      sandboxMechanism: "none",
+      nodeId: " ",
+    });
+
+    expect(context).toContain("\nSandbox: disabled by operator\n</env>");
+    expect(context).not.toContain("Node:");
+    expect(context).not.toContain("Agent source version:");
+    expect(context).not.toContain("Model provider:");
+
+    const mechanismAlone = buildSystemContext({
+      workingDirectory: WORKDIR,
+      sandboxMechanism: "seatbelt",
+    });
+    expect(mechanismAlone).not.toContain("Sandbox:");
+  });
+
+  it("host facts are as byte-stable as the rest of the block", () => {
+    const options = {
+      workingDirectory: WORKDIR,
+      nodeId: "n",
+      sandboxStatus: "enforced",
+      sandboxMechanism: "seatbelt",
+      agentSourceVersion: "1.0.0",
+      provider: "openai",
+    };
+    jest.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z") });
+    const first = buildSystemContext(options);
+    jest.setSystemTime(new Date("2027-06-15T12:00:00Z"));
+    expect(buildSystemContext(options)).toBe(first);
+  });
 });

@@ -4,10 +4,14 @@
  * Drives the fully assembled main agent with a recording chat model across a
  * tool-call turn and a second invocation on the same thread a day later, and
  * checks that the system message the model receives never changes while the
- * changing context (date, skills list, an in-history system briefing) arrives
- * as ordinary tagged messages — on the request only, never in state.
+ * changing context (date, skills list, the host's situation report, an
+ * in-history system briefing) arrives as ordinary tagged messages — on the
+ * request only, never in state. A loopback stand-in for the host answers the
+ * situation reads.
  */
 import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 
 // The summarization model is constructed from the provider config at
 // assembly time; stub the client so no key is needed.
@@ -34,6 +38,7 @@ import { HOST_CONTEXT_TRUST } from "../../src/utils/host-context.js";
 const DATE_TAG = '<host-context source="host" kind="date">';
 const SESSION_TAG = '<host-context source="host" kind="skills">';
 const CONVERSATION_TAG = '<host-context source="host" kind="briefing">';
+const SITUATION_TAG = '<host-context source="host" kind="situation">';
 
 /**
  * A chat model that records every request it receives and replays a script
@@ -71,7 +76,37 @@ const ENV_KEYS = [
   "MEMORY_AUGMENTATION_ENABLED",
   "SIA_MODEL_NAME",
   "SIA_MODEL_KNOWLEDGE_CUTOFF",
+  "SIA_DAEMON_URL",
+  "SIA_DAEMON_TOKEN",
 ] as const;
+
+/** Answers the two situation reads; everything else is a 404. */
+function startHost(): Promise<Server> {
+  const server = createServer((req, res) => {
+    const send = (body: unknown) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (req.method === "GET" && req.url === "/status") {
+      return send({
+        node: {
+          components: { components: [] },
+          agentSource: {
+            version: "0.13.0",
+            baseline: "ok",
+            modified: ["prompts/manager.md"],
+          },
+        },
+      });
+    }
+    if (req.method === "GET" && req.url === "/egress") {
+      return send({ upstreams: [{ name: "weather", host: "api.example.com" }] });
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
+}
 const savedEnv: Record<string, string | undefined> = {};
 
 describe("system prompt stability across turns", () => {
@@ -91,9 +126,13 @@ describe("system prompt stability across turns", () => {
     () => new AIMessage("second answer"),
   ]);
   let finalState: { messages: BaseMessage[] };
+  let host: Server;
 
   beforeAll(async () => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+    host = await startHost();
+    process.env.SIA_DAEMON_URL = `http://127.0.0.1:${(host.address() as AddressInfo).port}`;
+    process.env.SIA_DAEMON_TOKEN = "bridge-token";
     process.env.KNOWLEDGE_FORMATION_ENABLED = "false";
     process.env.OUTCOME_TRACKING_ENABLED = "false";
     process.env.MEMORY_AUGMENTATION_ENABLED = "false";
@@ -135,8 +174,9 @@ describe("system prompt stability across turns", () => {
     )) as unknown as { messages: BaseMessage[] };
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     jest.useRealTimers();
+    await new Promise((resolve) => host.close(resolve));
     for (const key of ENV_KEYS) {
       if (savedEnv[key] === undefined) delete process.env[key];
       else process.env[key] = savedEnv[key];
@@ -180,9 +220,29 @@ describe("system prompt stability across turns", () => {
     expect(toolTurn.at(-1)!.text).toBe(
       `${DATE_TAG}\n${HOST_CONTEXT_TRUST.host}\nToday's date: 2026-03-01\n</host-context>`,
     );
-    expect(afterTool.at(-2)!.getType()).toBe("tool");
+    expect(afterTool.at(-3)!.getType()).toBe("tool");
     expect(afterTool.at(-1)!.text).toContain("2026-03-01");
     expect(nextDay.at(-1)!.text).toContain("Today's date: 2026-03-02");
+  });
+
+  it("puts the host's situation report just before the date on every call", () => {
+    for (const messages of model.calls) {
+      const situation = messages.at(-2)!;
+      expect(HumanMessage.isInstance(situation)).toBe(true);
+      expect(situation.text).toBe(
+        `${SITUATION_TAG}\n${HOST_CONTEXT_TRUST.host}\n` +
+          "Agent source: 1 file differs from version 0.13.0 as the host staged it (modified: prompts/manager.md).\n" +
+          "Upstreams the host offers your components: weather.\n" +
+          "</host-context>",
+      );
+    }
+    expect(model.calls[0][0].text).not.toContain("prompts/manager.md");
+  });
+
+  it("never sends a system-role message after the head", () => {
+    for (const messages of model.calls) {
+      expect(messages.slice(1).some((m) => SystemMessage.isInstance(m))).toBe(false);
+    }
   });
 
   it("re-sends an in-history system briefing as tagged context, in place", () => {

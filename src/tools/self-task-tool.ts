@@ -16,11 +16,18 @@
  *   unattributed and invisible to its owner;
  * - the current thread is itself a self-task — no nesting;
  * - a self-task started from this thread is still running — one at a time.
+ *
+ * The new thread opens with a briefing about the agent itself (its recent
+ * component versions, its keeper's notes on how it fails, the platform's
+ * refusal record) as a system-role message ahead of the task. Gathering it
+ * is bounded and best-effort: a briefing that cannot be read is left out,
+ * and it never stops the self-task from starting.
  */
 
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod/v4";
+import { buildSelfTaskBriefing } from "../components/self-task-briefing.js";
 import { logger } from "../utils/logger.js";
 
 /** Where the server listens when nothing says otherwise. */
@@ -78,6 +85,11 @@ export interface SelfTaskToolOptions {
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
   timeoutMs?: number;
+  /**
+   * Builds the briefing the thread opens with; `undefined` sends none.
+   * Defaults to {@link buildSelfTaskBriefing}.
+   */
+  buildBriefing?: (agentId: string) => Promise<string | undefined>;
 }
 
 /**
@@ -312,6 +324,18 @@ export function createSelfTaskTool(
         const trimmedSkill = skill?.trim();
         if (trimmedSkill) metadata.skill = trimmedSkill;
 
+        // Gathered before the thread exists so a slow read never leaves an
+        // empty thread behind. Bounded by its own budget; never throws.
+        let briefing: string | undefined;
+        try {
+          briefing = await (
+            opts.buildBriefing ?? ((id: string) => buildSelfTaskBriefing({ agentId: id }))
+          )(agentId);
+        } catch (error: unknown) {
+          logger.warn({ error: errorMessage(error) }, "self-task briefing skipped");
+          briefing = undefined;
+        }
+
         const created = await fetchImpl(`${baseUrl}/threads`, {
           method: "POST",
           headers,
@@ -358,6 +382,7 @@ export function createSelfTaskTool(
                 assistant_id: SELF_TASK_ASSISTANT_ID,
                 input: {
                   messages: [
+                    ...(briefing ? [{ role: "system", content: briefing }] : []),
                     { role: "user", content: buildSelfTaskMessage(trimmedTask, skill) },
                   ],
                 },

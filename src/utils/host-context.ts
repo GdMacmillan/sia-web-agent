@@ -31,8 +31,11 @@ export type HostContextSource = "host" | "memory";
  * - `briefing`: a system-role message that arrived inside the conversation
  *   history (context the host wrote into state).
  * - `memory`: related memory entries attached to a search-type tool result.
+ * - `situation`: what the host currently reports about the agent's own
+ *   process (source drift, the upstreams it offers), refreshed in the
+ *   background and appended to each request.
  */
-export type HostContextKind = "skills" | "date" | "briefing" | "memory";
+export type HostContextKind = "skills" | "date" | "briefing" | "memory" | "situation";
 
 /** The tag that delimits host context. */
 export const HOST_CONTEXT_TAG = "host-context";

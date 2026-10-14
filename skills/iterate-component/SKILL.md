@@ -4,7 +4,7 @@ description: Write, check and announce a new version of one of your own componen
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.5.0"
+  version: "1.6.0"
 ---
 
 # Iterate a component
@@ -80,10 +80,17 @@ memory being unreachable never stops an iteration.
    version whose entity reads `removed` means the host took the whole lineage back off the
    machine — that is a component you do not have, again, and `create_component` starts a fresh
    version above what is staged, not a continuation of it.
-2. **Read the lineage before you propose, then prepare.** `search_entities` for `<name>` with
-   `entity_type: "component_version"` and read what came before: a version settled `reverted` or
-   `rejected` names, in its content, the need it answered and why it was turned down — do not
-   propose it again unchanged, and say so in the announcement if the need is the same one. A
+2. **Read the lineage before you propose, then prepare.** A self-task thread opens with a briefing
+   when there is one to give: your recent versions with their outcomes and the keeper's reasons,
+   the keeper's notes on how you tend to fail, and the platform's refusal record. Read it first,
+   then `search_entities` for `<name>` with `entity_type: "component_version"` for anything older.
+   The lineage is the ground the next version stands on: build on the version that converged, and
+   treat a keeper's reason as a constraint on what you propose — a rejected version's reason says
+   what not to do again, an accepted version's reason says what was valued. Do not propose a
+   reverted or rejected version again unchanged, and if the need is the same one, say in the
+   announcement how this version answers the reason it was turned down. A known failure mode the
+   keeper wrote down is something to check your change against before you announce it. When a
+   step is refused, look the code up in the refusal record before deciding what to do next. A
    version settled `abandoned` carries no such judgment — its content names the reason ("never
    announced" or "replaced by `<version>`"), not a rejection of the change — so it is fine to
    retry it unchanged or resume it where it left off. What memory says about a version is
@@ -106,7 +113,8 @@ memory being unreachable never stops an iteration.
    three edit/run rounds — a need that resists three attempts deserves a person's eyes, not a
    fourth guess.
 5. **Announce once, from this thread.** On a pass, `announce_component_version` with a
-   two-sentence summary: what changed and why. On exhaustion, announce with `outcome: "failed"` and
+   two-sentence summary: what changed and why. If the keeper gave a reason on an earlier version
+   of this component, the announcement says how this one answers it. On exhaustion, announce with `outcome: "failed"` and
    what stood in the way — that summary becomes the recorded reason, so make it the one a future
    iteration needs to read. The announcement updates the lineage entity itself; there is nothing to
    store afterwards. Call it once: it is refused if this thread already announced a candidate for

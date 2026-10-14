@@ -43,6 +43,7 @@ const MAIN_BASELINE = [
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  "situationContextMiddleware",
   "hostContextMiddleware",
   "systemPromptCacheMiddleware",
   "knowledgeFormationMiddleware",

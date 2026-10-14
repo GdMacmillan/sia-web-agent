@@ -12,7 +12,10 @@
  * `middleware/host-context.ts`).
  *
  * Model facts are never guessed: a line whose value the host didn't supply is
- * omitted rather than filled with a default that may be false.
+ * omitted rather than filled with a default that may be false. The same holds
+ * for the host's account of this process — the node it runs on, the sandbox
+ * it runs under, the source version it was launched from and how it reaches
+ * its model: each is a line only when the host said so.
  */
 
 import { execSync } from "node:child_process";
@@ -33,6 +36,16 @@ export interface SystemContextOptions {
   modelId?: string;
   /** Knowledge cutoff (e.g., "January 2025"). Line omitted when absent. */
   knowledgeCutoff?: string;
+  /** How the agent reaches its model (e.g., "openrouter"). Omitted when absent. */
+  provider?: string;
+  /** The machine the host runs this agent on. Omitted when absent. */
+  nodeId?: string;
+  /** The sandbox the host applied (e.g., "enforced"). Omitted when absent. */
+  sandboxStatus?: string;
+  /** How that sandbox is enforced (e.g., "seatbelt"). Optional detail. */
+  sandboxMechanism?: string;
+  /** Source version the host staged this process from. Omitted when absent. */
+  agentSourceVersion?: string;
 }
 
 /**
@@ -100,14 +113,19 @@ export function buildSystemContext(options: SystemContextOptions = {}): string {
   const workingDir = options.workingDirectory ?? getProjectRoot();
   const { platform, version } = getPlatformInfo();
 
+  const envLines = [
+    `Working directory: ${workingDir}`,
+    `Is directory a git repo: ${isGitRepo(workingDir) ? "Yes" : "No"}`,
+    `Platform: ${platform}`,
+    `OS Version: ${version}`,
+    ...hostEnvLines(options),
+  ];
+
   const sections = [
     `## System Environment
 Here is useful information about the environment you are running in:
 <env>
-Working directory: ${workingDir}
-Is directory a git repo: ${isGitRepo(workingDir) ? "Yes" : "No"}
-Platform: ${platform}
-OS Version: ${version}
+${envLines.join("\n")}
 </env>`,
   ];
 
@@ -125,6 +143,33 @@ OS Version: ${version}
   if (cutoff) sections.push(`Assistant knowledge cutoff is ${cutoff}.`);
 
   return sections.join("\n\n");
+}
+
+/**
+ * The host's account of this process, one line per fact it supplied. All of
+ * these are fixed for the process's life (the host stamps them at launch), so
+ * they keep the block byte-stable.
+ */
+function hostEnvLines(options: SystemContextOptions): string[] {
+  const lines: string[] = [];
+  const nodeId = nonEmpty(options.nodeId);
+  if (nodeId) lines.push(`Node: ${nodeId}`);
+
+  const sandbox = nonEmpty(options.sandboxStatus);
+  if (sandbox) {
+    const mechanism = nonEmpty(options.sandboxMechanism);
+    const detail = mechanism && mechanism !== "none" ? ` (${mechanism})` : "";
+    lines.push(`Sandbox: ${sandbox.replace(/_/g, " ")}${detail}`);
+  }
+
+  const sourceVersion = nonEmpty(options.agentSourceVersion);
+  if (sourceVersion) {
+    lines.push(`Agent source version: ${sourceVersion} (as staged by the host)`);
+  }
+
+  const provider = nonEmpty(options.provider);
+  if (provider) lines.push(`Model provider: ${provider}`);
+  return lines;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

@@ -22,6 +22,7 @@ import {
   SUPERSEDES,
   buildLineageEntity,
   buildParentEntity,
+  decisionReasonLine,
   lineageTitle,
   settlePayload,
   type LineageEntityInput,
@@ -190,4 +191,37 @@ export async function settleLineageEntity(
     notes: `settled: ${verdict.outcome}`,
   });
   return "settled";
+}
+
+export type AnnotateResult = "annotated" | "already_annotated" | "not_settled";
+
+/**
+ * Add the keeper's reason to an entity that was settled before the reason
+ * reached this side (a verdict recorded by an older host, or settled from
+ * a poll that did not carry it). Touches only the reason: never the
+ * outcome, tags or status, so it cannot move a verdict. An entity still a
+ * `candidate` is left for settlement to carry the reason, and one that
+ * already has a reason is left as it is.
+ */
+export async function annotateDecisionReason(
+  adapter: IGraphMemoryAdapter,
+  entityId: string,
+  reason: string,
+): Promise<AnnotateResult> {
+  const trimmed = reason.trim();
+  const { entity } = await retrieveEntity(adapter, { entity_id: entityId });
+  if (entity.metadata.outcome === "candidate" || entity.metadata.outcome === undefined) {
+    return "not_settled";
+  }
+  if (typeof entity.metadata.decision_reason === "string" || trimmed === "") {
+    return "already_annotated";
+  }
+  await updateEntity(adapter, {
+    entity_id: entityId,
+    content: decisionReasonLine(trimmed),
+    content_mode: "append",
+    metadata: { decision_reason: trimmed },
+    notes: "keeper's reason recorded",
+  });
+  return "annotated";
 }
