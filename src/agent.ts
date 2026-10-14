@@ -36,6 +36,10 @@ import {
   createAutoContinueMiddleware,
   createUsageEventsMiddleware,
   createCapExhaustionMiddleware,
+  createHostContextMiddleware,
+  createSystemPromptCacheMiddleware,
+  HOST_CONTEXT_MIDDLEWARE_NAME,
+  SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,
   type SubAgent,
   type CompiledSubAgent,
 } from "./middleware/index.js";
@@ -58,6 +62,7 @@ import type { BackendProtocol } from "./backends/index.js";
 import { InteropZodObject } from "@langchain/core/utils/types";
 import { AnnotationRoot } from "@langchain/langgraph";
 import { getSystemPrompt } from "./system-prompts.js";
+import type { SystemContextOptions } from "./utils/system-context.js";
 import { defaultBackendFactory } from "./backend-config.js";
 import { getConfig, resolveModelEndpoint } from "./config/index.js";
 
@@ -146,6 +151,8 @@ export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  HOST_CONTEXT_MIDDLEWARE_NAME,
+  SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,
   "knowledgeFormationMiddleware",
   "HumanInTheLoopMiddleware",
   REMOTE_TOOLS_MIDDLEWARE_NAME,
@@ -197,15 +204,28 @@ export function assemblePromptParts(
 }
 
 /**
- * Base prompt cache - lazily loaded on first use
+ * Base prompt cache, keyed by the environment options it was built with.
+ *
+ * The base prompt contains nothing that changes during the process's life, so
+ * one build per distinct set of options is reused for every agent created
+ * with them — and the system prompt the model sees is byte-identical from
+ * turn to turn.
  */
-let basePromptPromise: Promise<string> | null = null;
+const basePromptCache = new Map<string, Promise<string>>();
 
-async function getBasePrompt(): Promise<string> {
-  if (!basePromptPromise) {
-    basePromptPromise = getSystemPrompt("manager");
+async function getBasePrompt(options: SystemContextOptions): Promise<string> {
+  const key = JSON.stringify([
+    options.workingDirectory ?? null,
+    options.modelName ?? null,
+    options.modelId ?? null,
+    options.knowledgeCutoff ?? null,
+  ]);
+  let prompt = basePromptCache.get(key);
+  if (!prompt) {
+    prompt = getSystemPrompt("manager", options);
+    basePromptCache.set(key, prompt);
   }
-  return basePromptPromise;
+  return prompt;
 }
 
 /**
@@ -227,7 +247,8 @@ function getSummarizationConfig() {
  * - Filesystem tools (createFilesystemMiddleware)
  * - Subagent delegation (createSubAgentMiddleware)
  * - Conversation summarization (summarizationMiddleware)
- * - Prompt caching (anthropicPromptCachingMiddleware)
+ * - Prompt caching (anthropicPromptCachingMiddleware, systemPromptCacheMiddleware)
+ * - Per-request context messages: date, in-history context (hostContextMiddleware)
  * - Tool call patching (createPatchToolCallsMiddleware)
  * - Human-in-the-loop (humanInTheLoopMiddleware) - optional
  *
@@ -282,7 +303,14 @@ export async function createDeepAgent<
   // Compose the system prompt from prefix / base / suffix, then append the
   // profile's suffix. A plain string systemPrompt stays before the base prompt
   // (legacy behavior); a SystemPromptConfig can replace/remove the base.
-  const basePrompt = await getBasePrompt();
+  // Model facts come from the launching host (unset ones are omitted from the
+  // environment block, never guessed). The id is the orchestrator endpoint
+  // this agent's model was built from.
+  const basePrompt = await getBasePrompt({
+    modelId: orchestratorModel,
+    modelName: runtimeConfig.runtime.modelName,
+    knowledgeCutoff: runtimeConfig.runtime.modelKnowledgeCutoff,
+  });
   const promptConfig = normalizeSystemPrompt(systemPrompt);
   const baseSection =
     promptConfig.base === null
@@ -472,21 +500,36 @@ export async function createDeepAgent<
     }),
     // Subagent middleware: Patches tool calls for compatibility
     createPatchToolCallsMiddleware(),
-    // Subagent middleware: Anthropic prompt caching — kept last to mirror
-    // the main stack's caching-in-tail order (upstream PR #331).
+    // Subagent middleware: Anthropic prompt caching — kept last among the
+    // upstream entries to mirror the main stack's caching-in-tail order
+    // (upstream PR #331).
     anthropicPromptCachingMiddleware({
       unsupportedModelBehavior: "ignore",
     }),
+    // Subagent middleware: date and in-history context as messages, then the
+    // system prompt cache breakpoint — innermost, after every middleware
+    // that edits the system prompt.
+    createHostContextMiddleware(),
+    createSystemPromptCacheMiddleware(),
   ];
 
   // Tail segment. Order per upstream deepagents PR #331: prompt caching, then
-  // knowledge formation, then human-in-the-loop. Caching is inert under
-  // OpenRouter today (unsupportedModelBehavior: "ignore") — zero-risk
-  // future-proofing that keeps the tail deterministic.
+  // knowledge formation, then human-in-the-loop.
+  //
+  // LangChain's `anthropicPromptCachingMiddleware` acts only on a native
+  // `ChatAnthropic` model (it is skipped for any other model, via
+  // unsupportedModelBehavior: "ignore"). Anthropic models reached through
+  // OpenRouter get their breakpoint from `systemPromptCacheMiddleware`
+  // instead, which marks the system prompt's content block. The host context
+  // middleware keeps that system prompt byte-stable by sending the date and
+  // in-history context as messages. Both sit after every middleware that
+  // edits the system prompt; custom entries insert before the tail.
   const tailMiddleware: AgentMiddleware[] = [
     anthropicPromptCachingMiddleware({
       unsupportedModelBehavior: "ignore",
     }),
+    createHostContextMiddleware(),
+    createSystemPromptCacheMiddleware({ modelId: orchestratorModel }),
     createKnowledgeFormationMiddleware({
       model: model as any,
       agentType: name || "main",

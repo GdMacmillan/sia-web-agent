@@ -1,18 +1,25 @@
 /**
- * Middleware for loading and exposing agent skills to the system prompt.
+ * Middleware for loading and exposing agent skills.
  *
  * This middleware implements Anthropic's "Agent Skills" pattern with progressive disclosure:
- * 1. Parse YAML frontmatter from SKILL.md files at session start
- * 2. Inject skills metadata (name + description) into system prompt
+ * 1. Parse YAML frontmatter from SKILL.md files (once per process)
+ * 2. Expose skills metadata (name + description) to the model
  * 3. Agent reads full SKILL.md content when relevant to a task
+ *
+ * The how-to-use instructions are static and go in the system prompt. The
+ * list itself is sent as a session context message at the head of every
+ * request, so the system prompt's bytes don't depend on which skills are
+ * installed.
  *
  * Based on the DeepAgents CLI Python implementation.
  */
 
 import { createMiddleware, tool, type AgentMiddleware } from "langchain";
+import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod/v3";
 import type { SkillMetadata, SkillsMiddlewareOptions } from "../types/skill.js";
 import { listSkills, getSkillContent } from "../utils/skills-loader.js";
+import { wrapHostContext } from "../utils/host-context.js";
 
 // Skills System Documentation Template
 const SKILLS_SYSTEM_PROMPT = `
@@ -20,11 +27,8 @@ const SKILLS_SYSTEM_PROMPT = `
 ## Skills System
 
 You have access to a skills library that provides specialized capabilities and standard operating
-procedures (SOPs).
-
-**Available Skills:**
-
-{skills_list}
+procedures (SOPs). The available skills are listed in the session context message at the start of
+the conversation.
 
 **How to Use Skills:**
 
@@ -41,7 +45,7 @@ procedures (SOPs).
 
 User: "Can you research the latest developments in quantum computing?"
 
-1. Check available skills above → See "rapids-research" skill
+1. Check the available skills list → See "rapids-research" skill
 2. Use \`load_skill\` with skill_name "rapids-research" to get full instructions
 3. Follow the skill's research workflow
 
@@ -49,10 +53,10 @@ Remember: Skills are tools to make you more capable and consistent. When in doub
 exists for the task!`;
 
 /**
- * Format skills metadata for display in system prompt.
+ * Format skills metadata as a markdown list, one line per skill.
  *
  * @param skills - Array of skill metadata
- * @returns Formatted markdown string for system prompt injection
+ * @returns Formatted markdown list
  */
 function formatSkillsList(skills: SkillMetadata[]): string {
   if (skills.length === 0) {
@@ -60,8 +64,28 @@ function formatSkillsList(skills: SkillMetadata[]): string {
   }
 
   return skills
-    .map((skill) => `- **${skill.name}**: ${skill.description}`)
+    .map(
+      (skill) =>
+        `- **${skill.name}**: ${skill.description.replace(/\s+/g, " ").trim()}`,
+    )
     .join("\n");
+}
+
+/**
+ * Build the session context message carrying the skills list.
+ *
+ * @param skills - Array of skill metadata
+ * @returns The tagged message sent at the head of each request
+ */
+export function buildSkillsContextMessage(
+  skills: SkillMetadata[],
+): HumanMessage {
+  return new HumanMessage({
+    content: wrapHostContext(
+      "session",
+      `**Available Skills:**\n\n${formatSkillsList(skills)}`,
+    ),
+  });
 }
 
 /**
@@ -80,9 +104,6 @@ export function createSkillsMiddleware(
 ): AgentMiddleware {
   const { skillsDir } = options;
 
-  // Load skills once at middleware creation time
-  let cachedSkills: SkillMetadata[] | null = null;
-
   const loadSkillTool = tool(
     async ({ skill_name }: { skill_name: string }) => {
       const result = getSkillContent(skillsDir, skill_name);
@@ -90,7 +111,7 @@ export function createSkillsMiddleware(
         return result.content;
       }
 
-      const available = (cachedSkills || listSkills(skillsDir))
+      const available = listSkills(skillsDir)
         .map((s) => s.name)
         .join(", ");
       return `Skill "${skill_name}" not found. Available skills: ${available}`;
@@ -114,44 +135,29 @@ export function createSkillsMiddleware(
     tools: [loadSkillTool],
 
     /**
-     * Hook that runs before each agent execution.
+     * Wraps model calls: appends the static skills instructions to the system
+     * prompt and puts the skills list in a context message at the head of the
+     * request's messages.
      *
-     * We load/reload skills here to capture any changes in the skills directory
-     * since the last agent invocation.
-     */
-    beforeAgent: async () => {
-      // Reload skills on every new interaction with the agent
-      // This allows skills to be added/modified without restarting the server
-      cachedSkills = listSkills(skillsDir);
-
-      // No state modifications needed
-      return {};
-    },
-
-    /**
-     * Wraps model calls to inject skills documentation into the system prompt.
+     * The list comes from `listSkills`, which reads the directory once per
+     * process, so the message is byte-identical from call to call. A skill
+     * added on disk is picked up on the next restart.
      *
-     * Uses wrapModelCall (not beforeModel) because system prompt modification
-     * requires access to the ModelRequest object, which only wrapModelCall provides.
+     * Uses wrapModelCall (not beforeModel) because both changes are to the
+     * outgoing request only; nothing is written to state.
      */
     wrapModelCall: async (request, handler) => {
-      // Get skills (should be loaded by beforeAgent)
-      const skills = cachedSkills || listSkills(skillsDir);
-
-      // Format skills list
-      const skillsList = formatSkillsList(skills);
-
-      // Format the skills documentation
-      const skillsSection = SKILLS_SYSTEM_PROMPT.replace(
-        "{skills_list}",
-        skillsList,
-      );
+      const skillsMessage = buildSkillsContextMessage(listSkills(skillsDir));
 
       // Inject into system prompt (append to existing prompt)
       const currentPrompt = request.systemPrompt || "";
-      const updatedPrompt = currentPrompt + "\n\n" + skillsSection;
+      const updatedPrompt = currentPrompt + "\n\n" + SKILLS_SYSTEM_PROMPT;
 
-      return handler({ ...request, systemPrompt: updatedPrompt });
+      return handler({
+        ...request,
+        systemPrompt: updatedPrompt,
+        messages: [skillsMessage, ...request.messages],
+      });
     },
   });
 }

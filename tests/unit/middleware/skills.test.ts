@@ -1,8 +1,10 @@
 /**
  * Skills Middleware Tests
  *
- * Tests for createSkillsMiddleware - the middleware that loads skills
- * from the filesystem and injects them into the system prompt.
+ * Tests for createSkillsMiddleware - the middleware that loads skills from
+ * the filesystem, appends static usage instructions to the system prompt, and
+ * sends the skills list as a session context message at the head of the
+ * request.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
@@ -10,9 +12,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { AIMessage } from "@langchain/core/messages";
+import {
+  AIMessage,
+  HumanMessage,
+  type BaseMessage,
+} from "@langchain/core/messages";
 import { createSkillsMiddleware } from "../../../src/middleware/skills.js";
 import { clearSkillsCache } from "../../../src/utils/skills-loader.js";
+import { wrapHostContext } from "../../../src/utils/host-context.js";
 
 const SKILL_TEMPLATE = (name: string, description: string) => `---
 name: ${name}
@@ -23,27 +30,47 @@ description: ${description}
 
 Skill content here.`;
 
+interface Captured {
+  systemPrompt: string;
+  messages: BaseMessage[];
+}
+
 /**
- * Helper to invoke wrapModelCall and capture the systemPrompt passed to handler.
- * Returns the systemPrompt string that would be sent to the model.
+ * Invoke wrapModelCall and capture what the handler receives.
  */
-async function getInjectedSystemPrompt(
+async function captureRequest(
   middleware: ReturnType<typeof createSkillsMiddleware>,
   existingPrompt = "",
-): Promise<string> {
-  let capturedPrompt = "";
+  messages: BaseMessage[] = [new HumanMessage("hello")],
+): Promise<Captured> {
+  let captured: Captured = { systemPrompt: "", messages: [] };
 
-  const mockHandler = async (req: { systemPrompt?: string }) => {
-    capturedPrompt = req.systemPrompt || "";
+  const mockHandler = async (req: {
+    systemPrompt?: string;
+    messages: BaseMessage[];
+  }) => {
+    captured = { systemPrompt: req.systemPrompt || "", messages: req.messages };
     return new AIMessage({ content: "mock" });
   };
 
   await middleware.wrapModelCall!(
-    { systemPrompt: existingPrompt } as any,
+    { systemPrompt: existingPrompt, messages } as any,
     mockHandler as any,
   );
 
-  return capturedPrompt;
+  return captured;
+}
+
+function headText(captured: Captured): string {
+  return captured.messages[0].text;
+}
+
+function writeSkill(skillsDir: string, name: string, description: string) {
+  const dir = path.join(skillsDir, name);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "SKILL.md");
+  fs.writeFileSync(file, SKILL_TEMPLATE(name, description));
+  return file;
 }
 
 describe("Skills Middleware", () => {
@@ -64,90 +91,124 @@ describe("Skills Middleware", () => {
     clearSkillsCache();
   });
 
-  describe("wrapModelCall with empty skills directory", () => {
-    it("should inject '(No skills available yet.)' when no skills exist", async () => {
+  describe("with an empty skills directory", () => {
+    it("says no skills are available in the session message", async () => {
       const middleware = createSkillsMiddleware({ skillsDir });
-      await middleware.beforeAgent({});
 
-      const prompt = await getInjectedSystemPrompt(middleware);
+      const captured = await captureRequest(middleware);
 
-      expect(prompt).toContain("(No skills available yet.)");
-      expect(prompt).toContain("## Skills System");
+      expect(headText(captured)).toContain("(No skills available yet.)");
+      expect(captured.systemPrompt).toContain("## Skills System");
+      expect(captured.systemPrompt).not.toContain("(No skills available yet.)");
     });
   });
 
-  describe("wrapModelCall with a skill", () => {
-    it("should include skill name and description but not path", async () => {
-      const skillDir = path.join(skillsDir, "test-skill");
-      fs.mkdirSync(skillDir, { recursive: true });
-      const skillPath = path.join(skillDir, "SKILL.md");
-      fs.writeFileSync(
-        skillPath,
-        SKILL_TEMPLATE("test-skill", "A test skill for verification"),
+  describe("with a skill", () => {
+    it("lists name and description (not path) in the session message only", async () => {
+      const skillPath = writeSkill(
+        skillsDir,
+        "test-skill",
+        "A test skill for verification",
       );
 
       const middleware = createSkillsMiddleware({ skillsDir });
-      await middleware.beforeAgent({});
+      const captured = await captureRequest(middleware);
 
-      const prompt = await getInjectedSystemPrompt(middleware);
+      expect(headText(captured)).toContain("**test-skill**");
+      expect(headText(captured)).toContain("A test skill for verification");
+      expect(headText(captured)).not.toContain(skillPath);
+      // The list never reaches the system prompt.
+      expect(captured.systemPrompt).not.toContain("test-skill");
+      expect(captured.systemPrompt).not.toContain(
+        "A test skill for verification",
+      );
+    });
 
-      expect(prompt).toContain("**test-skill**");
-      expect(prompt).toContain("A test skill for verification");
-      // Paths are no longer shown in the prompt (use load_skill tool instead)
-      expect(prompt).not.toContain(skillPath);
+    it("renders a block-scalar description on one line", async () => {
+      const dir = path.join(skillsDir, "multi-line");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "SKILL.md"),
+        `---
+name: multi-line
+description: |
+  First line of the description,
+  second line of it.
+---
+
+body`,
+      );
+
+      const middleware = createSkillsMiddleware({ skillsDir });
+      const captured = await captureRequest(middleware);
+
+      expect(headText(captured)).toContain(
+        "- **multi-line**: First line of the description, second line of it.",
+      );
     });
   });
 
-  describe("wrapModelCall with multiple skills", () => {
-    it("should list all skills", async () => {
-      const skillDir1 = path.join(skillsDir, "skill-a");
-      fs.mkdirSync(skillDir1, { recursive: true });
-      fs.writeFileSync(
-        path.join(skillDir1, "SKILL.md"),
-        SKILL_TEMPLATE("skill-a", "First skill"),
-      );
-
-      const skillDir2 = path.join(skillsDir, "skill-b");
-      fs.mkdirSync(skillDir2, { recursive: true });
-      fs.writeFileSync(
-        path.join(skillDir2, "SKILL.md"),
-        SKILL_TEMPLATE("skill-b", "Second skill"),
-      );
+  describe("with multiple skills", () => {
+    it("lists all skills in name order", async () => {
+      writeSkill(skillsDir, "skill-b", "Second skill");
+      writeSkill(skillsDir, "skill-a", "First skill");
 
       const middleware = createSkillsMiddleware({ skillsDir });
-      await middleware.beforeAgent({});
+      const text = headText(await captureRequest(middleware));
 
-      const prompt = await getInjectedSystemPrompt(middleware);
-
-      expect(prompt).toContain("**skill-a**");
-      expect(prompt).toContain("**skill-b**");
+      expect(text).toContain("**skill-a**");
+      expect(text).toContain("**skill-b**");
+      expect(text.indexOf("**skill-a**")).toBeLessThan(
+        text.indexOf("**skill-b**"),
+      );
     });
   });
 
-  describe("beforeAgent reloads skills", () => {
-    it("should reload skills on each beforeAgent call", async () => {
+  describe("session context message", () => {
+    it("is a tagged human message placed before the conversation", async () => {
+      writeSkill(skillsDir, "tagged", "Tagged skill");
+      const conversation = [new HumanMessage("first"), new AIMessage("reply")];
+
+      const middleware = createSkillsMiddleware({ skillsDir });
+      const captured = await captureRequest(middleware, "", conversation);
+
+      expect(captured.messages).toHaveLength(3);
+      expect(HumanMessage.isInstance(captured.messages[0])).toBe(true);
+      expect(headText(captured)).toBe(
+        wrapHostContext(
+          "session",
+          "**Available Skills:**\n\n- **tagged**: Tagged skill",
+        ),
+      );
+      expect(captured.messages.slice(1)).toEqual(conversation);
+    });
+
+    it("is byte-identical across calls, along with the system prompt", async () => {
+      writeSkill(skillsDir, "stable", "Stable skill");
       const middleware = createSkillsMiddleware({ skillsDir });
 
-      // First call with no skills
-      await middleware.beforeAgent({});
-      const prompt1 = await getInjectedSystemPrompt(middleware);
-      expect(prompt1).toContain("(No skills available yet.)");
+      const first = await captureRequest(middleware, "Base.");
+      const second = await captureRequest(middleware, "Base.");
 
-      // Add a skill, clear cache so listSkills picks it up
+      expect(second.systemPrompt).toBe(first.systemPrompt);
+      expect(headText(second)).toBe(headText(first));
+    });
+
+    it("reads the directory once per process until the cache is cleared", async () => {
+      const middleware = createSkillsMiddleware({ skillsDir });
+      const before = headText(await captureRequest(middleware));
+      expect(before).toContain("(No skills available yet.)");
+
+      writeSkill(skillsDir, "new-skill", "Dynamically added");
+      // Still the list read at first use: the session message must not
+      // change underneath a running process.
+      expect(headText(await captureRequest(middleware))).toBe(before);
+
       clearSkillsCache();
-      const newSkillDir = path.join(skillsDir, "new-skill");
-      fs.mkdirSync(newSkillDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(newSkillDir, "SKILL.md"),
-        SKILL_TEMPLATE("new-skill", "Dynamically added"),
-      );
-
-      // Second call should reload and find the new skill
-      await middleware.beforeAgent({});
-      const prompt2 = await getInjectedSystemPrompt(middleware);
-      expect(prompt2).toContain("**new-skill**");
-      expect(prompt2).toContain("Dynamically added");
-      expect(prompt2).not.toContain("(No skills available yet.)");
+      const after = headText(await captureRequest(middleware));
+      expect(after).toContain("**new-skill**");
+      expect(after).toContain("Dynamically added");
+      expect(after).not.toContain("(No skills available yet.)");
     });
   });
 
@@ -167,7 +228,6 @@ describe("Skills Middleware", () => {
       fs.writeFileSync(path.join(skillDir, "SKILL.md"), skillContent);
 
       const middleware = createSkillsMiddleware({ skillsDir });
-      await middleware.beforeAgent({});
 
       const loadSkill = middleware.tools![0];
       const result = await loadSkill.invoke({ skill_name: "test-skill" });
@@ -176,15 +236,9 @@ describe("Skills Middleware", () => {
     });
 
     it("should return error with available skills when skill not found", async () => {
-      const skillDir = path.join(skillsDir, "existing-skill");
-      fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(skillDir, "SKILL.md"),
-        SKILL_TEMPLATE("existing-skill", "An existing skill"),
-      );
+      writeSkill(skillsDir, "existing-skill", "An existing skill");
 
       const middleware = createSkillsMiddleware({ skillsDir });
-      await middleware.beforeAgent({});
 
       const loadSkill = middleware.tools![0];
       const result = await loadSkill.invoke({ skill_name: "nonexistent" });
@@ -201,36 +255,27 @@ describe("Skills Middleware", () => {
         skillsDir: nonExistentDir,
       });
 
-      await expect(middleware.beforeAgent({})).resolves.not.toThrow();
-
-      const prompt = await getInjectedSystemPrompt(middleware);
-      expect(prompt).toContain("(No skills available yet.)");
+      const captured = await captureRequest(middleware);
+      expect(headText(captured)).toContain("(No skills available yet.)");
     });
   });
 
   describe("skills section injected into existing system prompt", () => {
     it("should append skills section to existing system prompt content", async () => {
-      const skillDir = path.join(skillsDir, "appended-skill");
-      fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(skillDir, "SKILL.md"),
-        SKILL_TEMPLATE("appended-skill", "Appended skill"),
-      );
+      writeSkill(skillsDir, "appended-skill", "Appended skill");
 
       const middleware = createSkillsMiddleware({ skillsDir });
       const existingPrompt = "You are a helpful assistant.";
 
-      await middleware.beforeAgent({});
-      const prompt = await getInjectedSystemPrompt(middleware, existingPrompt);
+      const { systemPrompt } = await captureRequest(middleware, existingPrompt);
 
       // Original prompt should still be present
-      expect(prompt).toContain(existingPrompt);
+      expect(systemPrompt).toContain(existingPrompt);
       // Skills section should be appended
-      expect(prompt).toContain("## Skills System");
-      expect(prompt).toContain("**appended-skill**");
+      expect(systemPrompt).toContain("## Skills System");
       // Original prompt should come before skills section
-      const origIdx = prompt.indexOf(existingPrompt);
-      const skillsIdx = prompt.indexOf("## Skills System");
+      const origIdx = systemPrompt.indexOf(existingPrompt);
+      const skillsIdx = systemPrompt.indexOf("## Skills System");
       expect(origIdx).toBeLessThan(skillsIdx);
     });
   });

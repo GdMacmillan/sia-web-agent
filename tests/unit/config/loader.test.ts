@@ -615,6 +615,30 @@ describe("loadConfig", () => {
       process.env.SIA_SERVERS_FILE = "";
       expect(loadConfig().runtime.serversFile).toBeUndefined();
     });
+
+    it("reads the host-supplied model facts when set", () => {
+      process.env.OPENROUTER_API_KEY = "sk-key";
+      process.env.SIA_MODEL_NAME = "  Claude Sonnet 4.5 ";
+      process.env.SIA_MODEL_KNOWLEDGE_CUTOFF = "January 2025";
+
+      const config = loadConfig();
+
+      expect(config.runtime.modelName).toBe("Claude Sonnet 4.5");
+      expect(config.runtime.modelKnowledgeCutoff).toBe("January 2025");
+    });
+
+    it("leaves the model facts undefined when unset or blank", () => {
+      process.env.OPENROUTER_API_KEY = "sk-key";
+      delete process.env.SIA_MODEL_NAME;
+      delete process.env.SIA_MODEL_KNOWLEDGE_CUTOFF;
+      expect(loadConfig().runtime.modelName).toBeUndefined();
+      expect(loadConfig().runtime.modelKnowledgeCutoff).toBeUndefined();
+
+      process.env.SIA_MODEL_NAME = "   ";
+      process.env.SIA_MODEL_KNOWLEDGE_CUTOFF = "";
+      expect(loadConfig().runtime.modelName).toBeUndefined();
+      expect(loadConfig().runtime.modelKnowledgeCutoff).toBeUndefined();
+    });
   });
 });
 

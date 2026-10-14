@@ -43,6 +43,8 @@ const MAIN_BASELINE = [
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  "hostContextMiddleware",
+  "systemPromptCacheMiddleware",
   "knowledgeFormationMiddleware",
 ];
 
@@ -59,6 +61,8 @@ const SUBAGENT_BASELINE = [
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  "hostContextMiddleware",
+  "systemPromptCacheMiddleware",
 ];
 
 const names = (list: readonly AgentMiddleware[] | undefined) =>

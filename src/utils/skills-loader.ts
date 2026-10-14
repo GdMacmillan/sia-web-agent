@@ -55,11 +55,148 @@ export function isSafePath(path: string, baseDir: string): boolean {
   }
 }
 
+/** A top-level `key:` line (column 0). YAML requires whitespace after the colon. */
+const TOP_LEVEL_KEY = /^([A-Za-z_][\w-]*):(?:[ \t]+(.*))?$/;
+
+/** A block scalar header: `|` or `>`, optional chomping and indentation indicators. */
+const BLOCK_SCALAR_HEADER = /^([|>])([+-]?)([1-9]?)([+-]?)\s*(?:#.*)?$/;
+
+/**
+ * Parse the top-level scalar fields of a frontmatter block.
+ *
+ * A deliberately small, lenient reader rather than a YAML library: skill
+ * authors (people and agents alike) write descriptions that strict YAML
+ * rejects — an unquoted `: ` inside a plain value, for instance — and one
+ * such file must never take the whole skills list down. It understands:
+ *
+ * - plain values, including continuation lines indented under the key
+ *   (folded into one line, as YAML does);
+ * - single- and double-quoted values;
+ * - block scalars (`|` literal, `>` folded) with `-` / `+` chomping and an
+ *   optional explicit indentation indicator.
+ *
+ * Nested mappings and sequences under a key are skipped. Only column-0 keys
+ * are fields; a later duplicate key wins.
+ *
+ * @param frontmatter - The text between the `---` delimiters
+ * @returns Field name to string value
+ */
+export function parseFrontmatterFields(
+  frontmatter: string,
+): Record<string, string> {
+  const lines = frontmatter.split(/\r?\n/);
+  const fields: Record<string, string> = {};
+
+  let i = 0;
+  while (i < lines.length) {
+    const match = lines[i].match(TOP_LEVEL_KEY);
+    if (!match) {
+      i++;
+      continue;
+    }
+    const key = match[1];
+    const rest = (match[2] ?? "").trim();
+
+    // Everything up to the next column-0 line belongs to this key.
+    let j = i + 1;
+    while (
+      j < lines.length &&
+      (lines[j].trim() === "" || /^[ \t]/.test(lines[j]))
+    ) {
+      j++;
+    }
+    const body = lines.slice(i + 1, j);
+    i = j;
+
+    const header = rest.match(BLOCK_SCALAR_HEADER);
+    if (header) {
+      const chomping = header[2] || header[4];
+      const explicitIndent = header[3] ? Number(header[3]) : undefined;
+      fields[key] = readBlockScalar(
+        body,
+        header[1] === ">",
+        chomping,
+        explicitIndent,
+      );
+      continue;
+    }
+
+    const continuation = body.map((line) => line.trim()).filter(Boolean);
+    if (rest === "") {
+      // A nested mapping or sequence is not a scalar field; skip it.
+      const first = body.find((line) => line.trim() !== "");
+      if (first === undefined || /^\s+(?:-\s|[\w-]+:(?:\s|$))/.test(first)) {
+        continue;
+      }
+      fields[key] = continuation.join(" ");
+      continue;
+    }
+
+    fields[key] = unquote([rest, ...continuation].join(" "));
+  }
+
+  return fields;
+}
+
+function readBlockScalar(
+  body: string[],
+  folded: boolean,
+  chomping: string,
+  explicitIndent: number | undefined,
+): string {
+  const indentOf = (line: string) => line.length - line.trimStart().length;
+  const firstContent = body.find((line) => line.trim() !== "");
+  const indent =
+    explicitIndent ?? (firstContent === undefined ? 0 : indentOf(firstContent));
+  const content = body.map((line) =>
+    line.trim() === "" ? "" : line.slice(Math.min(indent, indentOf(line))),
+  );
+
+  let text: string;
+  if (folded) {
+    // Fold runs of lines into one; blank lines become newlines. More-indented
+    // lines are kept as written, as YAML does.
+    text = "";
+    for (let k = 0; k < content.length; k++) {
+      const line = content[k];
+      const previous = k > 0 ? content[k - 1] : undefined;
+      if (k === 0) {
+        text = line;
+      } else if (line === "" || previous === "" || /^\s/.test(line)) {
+        text += `\n${line}`;
+      } else {
+        text += ` ${line}`;
+      }
+    }
+  } else {
+    text = content.join("\n");
+  }
+
+  const stripped = text.replace(/\n+$/, "");
+  if (chomping === "-") return stripped;
+  if (chomping === "+") return `${text}\n`;
+  return stripped === "" ? "" : `${stripped}\n`;
+}
+
+function unquote(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value
+      .slice(1, -1)
+      .replace(/\\(["\\nt])/g, (_m, ch: string) =>
+        ch === "n" ? "\n" : ch === "t" ? "\t" : ch,
+      );
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+  return value;
+}
+
 /**
  * Parse YAML frontmatter from a SKILL.md file.
  *
- * Uses simple regex-based parsing (no YAML library needed) since we only
- * extract simple key-value pairs (name, description).
+ * See `parseFrontmatterFields` for what the reader accepts. Only `name` and
+ * `description` are used; both are required.
  *
  * @param skillMdPath - Absolute path to the SKILL.md file
  * @returns SkillMetadata with name, description, and path, or null if parsing fails
@@ -76,7 +213,7 @@ function parseSkillMetadata(skillMdPath: string): SkillMetadata | null {
     const content = readFileSync(skillMdPath, "utf-8");
 
     // Match YAML frontmatter between --- delimiters
-    const frontmatterPattern = /^---\s*\n(.*?)\n---\s*\n/s;
+    const frontmatterPattern = /^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)/s;
     const match = content.match(frontmatterPattern);
 
     if (!match) {
@@ -84,21 +221,12 @@ function parseSkillMetadata(skillMdPath: string): SkillMetadata | null {
       return null;
     }
 
-    const frontmatter = match[1];
-
-    // Parse key-value pairs from YAML (simple parsing, no nested structures)
-    const metadata: Record<string, string> = {};
-    for (const line of frontmatter.split("\n")) {
-      // Match "key: value" pattern
-      const kvMatch = line.trim().match(/^(\w+):\s*(.+)$/);
-      if (kvMatch) {
-        const [, key, value] = kvMatch;
-        metadata[key] = value.trim();
-      }
-    }
+    const metadata = parseFrontmatterFields(match[1]);
+    const name = metadata.name?.trim();
+    const description = metadata.description?.trim();
 
     // Validate required fields
-    if (!metadata.name || !metadata.description) {
+    if (!name || !description) {
       logger.warn(
         `Missing required fields (name, description) in: ${skillMdPath}`,
       );
@@ -106,8 +234,8 @@ function parseSkillMetadata(skillMdPath: string): SkillMetadata | null {
     }
 
     return {
-      name: metadata.name,
-      description: metadata.description,
+      name,
+      description,
       path: skillMdPath,
     };
   } catch (error) {
@@ -153,7 +281,9 @@ function listSkillsFromDirectory(skillsDir: string): SkillMetadata[] {
 
   try {
     // Iterate through skill directories
-    const entries = readdirSync(skillsDir);
+    // Sorted so the list's order (and so its bytes) doesn't depend on the
+    // filesystem's directory order.
+    const entries = readdirSync(skillsDir).sort();
 
     for (const entryName of entries) {
       const entryPath = resolve(skillsDir, entryName);
@@ -200,7 +330,10 @@ function listSkillsFromDirectory(skillsDir: string): SkillMetadata[] {
  * This function scans the skills directory for SKILL.md files, parses their
  * YAML frontmatter, and returns metadata for all discovered skills.
  *
- * Skills are cached for performance. The cache is based on the skills directory path.
+ * Skills are read once per skills directory and cached for the life of the
+ * process, so the list the model sees stays byte-identical from turn to turn.
+ * A skill added or edited on disk is picked up on the next restart (or after
+ * `clearSkillsCache()`).
  *
  * @param skillsDir - Absolute path to the skills directory
  * @returns Array of skill metadata

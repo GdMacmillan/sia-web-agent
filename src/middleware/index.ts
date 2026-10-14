@@ -69,3 +69,16 @@ export {
   SOURCE_EDIT_NOTE_TOOLS,
   type SourceEditNoteMiddlewareOptions,
 } from "./source-edit-note.js";
+export {
+  createHostContextMiddleware,
+  buildDateContextMessage,
+  formatLocalDate,
+  HOST_CONTEXT_MIDDLEWARE_NAME,
+  type HostContextMiddlewareOptions,
+} from "./host-context.js";
+export {
+  createSystemPromptCacheMiddleware,
+  isAnthropicModelId,
+  SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,
+  type SystemPromptCacheMiddlewareOptions,
+} from "./system-prompt-cache.js";
