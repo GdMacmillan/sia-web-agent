@@ -230,13 +230,9 @@ export function createSelfTaskTool(
     name: "start_self_task",
     description:
       "Start work in a new background thread of your own and return its " +
-      "thread id at once. Use it for work that should not happen inline " +
-      "here. Changing how one of your own tools behaves always is: those " +
-      "tools are components (execute_code is one), the running version is " +
-      "not the copy in your source tree, and each new version needs its own " +
-      'thread, so pass skill "iterate-component" and the person\'s need as ' +
-      "the task. One self-task per conversation at a time; a self-task " +
-      "cannot start another. The host may refuse; the result says why.",
+      "thread id at once, for work that should not happen inline here. " +
+      "One self-task per conversation at a time; a self-task cannot start " +
+      "another. The host may refuse; the result says why.",
     schema: z.object({
       task: z
         .string()

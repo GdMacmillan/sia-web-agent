@@ -60,7 +60,7 @@ export {
 } from "./cap-exhaustion.js";
 export {
   createMemoryAugmentationMiddleware,
-  MEMORY_CONTEXT_HEADER,
+  wrapMemoryContext,
   type MemoryAugmentationMiddlewareOptions,
 } from "./memory-augmentation.js";
 export {

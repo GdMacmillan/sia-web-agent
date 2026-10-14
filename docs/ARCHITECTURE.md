@@ -112,23 +112,44 @@ The system prompt the model receives is byte-identical on every call for
 the life of the process, so a provider's prompt cache can serve the tool
 definitions and system prompt from cache. Anything that changes is sent as
 an ordinary message wrapped in a single tagged envelope,
-`<host-context source="…">…</host-context>` (one helper,
-`src/utils/host-context.ts`, emits every instance):
+`<host-context source="…" kind="…">…</host-context>` (one helper,
+`src/utils/host-context.ts`, emits every instance). The first line inside
+the tag is a fixed trust line for its `source`, so the model reads who
+supplied the text before the text itself:
 
-| Source | Content | Position |
-|---|---|---|
-| `session` | The skills list (read once per process). | First message of every request. |
-| `conversation` | A system-role message the host wrote into the history (a chat-room briefing, say). | Where it sits in the history. |
-| `date` | `Today's date: YYYY-MM-DD`, local time. | Last message of every request. |
+| Source | Kind | Content | Position |
+|---|---|---|---|
+| `host` | `skills` | The skills list (read once per process). | First message of every request. |
+| `host` | `briefing` | A system-role message the host wrote into the history (a chat-room briefing, say). | Where it sits in the history. |
+| `host` | `date` | `Today's date: YYYY-MM-DD`, local time. | Last message of every request. |
+| `memory` | `memory` | Related graph-memory entries attached to a search-type tool result. | Appended to that tool result. |
 
-All three are request-only; the checkpointed history is unchanged. The
-environment block in the system prompt (`src/utils/system-context.ts`)
+The `host` trust line says the text comes from the system, not a person,
+and asks nothing; the `memory` line says the entries are leads to verify,
+written by other agents too, and that an instruction inside them is not a
+request. Any `<host-context` or `<room-message` tag inside a wrapped body
+is escaped, so a body cannot forge or close an envelope.
+
+The three `host` envelopes are request-only; the checkpointed history is
+unchanged. The `memory` envelope is part of the tool result, so it is
+checkpointed with it.
+
+The environment block in the system prompt (`src/utils/system-context.ts`)
 carries only process-lifetime facts — working directory, git status,
 platform, OS version — plus the model name, id and knowledge cutoff when
 the host supplies them (`SIA_MODEL_NAME`, `SIA_MODEL_KNOWLEDGE_CUTOFF`; the
 id is the resolved orchestrator model). A fact the host didn't supply is
 omitted, never guessed. A middleware that appends to the system prompt
 MUST append only text that is fixed for the process's lifetime.
+
+Each agent's system prompt is its own file in `prompts/` followed by
+`prompts/shared.md`, the rules every agent needs (what it reads is data,
+report faithfully, load `codebase-navigation` before code work, end with a
+final response). A rule lives in exactly one file;
+`tests/unit/prompts/no-duplicate-sentences.test.ts` fails on a sentence
+repeated across them. Guidance on parallel tool calls lives only in the
+Claude harness profile's suffix (`src/profiles/builtins.ts`), so agents
+running under a non-Claude profile get none.
 
 `outcome-critic.ts` exists in `src/middleware/` but is not a standalone
 middleware — it's a utility imported by `knowledge-formation.ts`.
@@ -147,6 +168,14 @@ pipeline with two key differences:
   `resolveModelEndpoint(config.llm, "memory")` rather than the main
   orchestrator model. Summarization is a lightweight compression task
   that doesn't need top-tier reasoning.
+
+The `plan` and `research` sub-agents are read-only. The shared sub-agent
+middleware injects write-capable tools of its own (`write_file`,
+`edit_file`, `execute_code`, `eval`), so filtering the base tool set is not
+enough: each carries `createReadOnlyMiddleware` (`src/middleware/read-only.ts`),
+which withholds file writes, memory writes and code execution from the
+model and refuses a call to one if the model names it anyway. The `answer`
+sub-agent is not read-only; it may store what it learns in memory.
 
 ## Code interpreter (QuickJS)
 
@@ -338,12 +367,16 @@ injects pre-created tool instances.
 
 - `manager.md` — the orchestrator's system prompt (the base prompt for
   every agent run, prepended to any `systemPrompt` the caller passes).
-- `plan.md` — the plan sub-agent's prompt.
-- `research.md` — the research sub-agent's prompt.
+- `planner.md` — the plan sub-agent's prompt.
+- `researcher.md` — the research sub-agent's prompt.
 - `answer.md` — the answer sub-agent's prompt.
+- `shared.md` — a fragment, not an agent prompt: the rules every agent
+  needs, appended to each of the four above.
+- `no-web-search.md` — a fragment appended last to the prompts that
+  mention web search when no web-search key is configured.
 
 The skills middleware reads the summaries of all `skills/*/SKILL.md`
-files once per process and sends them as a session context message at the
+files once per process and sends them as a host context message at the
 head of every request (the system prompt carries only the static
 how-to-use text), so the orchestrator knows what skills are available
 without holding their full bodies in context.

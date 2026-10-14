@@ -21,36 +21,17 @@ import type { SkillMetadata, SkillsMiddlewareOptions } from "../types/skill.js";
 import { listSkills, getSkillContent } from "../utils/skills-loader.js";
 import { wrapHostContext } from "../utils/host-context.js";
 
-// Skills System Documentation Template
+// Skills System Documentation Template. The one home for how to use skills;
+// the agent prompts do not repeat it.
 const SKILLS_SYSTEM_PROMPT = `
 
 ## Skills System
 
-You have access to a skills library that provides specialized capabilities and standard operating
-procedures (SOPs). The available skills are listed in the session context message at the start of
-the conversation.
-
-**How to Use Skills:**
-
-1. **Recognize when a skill applies**: Check if the user's task matches any skill's description
-2. **Load the skill**: Use the \`load_skill\` tool with the skill name to get full instructions
-3. **Follow the skill's workflow**: The loaded content contains step-by-step procedures, best practices, and examples
-
-**When to Use Skills:**
-- When the user's request matches a skill's domain (e.g., "research X" → rapids-research skill)
-- When you need specialized knowledge or structured workflows
-- When a skill provides proven patterns for complex tasks
-
-**Example Workflow:**
-
-User: "Can you research the latest developments in quantum computing?"
-
-1. Check the available skills list → See "rapids-research" skill
-2. Use \`load_skill\` with skill_name "rapids-research" to get full instructions
-3. Follow the skill's research workflow
-
-Remember: Skills are tools to make you more capable and consistent. When in doubt, check if a skill
-exists for the task!`;
+Skills are written procedures for particular kinds of work, kept out of your context until you need
+them. The installed skills are listed in the context message at the start of the conversation.
+When a task falls within a skill's description, load it with \`load_skill\` before you start and
+follow it, adapting it where your task differs. For example, asked to research recent developments
+in a field, you would load "rapids-research" first.`;
 
 /**
  * Format skills metadata as a markdown list, one line per skill.
@@ -82,7 +63,7 @@ export function buildSkillsContextMessage(
 ): HumanMessage {
   return new HumanMessage({
     content: wrapHostContext(
-      "session",
+      { source: "host", kind: "skills" },
       `**Available Skills:**\n\n${formatSkillsList(skills)}`,
     ),
   });

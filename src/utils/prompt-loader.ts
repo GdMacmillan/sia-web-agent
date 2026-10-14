@@ -18,15 +18,17 @@ const promptCache = new Map<string, string>();
 /**
  * Valid prompt file names (without extension).
  *
- * `no-web-search` is a FRAGMENT, not an agent prompt: it is appended to
- * another prompt rather than loaded on its own. See `system-prompts.ts`.
+ * `no-web-search` and `shared` are FRAGMENTS, not agent prompts: each is
+ * appended to an agent's prompt rather than loaded on its own. See
+ * `system-prompts.ts`.
  */
 export type PromptName =
   | "manager"
   | "planner"
   | "researcher"
   | "answer"
-  | "no-web-search";
+  | "no-web-search"
+  | "shared";
 
 /**
  * Load a prompt file by name from the prompts directory.

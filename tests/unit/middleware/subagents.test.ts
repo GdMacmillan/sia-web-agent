@@ -10,7 +10,10 @@
  */
 
 import { describe, it, expect, beforeEach } from "@jest/globals";
-import { createSubAgentMiddleware } from "../../../src/middleware/subagents.js";
+import {
+  createSubAgentMiddleware,
+  formatTaskInputAsMessage,
+} from "../../../src/middleware/subagents.js";
 import { mockWeatherTool, mockSearchTool } from "./middleware-utils.js";
 
 describe("Subagent Middleware", () => {
@@ -232,5 +235,27 @@ describe("Subagent Middleware", () => {
     });
 
     expect(middleware).toBeDefined();
+  });
+});
+
+describe("formatTaskInputAsMessage", () => {
+  it("passes the description through as the whole brief", () => {
+    const description =
+      "Find every caller of loadConfig and report which read the cache.";
+    const message = formatTaskInputAsMessage({
+      description,
+      subagent_type: "research",
+    } as any);
+    expect(message).toBe(description);
+  });
+
+  it("demands no JSON and never renders a missing field", () => {
+    const message = formatTaskInputAsMessage({
+      description: "Summarize the open questions.",
+      subagent_type: "plan",
+    } as any);
+    expect(message).not.toMatch(/json/i);
+    expect(message).not.toContain("undefined");
+    expect(message).not.toContain("null");
   });
 });

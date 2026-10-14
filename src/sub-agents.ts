@@ -6,9 +6,13 @@
  *
  * Note: Tools are configured at the middleware level (createSubAgentMiddleware)
  * where all tools are available. GraphType defaults to "react" for all agents.
+ * The plan and research agents are read-only: `createReadOnlyMiddleware`
+ * withholds and refuses every write tool, including the ones the shared
+ * sub-agent middleware inject.
  */
 
 import type { SubAgent } from "./middleware/index.js";
+import { createReadOnlyMiddleware } from "./middleware/read-only.js";
 import { getSystemPrompt } from "./system-prompts.js";
 import {
   createPlanModel,
@@ -24,13 +28,12 @@ let answerSubAgentCache: SubAgent | null = null;
 /**
  * Get the plan sub-agent (lazily loaded)
  *
- * The plan agent creates structured implementation plans:
- * - Receives structured input (requirements, constraints, targetFiles)
- * - Can read codebase (ls, read_file, grep, glob)
- * - Can search for patterns
- * - Can retrieve past learnings from memory
- * - Cannot modify files (read-only constraint)
- * - Returns structured JSON output (steps, risks, assumptions)
+ * The plan agent creates implementation plans:
+ * - Receives its requirements, constraints and target files in the task description
+ * - Can read the codebase (ls, read_file, grep, glob) and search for patterns
+ * - Can read past learnings from memory
+ * - Read-only: no file writes, memory writes or code execution reach it
+ * - Returns a plan in prose (steps, risks, assumptions)
  */
 export async function getPlanSubAgent(): Promise<SubAgent> {
   if (!planSubAgentCache) {
@@ -41,6 +44,7 @@ export async function getPlanSubAgent(): Promise<SubAgent> {
       systemPrompt: await getSystemPrompt("plan"),
       model: await createPlanModel(),
       // tools: populated at middleware level with getPlannerTools()
+      middleware: [createReadOnlyMiddleware()],
     };
   }
   return planSubAgentCache;
@@ -50,11 +54,11 @@ export async function getPlanSubAgent(): Promise<SubAgent> {
  * Get the research sub-agent (lazily loaded)
  *
  * The research agent performs deep, systematic codebase investigation:
- * - Receives structured input (depth, taskType, focusAreas)
- * - Can search codebase (grep, glob, read_file)
- * - Can access memory tools (retrieve only, for corroboration)
- * - Cannot modify files (read-only constraint)
- * - Returns structured JSON output (summary, findings, recommendations, issues)
+ * - Receives its depth and focus areas in the task description
+ * - Can search the codebase (grep, glob, read_file)
+ * - Can read memory, for corroboration
+ * - Read-only: no file writes, memory writes or code execution reach it
+ * - Returns a report in prose (summary, findings, recommendations)
  */
 export async function getResearchSubAgent(): Promise<SubAgent> {
   if (!researchSubAgentCache) {
@@ -65,6 +69,7 @@ export async function getResearchSubAgent(): Promise<SubAgent> {
       systemPrompt: await getSystemPrompt("research"),
       model: await createResearchModel(),
       // tools: populated at middleware level with getResearcherTools()
+      middleware: [createReadOnlyMiddleware()],
     };
   }
   return researchSubAgentCache;
@@ -84,7 +89,7 @@ export async function getAnswerSubAgent(): Promise<SubAgent> {
     answerSubAgentCache = {
       name: "answer",
       description:
-        "Web research for questions that need current external information, such as recent developments or external documentation. Returns a synthesized answer with cited sources.",
+        "Web research for questions that need current external information, such as recent developments or external documentation. Returns a synthesized answer with cited sources, and may store what it learns in memory.",
       systemPrompt: await getSystemPrompt("answer"),
       model: await createAnswerModel(),
       // tools: populated at middleware level with getAnswerTools()

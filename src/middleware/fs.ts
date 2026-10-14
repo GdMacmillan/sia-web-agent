@@ -303,19 +303,9 @@ function tryGetStateAndStore(config: unknown): StateAndStore {
 }
 
 // System prompts
-const FILESYSTEM_SYSTEM_PROMPT = `You have access to the real filesystem and can make actual code changes. Use absolute paths like
-/absolute/path/to/project/src/file.ts or relative paths like
-src/file.ts from the project root.
-
-- ls: list files in a directory
-- read_file: read a file from the filesystem
-- write_file: write to a new file in the filesystem
-- edit_file: edit an existing file by replacing specific content
-- glob: find files matching a pattern (e.g., "**/*.ts")
-- grep: search for text within files using regex patterns
-
-All changes are made to real files and persist to disk. The human developer controls what gets
-committed to version control.`;
+const FILESYSTEM_SYSTEM_PROMPT = `Your filesystem tools act on the real files on disk, not a copy: a write or edit persists at once.
+Use absolute paths like /absolute/path/to/project/src/file.ts, or paths relative to the project root
+like src/file.ts. Which of reading, writing and editing you may do is decided by the tools you have.`;
 
 // Tool descriptions
 export const LS_TOOL_DESCRIPTION = "List files and directories in a directory";

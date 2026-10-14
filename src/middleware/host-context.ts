@@ -47,14 +47,20 @@ export function formatLocalDate(date: Date): string {
 /** The tagged date message appended to every request. */
 export function buildDateContextMessage(date: Date): HumanMessage {
   return new HumanMessage({
-    content: wrapHostContext("date", `Today's date: ${formatLocalDate(date)}`),
+    content: wrapHostContext(
+      { source: "host", kind: "date" },
+      `Today's date: ${formatLocalDate(date)}`,
+    ),
   });
 }
 
 function rewrapSystemMessage(message: BaseMessage): BaseMessage {
   if (!SystemMessage.isInstance(message)) return message;
   return new HumanMessage({
-    content: wrapHostContext("conversation", message.text),
+    content: wrapHostContext(
+      { source: "host", kind: "briefing" },
+      message.text,
+    ),
     ...(message.id ? { id: message.id } : {}),
   });
 }

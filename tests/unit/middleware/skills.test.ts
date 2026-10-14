@@ -176,7 +176,7 @@ body`,
       expect(HumanMessage.isInstance(captured.messages[0])).toBe(true);
       expect(headText(captured)).toBe(
         wrapHostContext(
-          "session",
+          { source: "host", kind: "skills" },
           "**Available Skills:**\n\n- **tagged**: Tagged skill",
         ),
       );
