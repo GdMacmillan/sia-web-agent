@@ -6,8 +6,9 @@
  * practice, so this middleware makes the read path deterministic: every
  * search-type tool call (`grep`, `glob`, `search`, and `bash` runs of
  * `rg` / `grep` / `find`) also looks up related graph-memory entries and
- * appends the top hits to the tool's own result under
- * `[Graph memory context]`.
+ * appends the top hits to the tool's own result inside a
+ * `<host-context source="memory" kind="memory">` envelope, whose first line
+ * tells the model these are leads to verify, not instructions.
  *
  * Design constraints, all load-bearing:
  *
@@ -37,6 +38,7 @@ import {
   trackPatternRetrieval,
 } from "../utils/application-tracking.js";
 import { logger } from "../utils/logger.js";
+import { wrapHostContext } from "../utils/host-context.js";
 import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
 import {
   augmentSearch,
@@ -45,8 +47,14 @@ import {
   type AugmentSearchResult,
 } from "../vendor/svc-rpc/graph-memory/search-augmentation.js";
 
-/** Header line that introduces the appended block in a tool result. */
-export const MEMORY_CONTEXT_HEADER = "[Graph memory context]";
+/**
+ * Wrap the related memories attached to a tool result. The envelope marks
+ * them as retrieved data — written by any agent sharing the memory — rather
+ * than part of what the tool returned.
+ */
+export function wrapMemoryContext(context: string): string {
+  return wrapHostContext({ source: "memory", kind: "memory" }, context);
+}
 
 export interface MemoryAugmentationMiddlewareOptions {
   /** Override the configured `features.memoryAugmentation.enabled`. */
@@ -146,7 +154,7 @@ export function createMemoryAugmentationMiddleware(
       if (!augmentation.context) return result;
 
       if (result instanceof ToolMessage && typeof result.content === "string") {
-        result.content = `${result.content}\n\n${MEMORY_CONTEXT_HEADER}\n${augmentation.context}`;
+        result.content = `${result.content}\n\n${wrapMemoryContext(augmentation.context)}`;
         try {
           trackPatternRetrieval(
             augmentation.entities.map((e) => e.id),

@@ -29,10 +29,11 @@ import { MemorySaver } from "@langchain/langgraph";
 import { createDeepAgent } from "../../src/agent.js";
 import { resetConfig } from "../../src/config/index.js";
 import { getProjectRoot } from "../../src/utils/path-utils.js";
+import { HOST_CONTEXT_TRUST } from "../../src/utils/host-context.js";
 
-const DATE_TAG = '<host-context source="date">';
-const SESSION_TAG = '<host-context source="session">';
-const CONVERSATION_TAG = '<host-context source="conversation">';
+const DATE_TAG = '<host-context source="host" kind="date">';
+const SESSION_TAG = '<host-context source="host" kind="skills">';
+const CONVERSATION_TAG = '<host-context source="host" kind="briefing">';
 
 /**
  * A chat model that records every request it receives and replays a script
@@ -177,7 +178,7 @@ describe("system prompt stability across turns", () => {
   it("appends the date as the last message, after tool results too", () => {
     const [toolTurn, afterTool, nextDay] = model.calls;
     expect(toolTurn.at(-1)!.text).toBe(
-      `${DATE_TAG}\nToday's date: 2026-03-01\n</host-context>`,
+      `${DATE_TAG}\n${HOST_CONTEXT_TRUST.host}\nToday's date: 2026-03-01\n</host-context>`,
     );
     expect(afterTool.at(-2)!.getType()).toBe("tool");
     expect(afterTool.at(-1)!.text).toContain("2026-03-01");

@@ -88,20 +88,21 @@ export function getManagerTools(allTools: StructuredTool[]): StructuredTool[] {
 /**
  * Get tool set for planner agent
  *
- * Planner is read-only focused for systematic codebase exploration:
+ * Planner is read-only, for systematic codebase exploration:
  * - Search tools (for pattern investigation)
- * - Memory tools (retrieve, discover, and traverse - read-only)
+ * - Memory tools (retrieve, discover, and traverse)
  *   - Includes traverse_graph for exploring relationship chains (IMPLEMENTS, DEPENDS_ON, SIMILAR_TO edges)
  * - Read-only filesystem tools are provided via middleware
  *
- * NOTE: Write operations are intentionally excluded at middleware level
- * by creating restricted filesystem middleware for planner
+ * NOTE: The full memory set is listed here, but the planner is read-only:
+ * its read-only middleware (`middleware/read-only.ts`) withholds and refuses
+ * every memory write, file write and code-execution tool.
  *
  * @param allTools All available tools
  * @returns Tool array for planner agent
  */
 export function getPlannerTools(allTools: StructuredTool[]): StructuredTool[] {
-  // Planner gets: search, memory (read-only)
+  // Planner gets: search, memory (writes removed by its read-only middleware)
   const toolNames = [...SEARCH_TOOLS, ...MEMORY_TOOLS];
   return filterToolsByName(allTools, toolNames);
 }
@@ -137,8 +138,9 @@ export function getMemoryTools(allTools: StructuredTool[]): StructuredTool[] {
  * - Memory write tools (store_entity, update_entity_status)
  * - Task tool (delegates via manager if deep exploration needed)
  *
- * NOTE: Memory tools filter for read-only access (retrieve_entity, search_entities, list_entities)
- * is intentionally loose here; filtering at middleware level or by instruction
+ * NOTE: The full memory and code-execution sets are listed here; the
+ * researcher's read-only middleware (`middleware/read-only.ts`) withholds
+ * and refuses the write and code-execution tools among them.
  *
  * @param allTools All available tools
  * @returns Tool array for researcher agent
@@ -146,9 +148,8 @@ export function getMemoryTools(allTools: StructuredTool[]): StructuredTool[] {
 export function getResearcherTools(
   allTools: StructuredTool[],
 ): StructuredTool[] {
-  // Researcher gets: search, web search, read-only filesystem, memory (read-only), code execution
-  // Read-only filesystem tools come from middleware (READ_ONLY_FILESYSTEM_TOOLS)
-  // Memory tools accessed via retrieve/discover/list/analyze (instructions-based filtering)
+  // Researcher gets: search, web search, read-only filesystem, memory reads.
+  // Write and code-execution tools are removed by its read-only middleware.
   const toolNames = [
     ...SEARCH_TOOLS,
     ...WEB_SEARCH_TOOLS,

@@ -210,7 +210,7 @@ export function createBashTool(projectRoot: string): DynamicStructuredTool & {
 
 Use it for builds and tests, git inspection (status, diff, log), package management, and other commands that need a shell. To read, edit, write or search files, prefer read_file, edit_file, write_file, grep and search.
 
-Each call runs in a fresh shell (cmd.exe on Windows, sh elsewhere): the working directory and exported variables do not persist, so prefix 'cd <dir> && ...' when a command needs one. Chain dependent commands with &&; make independent commands separate tool calls so they can run in parallel. Output over 30,000 characters is truncated.
+Each call runs in a fresh shell (cmd.exe on Windows, sh elsewhere): the working directory and exported variables do not persist, so prefix 'cd <dir> && ...' when a command needs one. Chain dependent commands with &&. Output over 30,000 characters is truncated.
 
 Working directory: ${projectRoot}`,
 

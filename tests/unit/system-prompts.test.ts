@@ -28,7 +28,11 @@ jest.mock("@tavily/core", () => ({
   })),
 }));
 
-import { getSystemPrompt, clearPromptCache } from "../../src/system-prompts.js";
+import {
+  getSystemPrompt,
+  getAllSystemPrompts,
+  clearPromptCache,
+} from "../../src/system-prompts.js";
 import { resetConfig } from "../../src/config/index.js";
 
 const originalTavilyKey = process.env.TAVILY_API_KEY;
@@ -138,10 +142,12 @@ describe("getSystemPrompt — web-search capability notice", () => {
 
     it("leaves the key-present prompts byte-for-byte unchanged", async () => {
       // The suffix is the empty string on this path, so the answer prompt
-      // is exactly its `.md` file and nothing else.
+      // is exactly its `.md` file plus the shared fragment and nothing else.
       const { loadPromptFile } =
         await import("../../src/utils/prompt-loader.js");
-      expect(await getSystemPrompt("answer")).toBe(loadPromptFile("answer"));
+      expect(await getSystemPrompt("answer")).toBe(
+        `${loadPromptFile("answer").trimEnd()}\n\n${loadPromptFile("shared")}`,
+      );
     });
   });
 });
@@ -187,5 +193,35 @@ describe("getSystemPrompt — manager environment context", () => {
 
     expect(after).toBe(before);
     expect(after).not.toContain("2026-03");
+  });
+});
+
+describe("getSystemPrompt — shared fragment", () => {
+  it("appends the shared rules to every agent, right after its own prompt", async () => {
+    const { loadPromptFile } = await import("../../src/utils/prompt-loader.js");
+    const shared = loadPromptFile("shared");
+    const files = {
+      manager: "manager",
+      planner: "planner",
+      researcher: "researcher",
+      answer: "answer",
+    } as const;
+
+    for (const [agent, file] of Object.entries(files)) {
+      const prompt = await getSystemPrompt(agent as keyof typeof files);
+      expect(
+        prompt.startsWith(`${loadPromptFile(file).trimEnd()}\n\n${shared}`),
+      ).toBe(true);
+    }
+  });
+
+  it("never loads a fragment as an agent's whole prompt", async () => {
+    const all = await getAllSystemPrompts();
+    expect(Object.keys(all).sort()).toEqual(
+      ["answer", "manager", "planner", "researcher"],
+    );
+    await expect(
+      getSystemPrompt("shared" as unknown as Parameters<typeof getSystemPrompt>[0]),
+    ).rejects.toThrow(/Unknown agent prompt/);
   });
 });

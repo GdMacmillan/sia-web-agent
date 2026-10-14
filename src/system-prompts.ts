@@ -2,9 +2,11 @@
  * System Prompts - Loads and assembles system prompts for agents
  *
  * Prompts are stored as markdown files in the prompts/ directory and loaded
- * dynamically. The manager prompt gets environment context appended, and
- * prompts that reference `web_search` get a capability notice appended when
- * that tool is unavailable.
+ * dynamically. Every agent prompt gets the shared fragment
+ * (`prompts/shared.md`, the rules that apply to every agent) appended, the
+ * manager prompt gets environment context after that, and prompts that
+ * reference `web_search` get a capability notice appended last when that
+ * tool is unavailable.
  *
  * The result is deterministic for a given set of options within a process —
  * no clock or per-request values — so the system prompt is byte-stable across
@@ -74,8 +76,8 @@ const NAME_MAP: Record<
 /**
  * Get system prompt for a specific agent.
  *
- * Loads the base prompt from markdown files and, for the manager agent,
- * appends dynamic environment context.
+ * Loads the base prompt from markdown files, appends the shared fragment
+ * and, for the manager agent, the environment context.
  *
  * @param agentName - The agent to get the prompt for
  * @param contextOptions - Optional overrides for system context (manager only)
@@ -85,8 +87,13 @@ export async function getSystemPrompt(
   agentName: AgentName,
   contextOptions?: SystemContextOptions,
 ): Promise<string> {
+  // Only real agent names resolve. The fragments (`shared`,
+  // `no-web-search`) are never loadable as an agent's whole prompt.
+  if (!Object.hasOwn(NAME_MAP, agentName)) {
+    throw new Error(`Unknown agent prompt: ${String(agentName)}`);
+  }
   const normalizedName = NAME_MAP[agentName];
-  const basePrompt = loadPromptFile(normalizedName);
+  const basePrompt = `${loadPromptFile(normalizedName).trimEnd()}\n\n${loadPromptFile("shared")}`;
   // Appended LAST so it overrides anything the base prompt says about
   // reaching the internet. Empty string when web search is available, so
   // the key-present path is byte-for-byte unchanged.

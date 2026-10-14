@@ -156,6 +156,10 @@ const managerRaw = readFileSync(
   path.join(projectRoot, "prompts", "manager.md"),
   "utf8",
 );
+const sharedRaw = readFileSync(
+  path.join(projectRoot, "prompts", "shared.md"),
+  "utf8",
+);
 const basePrompt = await getSystemPrompt("manager");
 const orchestrator = resolveModelEndpoint(
   getConfig().llm,
@@ -179,7 +183,11 @@ const add = (part: string, chars: number): void => {
 };
 if (system.includes(basePrompt)) {
   add("prompts/manager.md", managerRaw.length);
-  add("environment block", basePrompt.length - managerRaw.length);
+  add("prompts/shared.md", sharedRaw.length);
+  add(
+    "environment block",
+    basePrompt.length - managerRaw.length - sharedRaw.length,
+  );
 }
 if (suffix && system.includes(suffix)) {
   add(`profile suffix (${orchestrator})`, suffix.length);
