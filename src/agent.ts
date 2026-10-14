@@ -37,8 +37,10 @@ import {
   createUsageEventsMiddleware,
   createCapExhaustionMiddleware,
   createHostContextMiddleware,
+  createSituationContextMiddleware,
   createSystemPromptCacheMiddleware,
   HOST_CONTEXT_MIDDLEWARE_NAME,
+  SITUATION_CONTEXT_MIDDLEWARE_NAME,
   SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,
   type SubAgent,
   type CompiledSubAgent,
@@ -151,6 +153,7 @@ export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  SITUATION_CONTEXT_MIDDLEWARE_NAME,
   HOST_CONTEXT_MIDDLEWARE_NAME,
   SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,
   "knowledgeFormationMiddleware",
@@ -219,6 +222,11 @@ async function getBasePrompt(options: SystemContextOptions): Promise<string> {
     options.modelName ?? null,
     options.modelId ?? null,
     options.knowledgeCutoff ?? null,
+    options.provider ?? null,
+    options.nodeId ?? null,
+    options.sandboxStatus ?? null,
+    options.sandboxMechanism ?? null,
+    options.agentSourceVersion ?? null,
   ]);
   let prompt = basePromptCache.get(key);
   if (!prompt) {
@@ -305,11 +313,17 @@ export async function createDeepAgent<
   // (legacy behavior); a SystemPromptConfig can replace/remove the base.
   // Model facts come from the launching host (unset ones are omitted from the
   // environment block, never guessed). The id is the orchestrator endpoint
-  // this agent's model was built from.
+  // this agent's model was built from. Node, sandbox and source version are
+  // the host's account of this process, stamped at launch.
   const basePrompt = await getBasePrompt({
     modelId: orchestratorModel,
     modelName: runtimeConfig.runtime.modelName,
     knowledgeCutoff: runtimeConfig.runtime.modelKnowledgeCutoff,
+    provider: runtimeConfig.llm.provider,
+    nodeId: runtimeConfig.runtime.nodeId,
+    sandboxStatus: runtimeConfig.runtime.sandboxStatus,
+    sandboxMechanism: runtimeConfig.runtime.sandboxMechanism,
+    agentSourceVersion: runtimeConfig.runtime.agentSourceVersion,
   });
   const promptConfig = normalizeSystemPrompt(systemPrompt);
   const baseSection =
@@ -523,11 +537,14 @@ export async function createDeepAgent<
   // instead, which marks the system prompt's content block. The host context
   // middleware keeps that system prompt byte-stable by sending the date and
   // in-history context as messages. Both sit after every middleware that
-  // edits the system prompt; custom entries insert before the tail.
+  // edits the system prompt; custom entries insert before the tail. The
+  // situation middleware sits just outside it, so its message lands before
+  // the date. Main stack only: a sub-agent works on a narrower task.
   const tailMiddleware: AgentMiddleware[] = [
     anthropicPromptCachingMiddleware({
       unsupportedModelBehavior: "ignore",
     }),
+    createSituationContextMiddleware(),
     createHostContextMiddleware(),
     createSystemPromptCacheMiddleware({ modelId: orchestratorModel }),
     createKnowledgeFormationMiddleware({

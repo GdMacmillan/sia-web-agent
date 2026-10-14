@@ -43,56 +43,13 @@ import type {
   GraphTraverseRequest,
   GraphTraverseResponse,
 } from "../vendor/svc-rpc/graph-memory/ir-types.js";
+import { callHostRpc } from "../utils/host-rpc.js";
 import { logger } from "../utils/logger.js";
 
 const SERVICE = "graph-memory";
 const SERVICE_VERSION = "v1";
 const DEFAULT_DEADLINE_MS = 30_000;
 const DEFAULT_BASE_URL = "http://127.0.0.1:7700";
-
-/** Wire envelope the host accepts on the service-call endpoint. */
-interface RpcRequestEnvelope<TPayload> {
-  version: 1;
-  id: string;
-  workspaceId: string;
-  service: string;
-  serviceVersion: string;
-  verb: string;
-  schemaHash: string;
-  /**
-   * Schema hash scoped to the single verb being called.
-   *
-   * The service-wide `schemaHash` above identifies the whole IDL, so it
-   * changes whenever any verb does. `verbHash` identifies just the verb
-   * in this request, which lets the two sides agree per verb rather than
-   * all-or-nothing.
-   *
-   * Optional on the wire: unknown envelope fields are ignored, so
-   * including it is safe regardless of what the peer understands.
-   */
-  verbHash?: string;
-  replyTo: string;
-  deadlineUnixMs: number;
-  payload: TPayload;
-}
-
-/** Wire envelope the host returns on `200 OK` (success branch). */
-interface RpcResponseEnvelopeOk<TPayload> {
-  version: 1;
-  id: string;
-  ok: true;
-  payload: TPayload;
-}
-
-/** Wire envelope the host returns on `200 OK` (error branch). */
-interface RpcResponseEnvelopeErr {
-  version: 1;
-  id: string;
-  ok: false;
-  error: { code: string; message: string; retryable: boolean };
-}
-
-type RpcResponseEnvelope<T> = RpcResponseEnvelopeOk<T> | RpcResponseEnvelopeErr;
 
 export interface SiadGraphMemoryAdapterOptions {
   /** Workspace this adapter is bound to. Required. */
@@ -247,72 +204,20 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
         "SiadGraphMemoryAdapter: SIA_DAEMON_TOKEN is empty — cannot authenticate to the host",
       );
     }
-
-    const envelope: RpcRequestEnvelope<TReq> = {
-      version: 1,
-      id: this.randomId(),
+    return callHostRpc<TReq, TResp>({
+      url: this.siadUrl,
+      token: this.siadToken,
       workspaceId: this.workspaceId,
       service: SERVICE,
       serviceVersion: SERVICE_VERSION,
       verb,
       schemaHash: GRAPH_MEMORY_SCHEMA_HASH,
-      // Send it only when the vendored map has a hash for this verb.
-      // The map covers every verb, so the guard is belt-and-braces; an
-      // empty string carries no more information than omitting the key
-      // and only widens the envelope.
-      ...(GRAPH_MEMORY_VERB_SCHEMA_HASHES[verb]
-        ? { verbHash: GRAPH_MEMORY_VERB_SCHEMA_HASHES[verb] }
-        : {}),
-      replyTo: "_INBOX.agent",
-      deadlineUnixMs: Date.now() + this.deadlineMs,
+      verbHash: GRAPH_MEMORY_VERB_SCHEMA_HASHES[verb],
       payload,
-    };
-
-    let res: Response;
-    try {
-      res = await this.fetchImpl(`${this.siadUrl}/rpc/call`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.siadToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(envelope),
-      });
-    } catch (err) {
-      throw new Error(
-        `SiadGraphMemoryAdapter: host network error for ${verb}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-        { cause: err },
-      );
-    }
-
-    if (res.status !== 200) {
-      try {
-        await res.text();
-      } catch {
-        // ignore
-      }
-      throw new Error(
-        `SiadGraphMemoryAdapter: host returned ${res.status} for ${verb}`,
-      );
-    }
-
-    let body: RpcResponseEnvelope<TResp>;
-    try {
-      body = (await res.json()) as RpcResponseEnvelope<TResp>;
-    } catch (err) {
-      throw new Error(
-        `SiadGraphMemoryAdapter: host returned 200 with non-JSON body for ${verb}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-        { cause: err },
-      );
-    }
-
-    if (body.ok) return body.payload;
-    throw new Error(
-      `svc.graph-memory.v1.${verb} failed [${body.error.code}]: ${body.error.message}`,
-    );
+      deadlineMs: this.deadlineMs,
+      errorPrefix: "SiadGraphMemoryAdapter",
+      fetchImpl: this.fetchImpl,
+      randomId: this.randomId,
+    });
   }
 }

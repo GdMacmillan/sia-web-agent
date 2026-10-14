@@ -639,6 +639,41 @@ describe("loadConfig", () => {
       expect(loadConfig().runtime.modelName).toBeUndefined();
       expect(loadConfig().runtime.modelKnowledgeCutoff).toBeUndefined();
     });
+
+    it("reads the host's account of the process when set", () => {
+      process.env.OPENROUTER_API_KEY = "sk-key";
+      process.env.SIA_NODE_ID = " node-1 ";
+      process.env.SIA_SANDBOX_STATUS = "enforced";
+      process.env.SIA_SANDBOX_MECHANISM = "seatbelt";
+      process.env.SIA_AGENT_SOURCE_VERSION = "0.13.0";
+      try {
+        const { runtime } = loadConfig();
+        expect(runtime.nodeId).toBe("node-1");
+        expect(runtime.sandboxStatus).toBe("enforced");
+        expect(runtime.sandboxMechanism).toBe("seatbelt");
+        expect(runtime.agentSourceVersion).toBe("0.13.0");
+      } finally {
+        delete process.env.SIA_NODE_ID;
+        delete process.env.SIA_SANDBOX_STATUS;
+        delete process.env.SIA_SANDBOX_MECHANISM;
+        delete process.env.SIA_AGENT_SOURCE_VERSION;
+      }
+    });
+
+    it("leaves the host's account undefined when unset or blank", () => {
+      process.env.OPENROUTER_API_KEY = "sk-key";
+      process.env.SIA_NODE_ID = "  ";
+      delete process.env.SIA_SANDBOX_STATUS;
+      try {
+        const { runtime } = loadConfig();
+        expect(runtime.nodeId).toBeUndefined();
+        expect(runtime.sandboxStatus).toBeUndefined();
+        expect(runtime.sandboxMechanism).toBeUndefined();
+        expect(runtime.agentSourceVersion).toBeUndefined();
+      } finally {
+        delete process.env.SIA_NODE_ID;
+      }
+    });
   });
 });
 

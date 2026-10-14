@@ -202,7 +202,20 @@ export interface HostComponentView {
   active?: string;
   previous?: string;
   candidate?: { version: string; threadId?: string; announcedAt?: string };
-  lastOutcome?: { version: string; result: string; at?: string; error?: string };
+  lastOutcome?: {
+    version: string;
+    result: string;
+    at?: string;
+    error?: string;
+    /** The keeper's own words for the decision, when they gave any. */
+    decisionReason?: string;
+  };
+  /**
+   * Versions the keeper declined, keyed by version. Positive knowledge of a
+   * reject: the declined version's files stay on disk, so this is what
+   * separates it from one that was never announced.
+   */
+  rejected?: Record<string, { at?: string; decisionReason?: string }>;
   versions: string[];
 }
 
@@ -226,6 +239,24 @@ export interface Verdict {
   outcome: SettledOutcome;
   reason?: string;
   at?: string;
+  /** The keeper's reason for the decision, verbatim, when they gave one. */
+  decisionReason?: string;
+}
+
+/** The longest keeper's reason written into an entity's prose. */
+export const DECISION_REASON_MAX_CHARS = 1000;
+
+/** A keeper's reason trimmed and capped for an entity's prose. */
+export function capDecisionReason(reason: string): string {
+  const trimmed = reason.trim();
+  return trimmed.length > DECISION_REASON_MAX_CHARS
+    ? `${trimmed.slice(0, DECISION_REASON_MAX_CHARS)}…`
+    : trimmed;
+}
+
+/** The content line that carries a keeper's reason. */
+export function decisionReasonLine(reason: string): string {
+  return `Keeper's reason: ${capDecisionReason(reason)}`;
 }
 
 export type ReconcileDecision =
@@ -241,6 +272,9 @@ export type ReconcileDecision =
  * - the host's last outcome names this version → settle with that verdict.
  * - it is the candidate, or the active version without a verdict yet
  *   (a swap in flight) → wait.
+ * - the host lists it among the versions the keeper declined → settle
+ *   `rejected` with the keeper's time and reason, in either phase: that is
+ *   positive knowledge, not an inference from absence.
  * - it was never announced → it may still be under construction (a
  *   self-task in another thread can be mid-`prepare`/`run`/edit when a
  *   turn elsewhere runs this check — `recordLineage` tracks a version the
@@ -277,10 +311,20 @@ export function decideReconcile(
       outcome,
       ...(last.error ? { reason: last.error } : {}),
       ...(last.at ? { at: last.at } : {}),
+      ...(last.decisionReason ? { decisionReason: last.decisionReason } : {}),
     };
   }
   if (component?.candidate?.version === pending.version || component?.active === pending.version) {
     return { action: "wait" };
+  }
+  const declined = component?.rejected?.[pending.version];
+  if (declined) {
+    return {
+      action: "settle",
+      outcome: "rejected",
+      ...(declined.at ? { at: declined.at } : {}),
+      ...(declined.decisionReason ? { decisionReason: declined.decisionReason } : {}),
+    };
   }
   if (!pending.announced) {
     return phase === "boot"
@@ -303,7 +347,12 @@ export function decideReconcile(
 export interface SettlePayload {
   tags: string[];
   status: "completed";
-  metadata: { outcome: SettledOutcome; reason?: string; settled_at: string };
+  metadata: {
+    outcome: SettledOutcome;
+    reason?: string;
+    settled_at: string;
+    decision_reason?: string;
+  };
   contentLine: string;
 }
 
@@ -324,7 +373,12 @@ export function settlePayload(
       outcome: verdict.outcome,
       ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
       settled_at: verdict.at ?? now(),
+      ...(verdict.decisionReason?.trim()
+        ? { decision_reason: verdict.decisionReason.trim() }
+        : {}),
     },
-    contentLine: outcomeLine(verdict.outcome, verdict.reason),
+    contentLine: verdict.decisionReason?.trim()
+      ? `${outcomeLine(verdict.outcome, verdict.reason)}\n${decisionReasonLine(verdict.decisionReason)}`
+      : outcomeLine(verdict.outcome, verdict.reason),
   };
 }

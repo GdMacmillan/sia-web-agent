@@ -361,6 +361,10 @@ function loadRuntimeConfig(): RuntimeConfig {
     modelName: env("SIA_MODEL_NAME")?.trim() || undefined,
     modelKnowledgeCutoff:
       env("SIA_MODEL_KNOWLEDGE_CUTOFF")?.trim() || undefined,
+    nodeId: env("SIA_NODE_ID")?.trim() || undefined,
+    sandboxStatus: env("SIA_SANDBOX_STATUS")?.trim() || undefined,
+    sandboxMechanism: env("SIA_SANDBOX_MECHANISM")?.trim() || undefined,
+    agentSourceVersion: env("SIA_AGENT_SOURCE_VERSION")?.trim() || undefined,
   };
 }
 

@@ -60,6 +60,13 @@ defaults.
 | `SIA_WORKSPACE_ID` | unset | Tenant scope. Echoed in usage-event payloads; the host validates the echo. Only read by `usage-events` middleware — without `SIAD_EVENTS_URL` set, ignored. |
 | `SIA_MODEL_NAME` | unset | Display name of the orchestrator model, stated in the system prompt's environment block ("You are powered by the model named …"). Unset: the line names only the model id. |
 | `SIA_MODEL_KNOWLEDGE_CUTOFF` | unset | The orchestrator model's training cutoff, free text (e.g. `January 2025`). Unset: the cutoff line is omitted. |
+| `SIA_NODE_ID` | unset | The machine the agent runs on, as the host names it. Stated in the environment block; unset: omitted. |
+| `SIA_SANDBOX_STATUS` | unset | How strongly the host confines the agent process (e.g. `enforced`, `partial`, `not_enforced`). Stated in the environment block; unset: omitted. |
+| `SIA_SANDBOX_MECHANISM` | unset | What does the confining (e.g. `seatbelt`, `landlock+seccomp`). Stated with the status; unset: omitted. |
+| `SIA_AGENT_SOURCE_VERSION` | unset | The version of this source tree the host staged. Stated in the environment block; unset: omitted. Drift from it is reported per request ([`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §3.5). |
+
+All four are read once at startup and are part of the cached system prompt
+([`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §1.2).
 
 ## Host callback (usage events)
 

@@ -9,6 +9,7 @@ import {
   SUPERSEDES,
   buildLineageEntity,
   buildParentEntity,
+  DECISION_REASON_MAX_CHARS,
   decideReconcile,
   lineageTitle,
   outcomeFromHostResult,
@@ -326,6 +327,75 @@ describe("decideReconcile", () => {
         reason: "never announced",
       });
     });
+  });
+});
+
+describe("decideReconcile — the keeper's reasons", () => {
+  const pending = { name: "execute-code", version: "0.2.3", announced: true };
+  const view = (c: Partial<HostComponentView>): HostComponentView[] => [
+    { name: "execute-code", versions: [], ...c },
+  ];
+
+  it("settles rejected from the host's declined list with the keeper's time and reason, in either phase", () => {
+    const host = view({
+      active: "0.2.1",
+      rejected: { "0.2.3": { at: "2026-10-11T09:00:00Z", decisionReason: "no new dependency" } },
+    });
+    const expected = {
+      action: "settle",
+      outcome: "rejected",
+      at: "2026-10-11T09:00:00Z",
+      decisionReason: "no new dependency",
+    };
+    expect(decideReconcile(pending, host, "boot", false)).toEqual(expected);
+    expect(decideReconcile(pending, host, "turn", false)).toEqual(expected);
+    expect(decideReconcile({ ...pending, announced: false }, host, "turn", false)).toEqual(expected);
+  });
+
+  it("does not settle from the declined list while the host still holds the version", () => {
+    const host = view({ candidate: { version: "0.2.3" }, rejected: { "0.2.3": { at: "x" } } });
+    expect(decideReconcile(pending, host, "turn", false)).toEqual({ action: "wait" });
+  });
+
+  it("carries the keeper's reason from a matching lastOutcome", () => {
+    const host = view({
+      active: "0.2.3",
+      lastOutcome: { version: "0.2.3", result: "activated", decisionReason: "clean and small" },
+    });
+    expect(decideReconcile(pending, host, "turn", false)).toEqual({
+      action: "settle",
+      outcome: "converged",
+      decisionReason: "clean and small",
+    });
+  });
+});
+
+describe("settlePayload — the keeper's reason", () => {
+  it("records the reason in metadata and as its own content line", () => {
+    const payload = settlePayload([], {
+      outcome: "rejected",
+      at: "2026-10-11T09:00:00Z",
+      decisionReason: "  no new dependency ",
+    });
+    expect(payload.metadata).toEqual({
+      outcome: "rejected",
+      settled_at: "2026-10-11T09:00:00Z",
+      decision_reason: "no new dependency",
+    });
+    expect(payload.contentLine).toBe("Outcome: rejected.\nKeeper's reason: no new dependency");
+  });
+
+  it("caps the reason in the prose but keeps it whole in metadata", () => {
+    const long = "x".repeat(DECISION_REASON_MAX_CHARS + 50);
+    const payload = settlePayload([], { outcome: "rejected", decisionReason: long }, () => "t");
+    expect(payload.metadata.decision_reason).toBe(long);
+    expect(payload.contentLine.endsWith(`${"x".repeat(DECISION_REASON_MAX_CHARS)}…`)).toBe(true);
+  });
+
+  it("adds nothing for a blank reason", () => {
+    const payload = settlePayload([], { outcome: "converged", decisionReason: "  " }, () => "t");
+    expect(payload.metadata).not.toHaveProperty("decision_reason");
+    expect(payload.contentLine).toBe("Outcome: converged.");
   });
 });
 

@@ -667,3 +667,102 @@ describe("host push", () => {
     }
   });
 });
+
+describe("the keeper's reasons", () => {
+  const metaOf = (u: { properties: Record<string, unknown> }) =>
+    u.properties.custom_metadata as Record<string, unknown> | undefined;
+
+  it("stores the reason a push carries, in metadata and in the prose", async () => {
+    const { store, reconciler } = build();
+    reconciler.track("e-023", "execute-code", "0.2.3");
+    const result = await reconciler.onHostOutcome({
+      kind: "rejected",
+      agentId: "agent-1",
+      component: "execute-code",
+      version: "0.2.3",
+      at: "2026-10-11T09:00:00Z",
+      decisionReason: "do not add a dependency for this",
+    });
+    expect(result).toEqual({ status: "settled", entityId: "e-023" });
+    expect(metaOf(store.updates[0]!)).toMatchObject({
+      outcome: "rejected",
+      decision_reason: "do not add a dependency for this",
+    });
+    expect(JSON.stringify(store.updates[0]!.properties)).toContain(
+      "Keeper's reason: do not add a dependency for this",
+    );
+  });
+
+  it("adds a pushed reason to an entity a poll already settled, without moving its outcome", async () => {
+    const store = stubAdapter([{ id: "e-023", title: "execute-code@0.2.3", outcome: "rejected" }]);
+    const { reconciler } = build({ getAdapter: () => store.adapter });
+    const result = await reconciler.onHostOutcome({
+      kind: "rejected",
+      agentId: "agent-1",
+      component: "execute-code",
+      version: "0.2.3",
+      decisionReason: "too broad",
+    });
+    expect(result).toEqual({ status: "already_settled", entityId: "e-023" });
+    expect(store.updates).toHaveLength(1);
+    expect(metaOf(store.updates[0]!)).toMatchObject({ outcome: "rejected", decision_reason: "too broad" });
+    expect(store.updates[0]!.properties).not.toHaveProperty("tags");
+    expect(store.updates[0]!.properties).not.toHaveProperty("status");
+  });
+
+  it("settles a pending version from the host's declined list with its reason at boot", async () => {
+    const host = scriptedHost([
+      status({ active: "0.2.1", rejected: { "0.2.3": { at: "2026-10-11T09:00:00Z", decisionReason: "no" } } }),
+    ]);
+    const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl });
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+    const settled = store.updates.map(metaOf).find((m) => m?.outcome === "rejected");
+    expect(settled).toMatchObject({ decision_reason: "no", settled_at: "2026-10-11T09:00:00Z" });
+    expect(reconciler.pending()).toEqual([]);
+  });
+
+  it("back-fills a settled entity without a reason at boot, and leaves one that has a reason", async () => {
+    const host = scriptedHost([
+      status({
+        active: "0.2.2",
+        lastOutcome: { version: "0.2.2", result: "activated", decisionReason: "clean and small" },
+        rejected: { "0.2.3": { at: "2026-10-11T09:00:00Z", decisionReason: "not this" } },
+      }),
+    ]);
+    const store = stubAdapter([
+      { id: "e-022", title: "execute-code@0.2.2", outcome: "converged" },
+      { id: "e-023", title: "execute-code@0.2.3", outcome: "rejected" },
+    ]);
+    const meta023 = (store.nodes.get("e-023")!.properties.metadata as Record<string, unknown>)
+      .custom_metadata as Record<string, unknown>;
+    meta023.decision_reason = "already recorded";
+    const { reconciler } = build({
+      fetchImpl: host.fetchImpl,
+      getAdapter: () => store.adapter,
+      discoverLocalVersions: async () => [
+        { name: "execute-code", version: "0.2.2" },
+        { name: "execute-code", version: "0.2.3" },
+      ],
+    });
+    await reconciler.onBoot();
+    expect(host.calls).toHaveLength(1);
+    expect(store.updates).toHaveLength(1);
+    expect(store.updates[0]!.nodeId).toBe("e-022");
+    expect(metaOf(store.updates[0]!)).toMatchObject({
+      outcome: "converged",
+      decision_reason: "clean and small",
+    });
+  });
+
+  it("never back-fills a version this agent did not produce", async () => {
+    const host = scriptedHost([
+      status({ lastOutcome: { version: "0.9.0", result: "activated", decisionReason: "fine" } }),
+    ]);
+    const store = stubAdapter([{ id: "e-090", title: "execute-code@0.9.0", outcome: "converged" }]);
+    const { reconciler } = build({ fetchImpl: host.fetchImpl, getAdapter: () => store.adapter });
+    await reconciler.onBoot();
+    expect(store.updates).toHaveLength(0);
+  });
+});

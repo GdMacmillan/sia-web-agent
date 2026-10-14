@@ -312,4 +312,23 @@ export interface RuntimeConfig {
    * When unset the cutoff line is omitted from the system prompt.
    */
   modelKnowledgeCutoff?: string;
+  /**
+   * Identifier of the machine (node) the host runs this agent on
+   * (`SIA_NODE_ID`). Rendered into the environment block; omitted when unset.
+   */
+  nodeId?: string;
+  /**
+   * The OS sandbox the host applied to this process (`SIA_SANDBOX_STATUS`,
+   * e.g. `enforced`, `partial`, `not_enforced`, `disabled_by_operator`).
+   * Stamped by the host from what it actually applied; omitted when unset.
+   */
+  sandboxStatus?: string;
+  /** How that sandbox is enforced (`SIA_SANDBOX_MECHANISM`, e.g. `seatbelt`). */
+  sandboxMechanism?: string;
+  /**
+   * The agent-source version the host staged and launched this process from
+   * (`SIA_AGENT_SOURCE_VERSION`). The host's record, not the editable
+   * package.json; omitted when unset.
+   */
+  agentSourceVersion?: string;
 }

@@ -641,9 +641,9 @@ tools, not by the model:
 | Entity field | Value |
 |---|---|
 | `entity_type` / `title` | `component_version` / `<name>@<version>` — exact-title lookups depend on it |
-| `content` | prose a stranger can use: the component under both spellings (`execute-code`, `execute_code`), the parent, the need verbatim, the thread, the producer, the outcome and its reason |
+| `content` | prose a stranger can use: the component under both spellings (`execute-code`, `execute_code`), the parent, the need verbatim, the thread, the producer, the outcome and its reason, and the keeper's reason when they gave one |
 | `tags` | `component_version`, `component:<name>`, both spellings, `version:<v>`, `outcome:<o>`, `produced-by:<agent>`, `announced` |
-| `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at? }` |
+| `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at?, decision_reason? }` |
 | `status` | `active` while a candidate, `completed` once settled — never archived; a reverted version is exactly the memory worth keeping |
 | edge | `SUPERSEDES`, new version → parent; none for a first version, which is the root of its lineage |
 
@@ -709,6 +709,19 @@ verdict from anyone but this side:
   turn, and at boot only once the poll has waited long enough (the cap) for
   a swap in flight to be recorded.
 
+A host that reports the keeper's rejects (`rejected` in `/status`,
+`HOST_CONTRACT.md` §3.5) settles them before any of that: a version listed
+there is `rejected` at once, in any phase, with the keeper's reason.
+
+**The keeper's reason.** Whoever accepts, rejects or retires a version may
+say why. The reason reaches the agent on the outcome push, in
+`lastOutcome.decisionReason` or the `rejected` map, and is stored as
+`metadata.decision_reason` plus a `Keeper's reason: …` content line (so
+search finds it). A reason that arrives after the entity settled is added
+without changing the outcome, and one boot pass back-fills reasons the host
+still reports onto settled entities that lack one. The agent treats a
+reason as a constraint on its next version of the component.
+
 `removed` does not fit that pending-version poll: it targets a version
 whose entity is already `converged`, not one the reconciler is watching
 for a first verdict. So a separate, one-time read at boot (before the
@@ -728,6 +741,25 @@ runs from `componentsMiddleware` at most once a minute and only while
 something is pending. Nothing here can break boot: no memory adapter or no
 `SIA_DAEMON_URL` latches the reconciler off for the process, and every
 failure is logged and dropped.
+
+**The self-task briefing.** `start_self_task` opens its thread with a
+system-role briefing ahead of the task (`src/components/self-task-briefing.ts`):
+up to eight of this agent's own versions, newest first, each with its
+outcome, need and keeper's reason; the failure-modes notes the keeper
+wrote about this agent; and the platform's refusal record, capped at
+16,000 characters (both host reads, `HOST_CONTRACT.md` §3.8). The parts are
+gathered in parallel under a 3 s budget; a part that fails is described as
+unreadable or left out, there is no briefing when no part has anything to
+say, and nothing about it can stop the self-task from starting. It lives in
+the thread's history, so the work can re-read it after summarisation, and
+it reaches the model as tagged context, never as a second system prompt.
+
+**The situation message.** `situationContextMiddleware` (main stack only)
+adds one request-only `situation` context message near the end of every
+model call: whether the agent's source tree has drifted from the version
+the host staged, with up to ten paths of each kind, and which upstreams the
+host offers this agent's components (`HOST_CONTRACT.md` §3.5, §3.7). It is
+never written to state, and the system prompt stays byte-stable.
 
 Search is by words, not metadata: the need, the names and the outcome are
 in the title, content and tags for that reason. A raw entity can be

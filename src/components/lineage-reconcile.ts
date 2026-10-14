@@ -25,11 +25,16 @@ import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter
 import { listComponentVersions } from "./authoring.js";
 import { MANIFEST_FILE, VERSIONS_DIR } from "./discovery.js";
 import { readHostComponents } from "./lineage-host.js";
-import { findLineageEntity, settleLineageEntity } from "./lineage-store.js";
+import {
+  annotateDecisionReason,
+  findLineageEntity,
+  settleLineageEntity,
+} from "./lineage-store.js";
 import {
   decideReconcile,
   isLineageOutcome,
   lineageTitle,
+  type HostComponentView,
   type PendingVersion,
   type SettledOutcome,
   type TrackedPendingVersion,
@@ -48,6 +53,8 @@ export interface HostOutcomeFrame {
   version: string;
   reason?: string;
   at?: string;
+  /** The keeper's own words for the decision, when they gave any. */
+  decisionReason?: string;
 }
 
 export type HostOutcomeResult =
@@ -98,6 +105,9 @@ const DEFAULT_TURN_THROTTLE_MS = 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 
 const SETTLED_KINDS: readonly string[] = ["converged", "reverted", "failed", "rejected", "removed"];
+
+/** The most settled entities one boot annotates with a keeper's reason. */
+const BACKFILL_LIMIT = 20;
 
 function key(name: string, version: string): string {
   return lineageTitle(name, version);
@@ -172,6 +182,9 @@ function parseFrame(frame: unknown): HostOutcomeFrame | null {
     version: f.version,
     ...(typeof f.reason === "string" && f.reason !== "" ? { reason: f.reason } : {}),
     ...(typeof f.at === "string" && f.at !== "" ? { at: f.at } : {}),
+    ...(typeof f.decisionReason === "string" && f.decisionReason.trim() !== ""
+      ? { decisionReason: f.decisionReason }
+      : {}),
   };
 }
 
@@ -305,9 +318,14 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
    * only tracks candidates). One extra read of `/status` at boot closes
    * that gap: an entry whose last outcome is `removed`, that has no
    * `active` version, and whose removed version is one this agent
-   * produced, gets the same settle a push would have given it. Never
-   * throws — no daemon url, an unreachable host, or a memory failure
-   * just means nothing is caught up this boot.
+   * produced, gets the same settle a push would have given it.
+   *
+   * The same read then back-fills the keeper's reasons: a version of this
+   * agent's that was settled without one (by an older host, or by a path
+   * that did not carry it) gets the reason the host still reports for it
+   * — at most {@link BACKFILL_LIMIT} entities per boot. Never throws — no
+   * daemon url, an unreachable host, or a memory failure just means
+   * nothing is caught up this boot.
    */
   const catchUpRemoved = async (): Promise<void> => {
     const a = resolveAdapter();
@@ -347,6 +365,7 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
             outcome: "removed",
             ...(last.error ? { reason: last.error } : {}),
             ...(last.at ? { at: last.at } : {}),
+            ...(last.decisionReason ? { decisionReason: last.decisionReason } : {}),
           },
           () => new Date(now()).toISOString(),
         );
@@ -359,6 +378,48 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
         logger.warn(
           { component: entry.name, version: last.version, error: errorMessage(error) },
           "component lineage: removed catch-up settle failed",
+        );
+      }
+    }
+    await backfillReasons(a, view, isOwnVersion);
+  };
+
+  /** Annotate this agent's settled versions with the reasons the host still reports. */
+  const backfillReasons = async (
+    a: IGraphMemoryAdapter,
+    view: HostComponentView[],
+    isOwnVersion: (name: string, version: string) => boolean,
+  ): Promise<void> => {
+    const reasons = new Map<string, { name: string; version: string; reason: string }>();
+    for (const entry of view) {
+      for (const [version, declined] of Object.entries(entry.rejected ?? {})) {
+        if (declined.decisionReason && isOwnVersion(entry.name, version)) {
+          reasons.set(key(entry.name, version), { name: entry.name, version, reason: declined.decisionReason });
+        }
+      }
+      const last = entry.lastOutcome;
+      if (last?.decisionReason && isOwnVersion(entry.name, last.version)) {
+        reasons.set(key(entry.name, last.version), {
+          name: entry.name,
+          version: last.version,
+          reason: last.decisionReason,
+        });
+      }
+    }
+    for (const { name, version, reason } of [...reasons.values()].slice(0, BACKFILL_LIMIT)) {
+      try {
+        const entity = await findLineageEntity(a, key(name, version));
+        if (!entity) {
+          continue;
+        }
+        const result = await annotateDecisionReason(a, entity.id, reason);
+        if (result === "annotated") {
+          logger.info({ component: name, version }, "component lineage: keeper's reason recorded");
+        }
+      } catch (error) {
+        logger.warn(
+          { component: name, version, error: errorMessage(error) },
+          "component lineage: recording the keeper's reason failed",
         );
       }
     }
@@ -446,8 +507,20 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
       outcome: frame.kind,
       ...(frame.reason ? { reason: frame.reason } : {}),
       ...(frame.at ? { at: frame.at } : {}),
+      ...(frame.decisionReason ? { decisionReason: frame.decisionReason } : {}),
     };
     const status = await settle(a, tracked, verdict);
+    if (status === "already_settled" && frame.decisionReason) {
+      // A poll settled it first, without the reason: add the reason alone.
+      try {
+        await annotateDecisionReason(a, tracked.entityId, frame.decisionReason);
+      } catch (error) {
+        logger.warn(
+          { component: frame.component, version: frame.version, error: errorMessage(error) },
+          "component lineage: recording the keeper's reason failed",
+        );
+      }
+    }
     return { status, entityId: tracked.entityId };
   };
 

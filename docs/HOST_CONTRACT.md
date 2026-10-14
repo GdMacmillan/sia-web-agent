@@ -45,8 +45,8 @@ process; there is no out-of-band fetch.
 
 ### 1.2 Identity
 
-The agent currently reads two identity vars from env, plus two optional
-model facts:
+The agent currently reads two identity vars from env, plus optional facts
+about the model and the machine it runs on:
 
 | Variable | Purpose | Required |
 |---|---|---|
@@ -54,19 +54,21 @@ model facts:
 | `SIA_AGENT_ID` | Stable agent identifier. Echoed in usage-event payloads; the host scopes the per-spawn bearer token to it. Defaults to `"self-improving-agent"` when unset. | Required iff `SIAD_EVENTS_URL` is set |
 | `SIA_MODEL_NAME` | Display name of the orchestrator model the host configured. Stated in the system prompt; omitted when unset. | No |
 | `SIA_MODEL_KNOWLEDGE_CUTOFF` | That model's training cutoff, free text (e.g. `January 2025`). Stated in the system prompt; omitted when unset. | No |
+| `SIA_NODE_ID` | The machine the agent runs on, as the host names it. Stated in the system prompt's environment block; omitted when unset. | No |
+| `SIA_SANDBOX_STATUS` | How strongly the host confines the agent process, in the host's own words (e.g. `enforced`, `partial`, `not_enforced`). Stated in the environment block; omitted when unset. | No |
+| `SIA_SANDBOX_MECHANISM` | What does the confining (e.g. `seatbelt`, `landlock+seccomp`). Stated alongside the status; omitted when unset. | No |
+| `SIA_AGENT_SOURCE_VERSION` | The version of this source tree the host staged and runs. Stated in the environment block; omitted when unset. Drift from it is reported per request (§3.5). | No |
 
-The model facts are the host's to supply because the host chose the model.
-The agent never fills them with a default: a model told the wrong name or
-cutoff reasons from false premises. Both are read once at startup and
-become part of the cached system prompt, so they should not change during
-the process's life.
+The model and machine facts are the host's to supply because the host
+chose them. The agent never fills them with a default: a model told the
+wrong name, cutoff or sandbox reasons from false premises. All of them are
+read once at startup and become part of the cached system prompt, so they
+must not change during the process's life — anything that can change while
+the agent runs (source drift, the upstreams on offer) is read per request
+instead (§3.5, §3.7). `LLM_PROVIDER` (§1.1) is stated in the same block.
 
-The reference `siad` implementation also stamps additional identity
-vars (`SIA_NODE_ID`, `SIA_OWNER_USER_ID`) for its own bookkeeping and
-for forward compatibility with planned agent features. The agent does
-not currently read either — they're stamped-but-unconsumed today. Hosts
-should stamp them if their downstream pipeline expects them; the agent
-won't object.
+A host may also stamp `SIA_OWNER_USER_ID` for its own bookkeeping. The
+agent does not read it and won't object to it.
 
 For standalone OSS use, both can be left unset — the usage-events
 callback no-ops and the agent boots with the default `SIA_AGENT_ID`.
@@ -346,15 +348,18 @@ remains the host's step (§1.5).
 ### 3.5 Component status (agent → host, optional)
 
 The agent reads the host's view of its components to learn what became of
-the versions it prepared (`COMPONENTS.md` §6, *Lineage*). No bearer: the
-endpoint is loopback and read-only.
+the versions it prepared (`COMPONENTS.md` §6, *Lineage*), and of its own
+source tree to learn whether it has drifted from what the host staged. The
+endpoint is loopback and read-only; the agent sends its bearer
+(`SIA_DAEMON_TOKEN`) when it has one, and a host may answer it a reduced
+view.
 
 ```
 GET {SIA_DAEMON_URL}/status
 ```
 
 The agent looks only at `node.components.components[]`, one entry per
-component:
+component, and at `node.agentSource`:
 
 ```json
 {
@@ -362,12 +367,39 @@ component:
   "active": "0.1.0",
   "previous": "0.0.9",
   "candidate": { "version": "0.1.1", "threadId": "…", "announcedAt": "…" },
-  "lastOutcome": { "version": "0.1.1", "result": "activated", "at": "…", "error": "…" },
+  "lastOutcome": { "version": "0.1.1", "result": "activated", "at": "…", "error": "…", "decisionReason": "…" },
+  "rejected": { "0.1.2": { "at": "…", "decisionReason": "…" } },
   "versions": ["0.0.9", "0.1.0", "0.1.1"],
   "retired": false
 }
 ```
 
+`decisionReason` (optional, free text) is what the keeper — the person who
+accepted, rejected or retired the version — said about the decision.
+`rejected` (optional) maps each version the keeper rejected to when and,
+if given, why; a version listed there settles `rejected` whatever else the
+entry says. The agent records the reason on the version's lineage entity
+(`COMPONENTS.md` §6) and treats it as a constraint on the next version.
+
+```json
+"agentSource": {
+  "version": "0.13.0",
+  "checkedAt": "…",
+  "baseline": "ok",
+  "modified": ["src/graph.ts"],
+  "added": [],
+  "removed": [],
+  "truncated": 0
+}
+```
+
+`agentSource` (optional) compares the agent's own source tree with the one
+the host staged. Only `baseline: "ok"` makes the path lists meaningful; any
+other word means the comparison could not be made and drift is unknown.
+The agent reports it to the model per request, as a `situation` context
+message (`COMPONENTS.md` §6), together with the upstream listing of §3.7 —
+both are cached for a minute, read at most once at a time, and never delay
+a model call by more than a second.
 `lastOutcome.result` is `activated`, `reverted`, `failed` or `removed`;
 `error` is the reason when it is not `activated`. `removed` means the host
 took a version that was live and removed it from the machine — `active`
@@ -403,9 +435,15 @@ Content-Type: application/json
   "reason": "<why, when not converged>",
   "at": "<ISO 8601>",
   "threadId": "<thread id>",
-  "parentVersion": "execute-code@0.1.0"
+  "parentVersion": "execute-code@0.1.0",
+  "decisionReason": "<what the keeper said, when they said anything>"
 }
 ```
+
+`decisionReason` is optional on every kind. When it arrives for a version
+whose entity is already settled, the agent adds the reason to the entity
+without changing its outcome; at boot it also back-fills reasons from §3.5
+onto settled entities that lack one.
 
 `agentId` must equal the agent's own `SIA_AGENT_ID`; a frame for anyone
 else is ignored, never applied. The push is best-effort on the host's side:
@@ -468,6 +506,29 @@ no agent-facing route that accepts, returns or reports one. When a
 component names an upstream the listing does not contain, the agent throws
 `upstream "<name>" is not configured on this host (available: …) — ask the
 host's owner to configure it` before sending anything.
+
+### 3.8 Knowledge reads (agent → host, optional)
+
+Two read-only calls over the same RPC endpoint as §3 (service `db`,
+version `v1`), each sent through `callHostRpc` (`src/utils/host-rpc.ts`)
+with a 2.5 s deadline. Their verb hashes are vendored in
+`src/vendor/svc-rpc/db/knowledge-hashes.ts`; the host regenerates them from
+its service definition and rejects a call whose hash is stale.
+
+| Verb | Payload | Answer |
+|---|---|---|
+| `knowledge.refusal-record` | `{}` | `{ "version": 1, "markdown": "…" }` — the platform's account of every refusal code and outcome a keeper decision can meet, who says it and what to do about it. |
+| `knowledge.failure-modes.get` | `{}` | `{ "body": "…" \| null, "updatedAt": "…" \| null }` — what the agent's keeper wrote about how this agent tends to fail; `null` when nothing has been written. |
+
+The failure-modes payload is empty on purpose: the host **must** fill in
+the caller from the bearer token and ignore anything the request says, so
+an agent can only ever read its own catalogue. Nothing the agent can call
+writes either one.
+
+Both feed the briefing a self-task thread opens with (`COMPONENTS.md` §6).
+A failure of either is never an error to the agent: the part is left out of
+the briefing, and the refusal record falls back to the last copy read in
+this process.
 
 ---
 

@@ -77,6 +77,14 @@ export {
   type HostContextMiddlewareOptions,
 } from "./host-context.js";
 export {
+  createSituationContextMiddleware,
+  createSituationCache,
+  formatSituation,
+  SITUATION_CONTEXT_MIDDLEWARE_NAME,
+  type SituationContextMiddlewareOptions,
+  type SituationFacts,
+} from "./situation-context.js";
+export {
   createSystemPromptCacheMiddleware,
   isAnthropicModelId,
   SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,

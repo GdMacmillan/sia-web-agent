@@ -162,6 +162,7 @@ describe("start_self_task", () => {
       fetchImpl,
       baseUrl: "http://127.0.0.1:2024/",
       agentId: "agent-1",
+      buildBriefing: async () => undefined,
     });
 
     const result = await tool.invoke({ task: "improve execute_code", skill: "iterate-component" }, config);
@@ -369,5 +370,82 @@ describe("start_self_task", () => {
     expect(await tool.invoke({ task: "x" }, config)).toMatch(/^Started/);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(_activeSelfTasksForTests().size).toBe(0);
+  });
+});
+
+describe("start_self_task briefing", () => {
+  beforeEach(() => {
+    _resetSelfTaskStateForTests();
+  });
+
+  const runBody = (captured: Captured[]) =>
+    captured.find((c) => c.url.endsWith("/runs/stream"))?.body as {
+      input: { messages: Array<{ role: string; content: string }> };
+    };
+
+  it("opens the thread with the briefing as a system message ahead of the task", async () => {
+    const { fetchImpl, captured } = fakeServer();
+    const tool = createSelfTaskTool({
+      fetchImpl,
+      baseUrl: "http://x",
+      agentId: "agent-1",
+      buildBriefing: async (id) => `Briefing for ${id}`,
+    });
+
+    const result = await tool.invoke({ task: "do it" }, config);
+    expect(result).toMatch(/^Started self-task thread/);
+    expect(runBody(captured).input.messages).toEqual([
+      { role: "system", content: "Briefing for agent-1" },
+      { role: "user", content: `${SELF_TASK_PREAMBLE} do it` },
+    ]);
+  });
+
+  it("sends the task alone when there is no briefing", async () => {
+    const { fetchImpl, captured } = fakeServer();
+    const tool = createSelfTaskTool({
+      fetchImpl,
+      baseUrl: "http://x",
+      agentId: "agent-1",
+      buildBriefing: async () => undefined,
+    });
+
+    await tool.invoke({ task: "do it" }, config);
+    expect(runBody(captured).input.messages).toEqual([
+      { role: "user", content: `${SELF_TASK_PREAMBLE} do it` },
+    ]);
+  });
+
+  it("still starts the task when building the briefing throws", async () => {
+    const { fetchImpl, captured } = fakeServer();
+    const tool = createSelfTaskTool({
+      fetchImpl,
+      baseUrl: "http://x",
+      agentId: "agent-1",
+      buildBriefing: async () => {
+        throw new Error("memory exploded");
+      },
+    });
+
+    const result = await tool.invoke({ task: "do it" }, config);
+    expect(result).toMatch(/^Started self-task thread/);
+    expect(runBody(captured).input.messages).toHaveLength(1);
+  });
+
+  it("builds no briefing when a guard refuses the task", async () => {
+    const { fetchImpl, captured } = fakeServer({
+      parent: { status: 200, metadata: { self_task: true } },
+    });
+    const buildBriefing = jest.fn(async () => "never");
+    const tool = createSelfTaskTool({
+      fetchImpl,
+      baseUrl: "http://x",
+      agentId: "agent-1",
+      buildBriefing,
+    });
+
+    const result = await tool.invoke({ task: "do it" }, config);
+    expect(result).toMatch(/already a self-task/);
+    expect(buildBriefing).not.toHaveBeenCalled();
+    expect(captured).toHaveLength(1);
   });
 });

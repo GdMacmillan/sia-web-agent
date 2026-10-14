@@ -459,10 +459,10 @@ not by prompt:
 |---|---|
 | `entity_type` | `component_version` |
 | `title` | `<name>@<version>` (e.g. `execute-code@0.2.3`) — looked up by exact title |
-| `content` | the component under both spellings (`execute-code`, `execute_code`), the parent, the need verbatim, the thread id, the producer, the outcome and its reason |
+| `content` | the component under both spellings (`execute-code`, `execute_code`), the parent, the need verbatim, the thread id, the producer, the outcome and its reason, and a `Keeper's reason: …` line when the keeper gave one |
 | `context` | `component_version <name>` |
 | `tags` | `component_version`, `component:<name>`, `<name>`, `<name_with_underscores>`, `version:<v>`, `outcome:<o>`, `produced-by:<agent or seed>`, `announced` once announced |
-| `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at? }` |
+| `metadata` | `{ component, version, need, thread_id, depth, provenance: { produced_by, parent, announced_at? }, outcome, reason?, settled_at?, decision_reason? }` |
 | `abstraction_level` | `raw` |
 | `status` | `active` while `outcome: candidate`; `completed` once settled. Never archived |
 | edge | `SUPERSEDES`, new version → parent. A component's first version (`create_component`) has no parent and no edge: it is the root of its lineage, and its content says so |
@@ -492,6 +492,12 @@ thread that produced the version), and the lineage reconciler (the host's
 verdict, pushed to the agent or polled from the host — idempotent, so both
 paths agree; `abandoned` is decided locally from the same poll; `removed`
 for an already-settled entity is caught up by one extra boot-time read).
+
+`decision_reason` is what the keeper said when deciding the version — the
+agent's `reason` is its own account, the keeper's is a constraint on the
+next version. It is written by the reconciler from the host's verdict,
+trimmed and stored whole, and may be added to an entity after it settled;
+adding it never changes the outcome.
 
 Two search facts shape the convention. The backend indexes title, content
 and tags — never `metadata` — which is why the need, the names and the
