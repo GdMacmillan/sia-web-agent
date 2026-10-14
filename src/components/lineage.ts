@@ -13,7 +13,9 @@
  * what the host currently reports. See `docs/COMPONENTS.md` §6.
  */
 
+import { createHash } from "node:crypto";
 import type { ComponentManifest } from "./manifest.js";
+import { parseContentComponentName } from "./content.js";
 import type { EntityStoreInput } from "../vendor/svc-rpc/graph-memory/entity-shape.js";
 import {
   COMPONENT_VERSION_ENTITY_TYPE,
@@ -109,12 +111,17 @@ function outcomeLine(outcome: LineageOutcome, reason?: string): string {
  */
 export function buildLineageEntity(input: LineageEntityInput): EntityStoreInput {
   const { name, version } = input;
-  const alt = underscored(name);
+  // A skill or prompt has no tool, so it carries no underscore spelling;
+  // it carries its kind and its bare base name instead.
+  const content = parseContentComponentName(name);
+  const alt = content ? name : underscored(name);
   const title = lineageTitle(name, version);
 
   const lines = [
-    `${title} is version ${version} of the ${name} component` +
-      (alt !== name ? ` (its tool is ${alt}).` : "."),
+    content
+      ? `${title} is version ${version} of the ${content.base} ${content.kind} (component ${name}).`
+      : `${title} is version ${version} of the ${name} component` +
+        (alt !== name ? ` (its tool is ${alt}).` : "."),
     input.parent
       ? `It supersedes ${input.parent}.`
       : "It has no parent; it is the root of its lineage.",
@@ -129,6 +136,13 @@ export function buildLineageEntity(input: LineageEntityInput): EntityStoreInput 
     `component:${name}`,
     name,
     ...(alt !== name ? [alt] : []),
+    ...(content
+      ? [
+          `kind:${content.kind}`,
+          `${content.kind}:${content.base}`,
+          content.base,
+        ]
+      : []),
     `version:${version}`,
     `outcome:${input.outcome}`,
     `produced-by:${input.producedBy}`,
@@ -167,6 +181,8 @@ export function buildLineageEntity(input: LineageEntityInput): EntityStoreInput 
  * The entity for a version that is already current on the host but has
  * no entity yet (a seed, or a version prepared before lineage was
  * recorded). It is `converged` by definition — the host is running it.
+ * A skill or prompt read in place from the source tree passes its
+ * synthetic seed manifest (`seedContentManifest`) here the same way.
  */
 export function buildParentEntity(manifest: ComponentManifest): EntityStoreInput {
   return buildLineageEntity({
@@ -178,6 +194,50 @@ export function buildParentEntity(manifest: ComponentManifest): EntityStoreInput
     producedBy: manifest.lineage.producedBy,
     outcome: "converged",
   });
+}
+
+/** How much of a version's diff its entity's prose carries. */
+export const LINEAGE_DIFF_MAX_BYTES = 4 * 1024;
+
+export interface LineageDiffInput {
+  /** `name@version` the diff was taken against. */
+  parent: string;
+  text: string;
+  added: number;
+  removed: number;
+}
+
+export interface LineageDiffPayload {
+  /** Appended to the entity's content. */
+  contentLine: string;
+  metadata: { diff_sha256: string; diff_added: number; diff_removed: number };
+}
+
+/**
+ * What a skill or prompt version's entity records about its diff at
+ * announce: the counts and a digest of the whole diff as metadata, and the
+ * diff's head (cut at a line) in the prose, so a later reader sees what
+ * changed without the full text living in memory.
+ */
+export function lineageDiffPayload(diff: LineageDiffInput): LineageDiffPayload {
+  const header = `Diff against ${diff.parent} (+${diff.added} −${diff.removed}):`;
+  let head = diff.text;
+  if (Buffer.byteLength(head, "utf8") > LINEAGE_DIFF_MAX_BYTES) {
+    const cut = Buffer.from(head, "utf8")
+      .subarray(0, LINEAGE_DIFF_MAX_BYTES)
+      .toString("utf8");
+    const lastNewline = cut.lastIndexOf("\n");
+    head = `${lastNewline > 0 ? cut.slice(0, lastNewline) : cut.replace(/\uFFFD+$/, "")}\n… (first ${LINEAGE_DIFF_MAX_BYTES} bytes of the diff)`;
+  }
+  return {
+    contentLine:
+      diff.text === "" ? `${header} no change.` : `${header}\n${head}`,
+    metadata: {
+      diff_sha256: createHash("sha256").update(diff.text, "utf8").digest("hex"),
+      diff_added: diff.added,
+      diff_removed: diff.removed,
+    },
+  };
 }
 
 /** The host's result words for an applied candidate, mapped onto ours. */

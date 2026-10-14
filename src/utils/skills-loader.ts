@@ -22,7 +22,7 @@ import type { SkillMetadata } from "../types/skill.js";
 import { logger } from "./logger.js";
 
 // Maximum size for SKILL.md files (10MB)
-const MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024;
+export const MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024;
 
 // Cache for skills (invalidate when directory changes)
 const skillsCache: Map<string, SkillMetadata[]> = new Map();
@@ -201,7 +201,7 @@ function unquote(value: string): string {
  * @param skillMdPath - Absolute path to the SKILL.md file
  * @returns SkillMetadata with name, description, and path, or null if parsing fails
  */
-function parseSkillMetadata(skillMdPath: string): SkillMetadata | null {
+export function parseSkillMetadata(skillMdPath: string): SkillMetadata | null {
   try {
     // Security: Check file size to prevent DoS attacks
     const stats = statSync(skillMdPath);

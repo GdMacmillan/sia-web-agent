@@ -354,6 +354,7 @@ describe("planNewComponent", () => {
     const versionDir = path.join(componentDir, ".versions", "0.1.0");
     expect(result.plan).toEqual({
       name: "parse-time-expression",
+      kind: "tools",
       root: host,
       version: "0.1.0",
       toolName: "parse_time_expression",

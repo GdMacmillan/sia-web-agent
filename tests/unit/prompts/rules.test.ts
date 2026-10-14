@@ -19,15 +19,9 @@ jest.mock("@tavily/core", () => ({
 
 import { getSystemPrompt, clearPromptCache } from "../../../src/system-prompts.js";
 import { loadPromptFile } from "../../../src/utils/prompt-loader.js";
+import { markdownSection } from "../../../src/utils/prompt-lint.js";
 
-/** The text of one `## ` section of a markdown file, heading excluded. */
-function section(markdown: string, heading: string): string {
-  const start = markdown.indexOf(`## ${heading}\n`);
-  if (start === -1) return "";
-  const body = markdown.slice(start + heading.length + 4);
-  const end = body.search(/^## /m);
-  return end === -1 ? body : body.slice(0, end);
-}
+const section = markdownSection;
 
 beforeEach(() => {
   clearPromptCache();
@@ -87,5 +81,38 @@ describe("shared rules", () => {
       expect(prompt).toContain("## Working with what you read");
       expect(prompt).toContain("MUST report what actually happened");
     }
+  });
+});
+
+describe("manager — changing its own skills and prompts", () => {
+  const manager = loadPromptFile("manager");
+  const rules = section(manager, "Changing one of your own skills or prompts");
+
+  it("has the section inside Self Modification", () => {
+    expect(rules.length).toBeGreaterThan(0);
+    const selfModification = section(manager, "Self Modification");
+    expect(selfModification).toContain("### Changing one of your own skills or prompts");
+  });
+
+  it("names skills and prompts as components", () => {
+    expect(rules).toContain("`skill-<name>`");
+    expect(rules).toContain("`prompt-<role>`");
+    expect(rules).toContain("`prompt-manager` is this one");
+  });
+
+  it("routes a change through the gated loop", () => {
+    expect(rules).toMatch(/passes its contract, is announced with a diff/);
+    expect(rules).toMatch(/governs only after your keeper accepts it and you restart/);
+  });
+
+  it("forbids a direct edit of prompts or skills", () => {
+    expect(rules).toMatch(/MUST NOT edit `prompts\/` or `skills\/` directly/);
+    expect(rules).toMatch(/reported to your keeper as drift/);
+  });
+
+  it("asks for Adaptive Memory changes as accepted versions, not edits", () => {
+    const adaptive = section(manager, "Adaptive Memory");
+    expect(adaptive).toMatch(/as a `prompt-manager` version your keeper accepts/);
+    expect(adaptive).not.toMatch(/This section is yours to write/);
   });
 });

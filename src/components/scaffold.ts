@@ -147,3 +147,64 @@ export default async function (deps: ContractDeps): Promise<void> {
 }
 `;
 }
+
+/** Longest description written into a new skill's frontmatter. */
+const SKILL_STUB_DESCRIPTION_MAX = 1024;
+
+/**
+ * The manifest of a new skill's first version: `kind: skill`, its entry
+ * the skill's `SKILL.md`, no parent.
+ */
+export function newSkillManifest(
+  input: NewComponentManifestInput,
+): Record<string, unknown> {
+  return {
+    name: input.name,
+    version: input.version ?? NEW_COMPONENT_VERSION,
+    kind: "skill",
+    intent: input.intent,
+    sdk: "^1.0.0",
+    entry: "SKILL.md",
+    depth: 0,
+    lineage: {
+      need: input.need,
+      producedBy: input.producedBy,
+    },
+  };
+}
+
+/**
+ * The `SKILL.md` of a new skill: frontmatter the skills list reads (`name`
+ * is the skill's directory name, `description` is what the model sees in
+ * the list) and a body to replace with the procedure. Passes the built-in
+ * content contract as written.
+ */
+export function stubSkillSource(input: {
+  skillName: string;
+  description: string;
+  need: string;
+}): string {
+  const description = input.description.replace(/\s+/g, " ").trim();
+  const clipped =
+    description.length > SKILL_STUB_DESCRIPTION_MAX
+      ? `${description.slice(0, SKILL_STUB_DESCRIPTION_MAX - 1)}…`
+      : description;
+  const need = input.need.replace(/\s+/g, " ").trim();
+  return [
+    "---",
+    `name: ${input.skillName}`,
+    `description: ${JSON.stringify(clipped)}`,
+    "---",
+    "",
+    `# ${input.skillName}`,
+    "",
+    "## When to use",
+    "",
+    need,
+    "",
+    "## How",
+    "",
+    "Replace this section with the procedure: what to do, in what order, and how to tell it worked.",
+    "",
+  ].join("\n");
+}

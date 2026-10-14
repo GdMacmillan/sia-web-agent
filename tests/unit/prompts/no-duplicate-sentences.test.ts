@@ -14,28 +14,13 @@
 import { describe, it, expect } from "@jest/globals";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  findDuplicateSentences,
+  normalizeSentence,
+  sentencesOf,
+} from "../../../src/utils/prompt-lint.js";
 
 const PROMPTS_DIR = join(process.cwd(), "prompts");
-const MIN_WORDS = 6;
-
-/** Normalize a sentence: lower case, letters/digits only, single spaces. */
-function normalizeSentence(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/** Split markdown into normalized sentences of at least `MIN_WORDS` words. */
-function sentencesOf(markdown: string): string[] {
-  const prose = markdown.replace(/```[\s\S]*?```/g, " ");
-  return prose
-    .split(/\n+|(?<=[.!?])\s+/)
-    .map((line) => line.replace(/^\s*(?:[-*+]|\d+\.|#+)\s+/, ""))
-    .map(normalizeSentence)
-    .filter((s) => s.split(" ").length >= MIN_WORDS);
-}
 
 function promptFiles(): string[] {
   return readdirSync(PROMPTS_DIR)
@@ -66,18 +51,11 @@ describe("prompt files", () => {
   });
 
   it("state no sentence of six or more words twice", () => {
-    const seen = new Map<string, string>();
-    const duplicates: string[] = [];
+    const texts = promptFiles().map((file) => ({
+      label: file,
+      text: readFileSync(join(PROMPTS_DIR, file), "utf-8"),
+    }));
 
-    for (const file of promptFiles()) {
-      const text = readFileSync(join(PROMPTS_DIR, file), "utf-8");
-      for (const sentence of sentencesOf(text)) {
-        const first = seen.get(sentence);
-        if (first) duplicates.push(`${first} and ${file}: "${sentence}"`);
-        else seen.set(sentence, file);
-      }
-    }
-
-    expect(duplicates).toEqual([]);
+    expect(findDuplicateSentences(texts)).toEqual([]);
   });
 });

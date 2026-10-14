@@ -31,14 +31,39 @@ import {
   discoverComponents,
   type DiscoveredComponent,
 } from "./discovery.js";
-import { COMPONENT_NAME_PATTERN, type ComponentManifest } from "./manifest.js";
+import {
+  COMPONENT_NAME_PATTERN,
+  CONTENT_ENTRY_FILES,
+  CONTENT_NAME_PREFIXES,
+  type ComponentKind,
+  type ComponentManifest,
+  type ContentKind,
+} from "./manifest.js";
+import {
+  CONTENT_SDK_RANGE,
+  SEED_BASELINE_FILE,
+  SEED_CONTENT_VERSION,
+  contentDigest,
+  contentSeedRoot as defaultContentSeedRoot,
+  hasSeedContent,
+  parseContentComponentName,
+  readSeedBaseline,
+  resolveContent,
+  seedContentManifest,
+  seedContentSource,
+  versionContentSource,
+  type ContentSource,
+} from "./content.js";
+import { CONTENT_CONTRACT_LABEL } from "./content-contract.js";
 import {
   NEW_COMPONENT_VERSION,
   TOOL_NAME_PATTERN,
   defaultToolName,
   newComponentManifest,
+  newSkillManifest,
   stubContractSource,
   stubEntrySource,
+  stubSkillSource,
 } from "./scaffold.js";
 
 /** How far a version number moves for a new component version. */
@@ -248,6 +273,58 @@ export function readComponentVersion(
   return { ok: false, reason: `unknown component "${name}"` };
 }
 
+export type ReadVersionOrSeedResult =
+  | {
+      ok: true;
+      manifest: ComponentManifest;
+      /** Skills and prompts only: the version's content. */
+      content?: ContentSource;
+    }
+  | { ok: false; reason: string };
+
+/**
+ * {@link readComponentVersion}, except that a skill or prompt at the seed
+ * version with no host copy of it reads as its in-place seed (synthetic
+ * manifest, the source tree's files). Never throws.
+ */
+export function readVersionOrSeed(
+  input: ReadComponentVersionInput & { contentSeedRoot?: string },
+): ReadVersionOrSeedResult {
+  const content = parseContentComponentName(input.name);
+  const read = readComponentVersion(input);
+  if (read.ok) {
+    return {
+      ok: true,
+      manifest: read.component.manifest,
+      ...(content !== null
+        ? {
+            content: versionContentSource(
+              content.kind,
+              content.base,
+              read.component.manifest.version,
+              read.component.versionDir,
+            ),
+          }
+        : {}),
+    };
+  }
+  if (content !== null && input.version === SEED_CONTENT_VERSION) {
+    const seed = seedContentSource(
+      content.kind,
+      content.base,
+      input.contentSeedRoot ?? defaultContentSeedRoot(),
+    );
+    if (seed !== null) {
+      return {
+        ok: true,
+        manifest: seedContentManifest(content.kind, content.base),
+        content: seed,
+      };
+    }
+  }
+  return read;
+}
+
 export interface PlanComponentVersionInput {
   name: string;
   /** Roots in precedence order, as the loader sees them. */
@@ -261,10 +338,13 @@ export interface PlanComponentVersionInput {
   need: string;
   /** Who produces it (an agent id, a person, a tool). */
   producedBy: string;
+  /** Skills and prompts only: where `skills/` and `prompts/` live (default: the source tree). */
+  contentSeedRoot?: string;
 }
 
 export interface PlannedComponentVersion {
   name: string;
+  kind: ComponentKind;
   /** The root the version was written under (the authoring root, resolved). */
   root: string;
   previousVersion: string;
@@ -275,6 +355,11 @@ export interface PlannedComponentVersion {
   contractPath: string;
   /** Whether the component was copied into the authoring root by this call. */
   copied: boolean;
+  /**
+   * Skills and prompts only: where the parent was read from — a host
+   * version, or the file shipped with the source tree (the in-place seed).
+   */
+  parentOrigin?: "version" | "seed";
 }
 
 export type PlanComponentVersionResult =
@@ -338,6 +423,152 @@ function resolveAuthoringRoot(
   return { ok: true, root };
 }
 
+/** The highest valid version staged under `componentDir`, or null. */
+function highestStagedVersion(componentDir: string): string | null {
+  if (!existsSync(componentDir)) {
+    return null;
+  }
+  return listComponentVersions(componentDir)
+    .filter((v) => semver.valid(v) !== null)
+    .reduce<string | null>(
+      (acc, v) => (acc === null || semver.gt(v, acc) ? v : acc),
+      null,
+    );
+}
+
+/** The intent a content version's parent carries, for its child to inherit. */
+function contentParentIntent(
+  parent: ContentSource,
+  roots: readonly string[],
+): string {
+  if (parent.origin === "version") {
+    const read = readComponentVersion({
+      name: parent.name,
+      version: parent.version,
+      roots,
+    });
+    if (read.ok) {
+      return read.component.manifest.intent;
+    }
+  }
+  return seedContentManifest(parent.kind, parent.base).intent;
+}
+
+/**
+ * The next version of a skill or prompt: the version being served now (a
+ * host version, or the in-place seed at `1.0.0`) copied into
+ * `<authoringRoot>/<name>/.versions/<next>/` with a fresh manifest. Only
+ * the version directory is written — never `current`, and the seed's files
+ * are read, never moved.
+ */
+function planContentVersion(input: {
+  kind: ContentKind;
+  base: string;
+  name: string;
+  roots: readonly string[];
+  authoringRoot: string;
+  bump: VersionBump;
+  need: string;
+  producedBy: string;
+  seedRoot: string;
+}): PlanComponentVersionResult {
+  const { kind, base, name, roots, authoringRoot, bump, need, producedBy } =
+    input;
+  const parent = resolveContent(kind, base, {
+    roots,
+    seedRoot: input.seedRoot,
+  });
+  if (parent === null) {
+    return {
+      ok: false,
+      reason:
+        kind === "skill"
+          ? `unknown skill "${base}" (no skills/${base}/SKILL.md and no activated version); a new skill is create_component with kind "skill"`
+          : `unknown prompt "${base}"`,
+    };
+  }
+  const componentDir = path.join(authoringRoot, name);
+  const highest = highestStagedVersion(componentDir);
+  const from =
+    highest !== null && semver.gt(highest, parent.version)
+      ? highest
+      : parent.version;
+  const nextVersion = bumpVersion(from, bump);
+  if (nextVersion === null) {
+    return { ok: false, reason: `cannot bump version "${from}" (${bump})` };
+  }
+  const versionDir = path.join(componentDir, VERSIONS_DIR, nextVersion);
+  if (existsSync(versionDir)) {
+    return {
+      ok: false,
+      reason: `version ${nextVersion} of "${name}" already exists at ${versionDir}; bump differently or remove it`,
+    };
+  }
+  const manifestPath = path.join(versionDir, MANIFEST_FILE);
+  try {
+    mkdirSync(versionDir, { recursive: true });
+    if (!isSafePath(versionDir, authoringRoot)) {
+      return {
+        ok: false,
+        reason: "component directory resolves outside the authoring root",
+      };
+    }
+    for (const file of parent.files) {
+      if (file.symlink) {
+        continue;
+      }
+      const target = path.join(versionDir, file.rel);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, readFileSync(file.abs));
+    }
+    // Remember which seed this lineage started from, so a later change to
+    // the source tree's copy can be reported (see `readSeedBaseline`).
+    const baseline =
+      parent.origin === "seed"
+        ? contentDigest(parent)
+        : readSeedBaseline(parent.dir);
+    if (baseline !== null) {
+      writeFileSync(path.join(versionDir, SEED_BASELINE_FILE), `${baseline}\n`);
+    }
+    const manifest = {
+      name,
+      version: nextVersion,
+      kind,
+      intent: contentParentIntent(parent, roots),
+      sdk: CONTENT_SDK_RANGE,
+      entry: CONTENT_ENTRY_FILES[kind],
+      depth: 0,
+      lineage: {
+        parent: `${name}@${parent.version}`,
+        need,
+        producedBy,
+      },
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      reason: `could not write version ${nextVersion} of "${name}": ${errorMessage(error)}`,
+    };
+  }
+  return {
+    ok: true,
+    plan: {
+      name,
+      kind,
+      root: authoringRoot,
+      previousVersion: parent.version,
+      nextVersion,
+      versionDir,
+      manifestPath,
+      entryPath: path.join(versionDir, CONTENT_ENTRY_FILES[kind]),
+      contractPath: CONTENT_CONTRACT_LABEL,
+      copied: false,
+      parentOrigin: parent.origin,
+    },
+  };
+}
+
 /**
  * Lay out the next version of component `name` under the authoring root:
  * copy the whole component directory there when it is not there yet (so the
@@ -370,6 +601,21 @@ export function planComponentVersion(
     return resolvedRoot;
   }
   const authoringRoot = resolvedRoot.root;
+
+  const content = parseContentComponentName(name);
+  if (content !== null) {
+    return planContentVersion({
+      kind: content.kind,
+      base: content.base,
+      name,
+      roots,
+      authoringRoot,
+      bump,
+      need: need.trim(),
+      producedBy: producedBy.trim(),
+      seedRoot: input.contentSeedRoot ?? defaultContentSeedRoot(),
+    });
+  }
 
   const found = findComponent(name, roots);
   if (!found.ok) {
@@ -457,6 +703,7 @@ export function planComponentVersion(
       ok: true,
       plan: {
         name,
+        kind: component.manifest.kind,
         root: authoringRoot,
         previousVersion,
         nextVersion,
@@ -495,10 +742,19 @@ export interface PlanNewComponentInput {
   description?: string;
   /** Tool names already in use; a collision is refused before anything is written. */
   reservedToolNames?: Iterable<string>;
+  /**
+   * What to create: a component contributing one tool (default), or a new
+   * skill (`skill-<name>`, its `SKILL.md` the version). Prompts are never
+   * created — the agent loads a fixed set; each is changed by a version.
+   */
+  kind?: "tools" | "skill";
+  /** Skills only: where `skills/` lives (default: the source tree). */
+  contentSeedRoot?: string;
 }
 
 export interface PlannedNewComponent {
   name: string;
+  kind: "tools" | "skill";
   /** The root the component was written under. */
   root: string;
   version: string;
@@ -558,17 +814,65 @@ export function planNewComponent(input: PlanNewComponentInput): PlanNewComponent
   if (typeof name !== "string" || !COMPONENT_NAME_PATTERN.test(name)) {
     return { ok: false, reason: `invalid component name "${String(name)}"` };
   }
+  const kind = input.kind ?? "tools";
+  if (kind !== "tools" && kind !== "skill") {
+    return {
+      ok: false,
+      reason: `cannot create a component of kind "${String(kind)}" (tools or skill)`,
+    };
+  }
+  if (name.startsWith(CONTENT_NAME_PREFIXES.prompt)) {
+    return {
+      ok: false,
+      reason:
+        "prompts are not created: the agent loads a fixed set of prompts, and each one changes by a new version — prepare_component_version on prompt-<role>.",
+    };
+  }
+  const content = parseContentComponentName(name);
+  if (kind === "skill") {
+    if (content === null || content.kind !== "skill") {
+      return {
+        ok: false,
+        reason: `a new skill is named "${CONTENT_NAME_PREFIXES.skill}<skill name>", e.g. "${CONTENT_NAME_PREFIXES.skill}${name.replace(/^skill-/, "")}"`,
+      };
+    }
+    if (
+      hasSeedContent(
+        "skill",
+        content.base,
+        input.contentSeedRoot ?? defaultContentSeedRoot(),
+      )
+    ) {
+      return {
+        ok: false,
+        reason:
+          `skill "${content.base}" ships with the source tree; it cannot be created again — ` +
+          `a new version of it is prepare_component_version on "${name}".`,
+      };
+    }
+  } else if (content !== null || name.startsWith(CONTENT_NAME_PREFIXES.skill)) {
+    return {
+      ok: false,
+      reason: `names starting with "${CONTENT_NAME_PREFIXES.skill}" are skills; create one with kind "skill", or choose another name for a tool component`,
+    };
+  }
   const toolName =
-    typeof input.toolName === "string" && input.toolName.trim() !== ""
-      ? input.toolName.trim()
-      : defaultToolName(name);
-  if (!TOOL_NAME_PATTERN.test(toolName)) {
+    kind === "skill"
+      ? ""
+      : typeof input.toolName === "string" && input.toolName.trim() !== ""
+        ? input.toolName.trim()
+        : defaultToolName(name);
+  if (kind === "tools" && !TOOL_NAME_PATTERN.test(toolName)) {
     return {
       ok: false,
       reason: `invalid tool name "${toolName}" (lower-case letters, digits and underscores, starting with a letter)`,
     };
   }
-  if (input.reservedToolNames !== undefined && new Set(input.reservedToolNames).has(toolName)) {
+  if (
+    kind === "tools" &&
+    input.reservedToolNames !== undefined &&
+    new Set(input.reservedToolNames).has(toolName)
+  ) {
     return {
       ok: false,
       reason: `tool name "${toolName}" is already taken by a tool the agent has; choose another tool_name`,
@@ -640,8 +944,14 @@ export function planNewComponent(input: PlanNewComponentInput): PlanNewComponent
   const componentDir = path.join(authoringRoot, name);
   const versionDir = path.join(componentDir, VERSIONS_DIR, version);
   const manifestPath = path.join(versionDir, MANIFEST_FILE);
-  const entryPath = path.join(versionDir, "entry.ts");
-  const contractPath = path.join(versionDir, "contract.ts");
+  const entryPath = path.join(
+    versionDir,
+    kind === "skill" ? CONTENT_ENTRY_FILES.skill : "entry.ts",
+  );
+  const contractPath =
+    kind === "skill"
+      ? CONTENT_CONTRACT_LABEL
+      : path.join(versionDir, "contract.ts");
 
   try {
     mkdirSync(versionDir, { recursive: true });
@@ -650,10 +960,38 @@ export function planNewComponent(input: PlanNewComponentInput): PlanNewComponent
     if (!isSafePath(componentDir, authoringRoot)) {
       return { ok: false, reason: "component directory resolves outside the authoring root" };
     }
-    const manifest = newComponentManifest({ name, intent, need, producedBy, version });
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    writeFileSync(entryPath, stubEntrySource(toolName, description || intent));
-    writeFileSync(contractPath, stubContractSource(toolName));
+    if (kind === "skill") {
+      const manifest = newSkillManifest({
+        name,
+        intent,
+        need,
+        producedBy,
+        version,
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(
+        entryPath,
+        stubSkillSource({
+          skillName: name.slice(CONTENT_NAME_PREFIXES.skill.length),
+          description: description || intent,
+          need,
+        }),
+      );
+    } else {
+      const manifest = newComponentManifest({
+        name,
+        intent,
+        need,
+        producedBy,
+        version,
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(
+        entryPath,
+        stubEntrySource(toolName, description || intent),
+      );
+      writeFileSync(contractPath, stubContractSource(toolName));
+    }
   } catch (error: unknown) {
     return {
       ok: false,
@@ -665,6 +1003,7 @@ export function planNewComponent(input: PlanNewComponentInput): PlanNewComponent
     ok: true,
     plan: {
       name,
+      kind,
       root: authoringRoot,
       version,
       toolName,

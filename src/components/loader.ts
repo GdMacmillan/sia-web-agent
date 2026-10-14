@@ -23,7 +23,7 @@ import {
   type ShadowedComponent,
   type SkippedComponent,
 } from "./discovery.js";
-import type { ComponentKind } from "./manifest.js";
+import { isContentKind, type ComponentKind } from "./manifest.js";
 import {
   SDK_VERSION,
   buildComponentDeps,
@@ -168,6 +168,22 @@ export async function loadComponents(
 
   for (const component of ordered) {
     const { manifest } = component;
+    // A skill or prompt version is text the agent reads where it is served
+    // (the skills list, `load_skill`, the prompt loader), not code: it is
+    // registered so it can be described, and never imported.
+    if (isContentKind(manifest.kind)) {
+      result.components.push(component);
+      logger.info(
+        {
+          component: manifest.name,
+          version: manifest.version,
+          kind: manifest.kind,
+          root: component.root,
+        },
+        "content component registered",
+      );
+      continue;
+    }
     try {
       if (!semver.satisfies(SDK_VERSION, manifest.sdk)) {
         skip(

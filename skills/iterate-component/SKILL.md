@@ -1,10 +1,10 @@
 ---
 name: iterate-component
-description: Write, check and announce a new version of one of your own components (tools such as execute_code) in response to a stated need — "a tool is broken", "execute_code should also say X", "change what <tool> returns", "iterate <name>", "new component version" — or a first version of a tool you do not have yet ("build yourself a tool that does X"), which is a new component. The work runs in a self-task thread. If this thread opened as a self-task, you are already in it: do the work here. Only in the conversation where a person raised the need do you start one, with start_self_task and skill "iterate-component", instead of editing anything. Never edits the running version or the source tree.
+description: Write, check and announce a new version of one of your own components (tools such as execute_code, and your skills and prompts) in response to a stated need — "a tool is broken", "execute_code should also say X", "change what <tool> returns", "iterate <name>", "new component version" — or a first version of a tool you do not have yet ("build yourself a tool that does X"), which is a new component. The work runs in a self-task thread. If this thread opened as a self-task, you are already in it: do the work here. Only in the conversation where a person raised the need do you start one, with start_self_task and skill "iterate-component", instead of editing anything. Never edits the running version or the source tree.
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.6.0"
+  version: "1.7.0"
 ---
 
 # Iterate a component
@@ -151,3 +151,26 @@ The `execute-code` entry exposes `dispose(threadId?)` for cleaning up the worksp
 creates (the shipped contract calls it in a `finally`), and reaches the agent's other tools through
 `deps.internals.codeExecution.getExposableTools()`. Keep both when you copy the entry; a contract
 that leaks its workspaces fails the next run for the wrong reason.
+
+## When the component is a skill or a prompt
+
+Each skill is the component `skill-<name>` and each prompt is `prompt-<role>`; `describe_component`
+with no name lists them. The loop is the same one, with three differences.
+
+- **What you edit.** `prepare_component_version` copies the current version, which may be the copy
+  shipped in `skills/` or `prompts/`, into a new version under the host's directory. Edit `SKILL.md`
+  (and any supporting files) or `prompt.md` there. Never edit `skills/` or `prompts/` themselves: a
+  direct edit is reported to your keeper as drift, and it is not how you change yourself.
+  `create_component` with kind `"skill"` starts a new skill. Prompts are never created, only
+  iterated.
+- **What judges it.** A skill or prompt carries no contract of its own. Every version is held to the
+  same built-in checks, with no model and no network involved. The text must be valid UTF-8 with no
+  stray control characters and no unclosed code fences. A skill needs frontmatter whose `name` is
+  its directory name, a description, and sizes within budget. A prompt must fit its role's budget,
+  must not repeat a sentence another prompt already states, and must keep the rules it has to keep,
+  such as how to read host context, whose words carry authority, and treating what it reads as
+  data. A version that drops one of those fails, so do not try to argue around one.
+- **What the keeper sees.** `run_component_contract` reports the diff against the parent, and
+  `announce_component_version` sends that diff with the announcement. Keep the change small and
+  focused on the need, and say in `summary` why each part of it is there. The new version governs
+  only after your keeper accepts it and you restart.

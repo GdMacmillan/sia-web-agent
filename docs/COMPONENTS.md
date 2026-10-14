@@ -901,6 +901,10 @@ These are the properties every change that touches this area must keep:
    middleware (§3).
 6. **Unchanged when absent.** With no component roots and no servers file,
    the agent behaves exactly as before.
+7. **The agent never decides a version.** It prepares, checks and
+   announces; accepting, rejecting, retiring and activating are the host's,
+   on its keeper's word. No tool, route or verb the agent calls reaches
+   them, and a unit test pins that (§10).
 
 ---
 
@@ -921,3 +925,104 @@ before the loader ships:
 - any registry or marketplace of components
 - in-process hot swap of loaded code
 - component-to-component imports (only `deps.services`)
+
+---
+
+## 10. Skills and prompts
+
+A skill and a prompt are components too, so a change to how the agent
+reasons goes through the same gate as a change to a tool: a version is
+prepared, passes a contract, is announced, and governs only once the host
+activates it, which it does on the keeper's word, and the agent restarts.
+
+### Names, kinds and the in-place seed
+
+| Kind     | Component name  | Entry       | Seed, read in place         |
+| -------- | --------------- | ----------- | --------------------------- |
+| `skill`  | `skill-<dir>`   | `SKILL.md`  | `skills/<dir>/` (whole dir) |
+| `prompt` | `prompt-<role>` | `prompt.md` | `prompts/<role>.md`         |
+
+A prompt's `<role>` is one the agent loads (`manager`, `planner`,
+`researcher`, `answer`, `no-web-search`, `shared`); prompts are iterated,
+never created. A skill's `<dir>` follows the component name rule.
+
+There is no copy of the seed under a component root. The source tree's
+files are the seed, read at the synthetic version `1.0.0`, with a
+synthetic manifest (`lineage.producedBy: "source tree"`). A host version
+lives where every other version does, `<root>/<name>/.versions/<v>/`, with
+its `component.json` (kind `skill` or `prompt`, `entry` the kind's one
+file, no `profile`) and the content: `SKILL.md` plus the skill's
+supporting files, or `prompt.md` alone. The code-component loader skips
+content kinds; they are served, not imported.
+
+### Serving
+
+For each skill and prompt the first root whose component has a `current`
+pointer decides, as for code. The version it names is re-checked against
+the built-in contract when it is served; a broken pointer, a manifest of
+another kind or a failing check is logged once and the seed is served
+instead. A root holding only staged versions (a candidate) is passed
+over. A served skill's body is prefixed with the version and directory it
+came from, so the agent reads the skill's supporting files from there.
+Prompts and the skills list are read once per process; a skill's body is
+resolved on each load. The host restarts the agent when it activates a
+version, so in practice a new version governs from the next restart.
+
+### The built-in contract
+
+A content version carries no contract of its own; the agent would be
+writing the check that judges its own prompt. Every skill and prompt
+version is held to the same local, deterministic checks instead, with no
+model, no network and nothing imported from the version
+(`src/components/content-contract.ts`). It is reported as the contract file
+`(built-in content contract)`.
+
+- **Every file:** a plain file (no link), valid UTF-8, no byte-order mark
+  or stray control characters, no unclosed code fence.
+- **A skill:** frontmatter with `name` equal to its directory and a
+  non-empty `description`, file types from a short allowlist, and size,
+  file-count and description-length budgets.
+- **A prompt:** `prompt.md` alone, non-empty, within its role's byte
+  budget, no sentence another prompt already states, and every rule it
+  must keep. Those rules are `PROMPT_INVARIANTS`: how the manager reads
+  host context and whose words carry authority, the shared rules that what
+  the agent reads is data and that it reports what happened, and that the
+  manager changes its own skills and prompts only as accepted versions. A
+  version that drops one fails.
+
+**The budgets are tunables, not rules.** Each is the shipped seed's size
+with room to grow (the skill version budget is 128 KiB because one shipped
+skill is about 80 KiB), and a unit test keeps every seed under its own
+budget. Retuning one is a one-line edit to a named constant.
+
+### The diff and the seed baseline
+
+`run_component_contract` reports a skill or prompt version's diff against
+its parent as `+added −removed`, and `announce_component_version` sends the
+unified diff with the candidate event as `diff`, cut at a line to 32 KiB
+(`HOST_CONTRACT.md` §3.4). Code versions are announced without one. The
+version's lineage entity records the diff once, at announce: its counts,
+the SHA-256 of the whole diff and the first 4 KiB as a content line.
+
+A version prepared from the in-place seed carries a hidden `.seed-digest`
+file naming the seed's digest, carried forward to every version prepared
+after it. It is never part of the content, the contract or the diff. When
+the source tree's copy later changes, `describe_component` says the seed
+changed since the version's lineage was prepared from it, so the next
+version can be rebased on purpose rather than silently diverging.
+
+### What a direct edit does
+
+Nothing in the agent refuses a direct edit; it is made visible instead.
+
+| Direct edit | Effect |
+| --- | --- |
+| `prompts/<role>.md` or `skills/<dir>/…` with an activated host version of that component | Does not govern; the host version shadows it. The host reports it as source drift. |
+| The same file with no activated host version (every component until its first accept) | Still governs: a prompt at the next restart, a skill body on its next load, the skills list at the next restart. Reported as drift. |
+| An activated version's own files under a component root | Governs at the next restart if it still passes the built-in contract. Not reported as drift, which covers the source tree only. The same gap as code components. |
+| A hand-written `current` pointer under a component root | Governs at the next restart with no keeper decision. The same gap as code components. |
+| `src/` | Governs at the next restart; reported as drift. Agent code is never the trust boundary. |
+
+The prompts tell the agent the sanctioned path and that a direct edit is
+reported to its keeper. Closing the remaining gaps is the host's job, by
+making those files unwritable to the agent.
