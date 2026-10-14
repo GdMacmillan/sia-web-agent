@@ -229,17 +229,14 @@ export function createSelfTaskTool(
   return new DynamicStructuredTool({
     name: "start_self_task",
     description:
-      "Start a piece of work in a new thread of your own, in the background, " +
-      "and return immediately with the thread id. Use it for work that " +
-      "should not happen inline in the current conversation. Changing how " +
-      "one of your own tools behaves is always such work: those tools are " +
-      "components (execute_code is one), the running version is not the " +
-      "copy in your source tree, and a new version needs its own thread — " +
-      'pass skill "iterate-component" and the person\'s need as the task. ' +
-      "The new thread starts from the " +
-      "task text; pass `skill` to have it load that skill first. One " +
-      "self-task per conversation at a time; a self-task cannot start another. " +
-      "The host may refuse to start one; the result then says why.",
+      "Start work in a new background thread of your own and return its " +
+      "thread id at once. Use it for work that should not happen inline " +
+      "here. Changing how one of your own tools behaves always is: those " +
+      "tools are components (execute_code is one), the running version is " +
+      "not the copy in your source tree, and each new version needs its own " +
+      'thread, so pass skill "iterate-component" and the person\'s need as ' +
+      "the task. One self-task per conversation at a time; a self-task " +
+      "cannot start another. The host may refuse; the result says why.",
     schema: z.object({
       task: z
         .string()

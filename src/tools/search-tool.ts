@@ -97,48 +97,25 @@ function runRipgrep(
 export function createSearchTool(projectRoot: string): DynamicStructuredTool {
   const searchTool = new DynamicStructuredTool({
     name: "search",
-    description: `Search codebase for patterns using ripgrep.
-
-WHEN TO USE: - Find all occurrences of a pattern in the codebase - Locate files containing specific
-text or patterns - Search before making changes to understand scope - Look for references to code
-being modified
-
-HOW TO USE: 1. Provide a search pattern (regex or literal string) 2. Optionally specify file types
-to limit search 3. Optionally use case-sensitive search
-
-FEATURES: - Fast ripgrep-based search across entire codebase - Returns
-filename:line_number:match_text format - Supports regex patterns (Rust-flavored regex) - Can filter
-by file type (e.g., 'ts', 'tsx', 'js') - Case-insensitive by default (use case_sensitive=true for
-case-sensitive) - Limits results to 100 matches to prevent huge output
-
-LIMITATIONS: - Matches limited to 100 results (use more specific patterns for large result sets) -
-Pattern must be valid regex syntax - Returns results without context lines (use file_read for
-context)
-
-TIPS: - Use simple patterns like "functionName" for literal matches - Use regex like "import.*from"
-for pattern matching - Combine with file_type filter for faster searches - Use case_sensitive=true
-for exact matches
-
-Working directory: ${projectRoot}`,
+    description: `Search file contents across the project with ripgrep. Case-insensitive by default. Returns up to 100 matches as file:line:text, without context lines; use read_file to see the surrounding code. Narrow a large result with a more specific pattern or a fileType.`,
     schema: z.object({
-      pattern: z
-        .string()
-        .describe("Search pattern (regex or literal string to find)"),
+      pattern: z.string().describe("Regex (Rust syntax) or literal text"),
       fileType: z
         .string()
         .optional()
-        .describe("File type to search (e.g., 'ts', 'tsx', 'js', 'json')"),
+        .describe("Limit to a ripgrep file type, e.g. 'ts' or 'json'"),
+      // No `.default()`: a defaulted field is advertised to the model as
+      // required. Absent means case-insensitive.
       caseSensitive: z
         .boolean()
         .optional()
-        .default(false)
-        .describe("Whether to search case-sensitively"),
+        .describe("Match case (default false)"),
     }),
     func: async ({ pattern, fileType, caseSensitive }) => {
       try {
         const result = await runRipgrep(pattern, projectRoot, {
           type: fileType,
-          caseSensitive: caseSensitive,
+          caseSensitive: caseSensitive ?? false,
         });
 
         // Clip output if too large

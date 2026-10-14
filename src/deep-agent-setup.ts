@@ -50,6 +50,8 @@ import {
 } from "./tools/index.js";
 import { isConfigured as isWebSearchConfigured } from "./web-search/tavily-client.js";
 import { getProjectRoot } from "./backend-config.js";
+import { createTodoListMiddleware } from "./middleware/todo-list.js";
+import { createDeferredToolsMiddleware } from "./middleware/deferred-tools.js";
 import {
   getPlanSubAgent,
   getResearchSubAgent,
@@ -222,7 +224,12 @@ export async function createDeepAgentWithDefaults<
     projectRoot,
     ...config?.agentConfig,
     tools: [...assembly.tools, ...(config?.agentConfig?.tools ?? [])],
+    // The compact todo list replaces the upstream entry by name in both the
+    // main and sub-agent stacks; the deferred groups are a novel entry. Both
+    // come first so a component or caller entry of the same name still wins.
     middleware: [
+      createTodoListMiddleware(),
+      createDeferredToolsMiddleware(),
       ...assembly.middleware,
       ...(config?.agentConfig?.middleware ?? []),
     ],

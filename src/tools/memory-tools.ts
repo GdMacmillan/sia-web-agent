@@ -74,62 +74,42 @@ type SearchResultEntity = RetrievedEntity & {
 export const storeEntityTool = new DynamicStructuredTool({
   name: "store_entity",
   description:
-    "Store any type of entity in the graph memory database (ideas, notes, learnings, tasks, etc.). Entities can be linked to related entities using custom relationship types.",
+    'Store an entity (learning, decision, pattern, note, task, ...) in graph memory, optionally linked to existing entities. Load the "memory-management" skill for entity and relationship conventions.',
   schema: z.object({
     entity_type: z
       .string()
-      .describe(
-        "Type of entity to store (e.g., 'idea', 'note', 'learning', 'task', 'pattern', 'decision')",
-      ),
-    title: z.string().describe("Brief title or summary of the entity"),
-    content: z
-      .string()
-      .describe("Main content or detailed description of the entity"),
+      .describe("e.g. 'learning', 'decision', 'pattern', 'note'"),
+    title: z.string().describe("Short title"),
+    content: z.string().describe("Full content"),
     context: z
       .string()
       .optional()
-      .describe(
-        "Context where this entity applies (e.g., 'authentication', 'frontend', 'performance')",
-      ),
-    tags: z
-      .array(z.string())
-      .optional()
-      .describe(
-        "Optional tags for categorization (e.g., ['optimization', 'backend'])",
-      ),
+      .describe("Area it applies to, e.g. 'authentication'"),
+    tags: z.array(z.string()).optional().describe("Tags for categorization"),
     priority: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("Priority level (default: medium)"),
-    status: z
-      .string()
-      .optional()
-      .describe(
-        "Current status (default: 'active'). Can be any custom status like 'draft', 'completed', 'archived'",
-      ),
+      .describe("Default 'medium'"),
+    status: z.string().optional().describe("Default 'active'"),
     abstraction_level: z
       .enum(["raw", "synthesized", "abstract"])
       .optional()
       .describe(
-        "Abstraction level of this entity (default: 'raw'). Use 'raw' for individual observations, 'synthesized' for consolidated patterns, 'abstract' for high-level insights.",
+        "Default 'raw' (one observation); 'synthesized' or 'abstract' for consolidated insights",
       ),
     metadata: z
       .record(z.string(), z.any())
       .optional()
-      .describe(
-        "Optional custom metadata as key-value pairs for additional properties",
-      ),
+      .describe("Custom key-value metadata"),
     related_entity_ids: z
       .array(z.string())
       .optional()
-      .describe(
-        "Optional list of existing entity IDs that this entity is related to",
-      ),
+      .describe("Existing entity IDs to link to"),
     relationship_types: z
       .array(z.string())
       .optional()
       .describe(
-        "Optional list of relationship types parallel to related_entity_ids (e.g., 'SIMILAR_TO', 'DEPENDS_ON', 'IMPLEMENTS')",
+        "Relationship type per related_entity_ids entry, e.g. 'DEPENDS_ON'",
       ),
   }),
   func: async (input) => {
@@ -149,9 +129,9 @@ export const storeEntityTool = new DynamicStructuredTool({
 export const retrieveEntityTool = new DynamicStructuredTool({
   name: "retrieve_entity",
   description:
-    "Retrieve a specific entity from graph memory by its ID. Returns the full entity details including all metadata.",
+    "Retrieve one entity from graph memory by ID, with all its fields and metadata.",
   schema: z.object({
-    entity_id: z.string().describe("The unique ID of the entity to retrieve"),
+    entity_id: z.string().describe("Entity ID"),
   }),
   func: async ({ entity_id }) => {
     const result = await retrieveEntity(getAdapter(), { entity_id });
@@ -167,65 +147,39 @@ export const retrieveEntityTool = new DynamicStructuredTool({
 export const searchEntitiesTool = new DynamicStructuredTool({
   name: "search_entities",
   description:
-    "Search for entities using natural language queries. Uses semantic similarity (entities.search cascade) to find relevant entities across all types. Supports filtering by entity type, tags, priority, status, and weighted re-ranking.",
+    "Search graph memory with a natural-language query (semantic and keyword match across all entity types), with optional filters and re-ranking. Searches stored knowledge, not code.",
   schema: z.object({
-    query: z
-      .string()
-      .describe(
-        "Natural language search query (e.g., 'authentication patterns', 'performance optimizations')",
-      ),
-    entity_type: z
-      .string()
-      .optional()
-      .describe(
-        "Optional: Filter by entity type (e.g., 'idea', 'note', 'learning')",
-      ),
-    tags: z
-      .array(z.string())
-      .optional()
-      .describe(
-        "Optional: Filter by tags (matches if entity has any of these tags)",
-      ),
+    query: z.string().describe("Natural-language query"),
+    entity_type: z.string().optional().describe("Filter by entity type"),
+    tags: z.array(z.string()).optional().describe("Filter by tags (any match)"),
     priority: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("Optional: Filter by priority level"),
-    status: z
-      .string()
-      .optional()
-      .describe("Optional: Filter by status (e.g., 'active', 'completed')"),
-    limit: z
-      .number()
-      .optional()
-      .describe("Maximum number of results to return (default: 10)"),
+      .describe("Filter by priority"),
+    status: z.string().optional().describe("Filter by status"),
+    limit: z.number().optional().describe("Max results (default 10)"),
     use_hyde: z
       .boolean()
       .optional()
       .describe(
-        "Optional: Explicitly enable/disable HyDE (Hypothetical Document Embedding). Auto-detects when unset.",
+        "Force hypothetical-document expansion on or off (auto when unset)",
       ),
     decompose: z
       .boolean()
       .optional()
-      .describe(
-        "Optional: Enable query decomposition for complex multi-part queries. Auto-detects when unset.",
-      ),
+      .describe("Split a multi-part query (auto when unset)"),
     rerank: z
       .boolean()
       .optional()
-      .describe(
-        "Optional: Enable weighted re-ranking of results (default: true).",
-      ),
+      .describe("Weighted re-ranking (default true)"),
     rerank_preset: z
       .enum(["balanced", "semantic_heavy", "recency_heavy", "proven_only"])
       .optional()
-      .describe("Optional: Weight preset for re-ranking (default: balanced)."),
+      .describe("Re-ranking preset (default 'balanced')"),
     include_scores: z
       .boolean()
       .optional()
-      .describe(
-        "Optional: Include detailed score breakdown in response (default: false).",
-      ),
+      .describe("Include score breakdown (default false)"),
   }),
   func: async ({
     query,
@@ -402,45 +356,21 @@ export const searchEntitiesTool = new DynamicStructuredTool({
 export const listEntitiesTool = new DynamicStructuredTool({
   name: "list_entities",
   description:
-    "List all entities in graph memory with optional filtering. Useful for getting an overview of stored knowledge, reviewing entities by type, or filtering by status and priority.",
+    "List entities in graph memory, optionally filtered, for an overview of stored knowledge. Use search_entities to find something specific.",
   schema: z.object({
-    entity_type: z
-      .string()
-      .optional()
-      .describe(
-        "Optional: Filter by entity type (e.g., 'idea', 'note', 'learning')",
-      ),
-    tags: z
-      .array(z.string())
-      .optional()
-      .describe(
-        "Optional: Filter by tags (matches if entity has any of these tags)",
-      ),
+    entity_type: z.string().optional().describe("Filter by entity type"),
+    tags: z.array(z.string()).optional().describe("Filter by tags (any match)"),
     priority: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("Optional: Filter by priority level"),
-    status: z
-      .string()
-      .optional()
-      .describe(
-        "Optional: Filter by status (e.g., 'active', 'completed', 'archived')",
-      ),
-    context: z.string().optional().describe("Optional: Filter by context"),
-    limit: z
-      .number()
-      .optional()
-      .describe("Maximum number of results to return (default: 100)"),
-    offset: z
-      .number()
-      .optional()
-      .describe("Number of results to skip for pagination (default: 0)"),
+      .describe("Filter by priority"),
+    status: z.string().optional().describe("Filter by status"),
+    context: z.string().optional().describe("Filter by context"),
+    limit: z.number().optional().describe("Max results (default 100)"),
+    offset: z.number().optional().describe("Results to skip (default 0)"),
   }),
   func: async (input) => {
-    const result = await listEntities(
-      getAdapter(),
-      input as ListEntitiesInput,
-    );
+    const result = await listEntities(getAdapter(), input as ListEntitiesInput);
     return JSON.stringify(result, null, 2);
   },
 });
@@ -452,20 +382,14 @@ export const listEntitiesTool = new DynamicStructuredTool({
 export const updateEntityStatusTool = new DynamicStructuredTool({
   name: "update_entity_status",
   description:
-    "Update the status of an entity to track its lifecycle. Useful for marking entities as completed, archived, in-progress, etc. Optionally add notes about the status change.",
+    "Set an entity's status (e.g. completed, archived, blocked), with optional notes.",
   schema: z.object({
     entity_id: z.string().describe("The ID of the entity to update"),
-    status: z
-      .string()
-      .describe(
-        "New status (e.g., 'active', 'completed', 'archived', 'in-progress', 'blocked')",
-      ),
+    status: z.string().describe("New status"),
     notes: z
       .string()
       .optional()
-      .describe(
-        "Optional notes about the status change (e.g., outcome, blockers, next steps)",
-      ),
+      .describe("Why it changed: outcome, blockers, next steps"),
   }),
   func: async (input) => {
     const result = await updateEntityStatus(
@@ -483,60 +407,45 @@ export const updateEntityStatusTool = new DynamicStructuredTool({
 export const updateEntityTool = new DynamicStructuredTool({
   name: "update_entity",
   description:
-    "Update one or more fields of an existing entity with optional update modes (replace, append, merge), merge keys into its custom metadata, and link it to other entities. Maintains version history (last 3 versions) for audit and potential rollback. Use this for comprehensive entity updates; use update_entity_status for status-only changes.",
+    "Update fields of an existing entity, merge keys into its metadata, or link it to other entities. Keeps the last 3 versions. For a status-only change use update_entity_status.",
   schema: z.object({
     entity_id: z.string().describe("The ID of the entity to update"),
-    title: z.string().optional().describe("New title (replaces existing)"),
+    title: z.string().optional().describe("New title"),
     content: z.string().optional().describe("New or additional content"),
     content_mode: z
       .enum(["replace", "append"])
       .optional()
-      .describe(
-        "How to apply content update: 'replace' (default) overwrites, 'append' concatenates with separator",
-      ),
+      .describe("Default 'replace'; 'append' adds to the existing content"),
     tags: z.array(z.string()).optional().describe("Tags to set or merge"),
     tags_mode: z
       .enum(["replace", "merge"])
       .optional()
-      .describe(
-        "How to apply tags update: 'replace' (default) overwrites, 'merge' unions with existing",
-      ),
+      .describe("Default 'replace'; 'merge' unions with existing tags"),
     priority: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("New priority level"),
+      .describe("New priority"),
     context: z.string().optional().describe("New context"),
     status: z.string().optional().describe("New status"),
     metadata: z
       .record(z.string(), z.any())
       .optional()
-      .describe(
-        "Custom metadata keys to set; merged into the entity's existing metadata (other keys are kept)",
-      ),
+      .describe("Metadata keys to set; other keys are kept"),
     related_entity_ids: z
       .array(z.string())
       .optional()
-      .describe(
-        "Existing entity IDs to link this entity to (edges go from this entity to each target)",
-      ),
+      .describe("Entity IDs to link to (edges point from this entity)"),
     relationship_types: z
       .array(z.string())
       .optional()
-      .describe(
-        "Relationship types parallel to related_entity_ids (e.g., 'SUPERSEDES', 'DEPENDS_ON'); defaults to 'RELATED_TO'",
-      ),
+      .describe("Type per related_entity_ids entry (default 'RELATED_TO')"),
     notes: z
       .string()
       .optional()
-      .describe(
-        "Optional notes explaining the update (stored in version history)",
-      ),
+      .describe("Why it changed (kept in version history)"),
   }),
   func: async (input) => {
-    const result = await updateEntity(
-      getAdapter(),
-      input as UpdateEntityInput,
-    );
+    const result = await updateEntity(getAdapter(), input as UpdateEntityInput);
     return JSON.stringify(result, null, 2);
   },
 });
@@ -548,35 +457,21 @@ export const updateEntityTool = new DynamicStructuredTool({
 export const promoteEntitiesTool = new DynamicStructuredTool({
   name: "promote_entities",
   description:
-    "Promote 3+ raw entities to synthesized level, or 3+ synthesized entities to abstract level. Uses LLM to generate synthesized content from source entities. Maintains bidirectional links between source and promoted entities.",
+    "Consolidate 3+ raw entities into one synthesized entity, or 3+ synthesized entities into an abstract one. Content is generated unless you supply it; the result stays linked to its sources.",
   schema: z.object({
     source_entity_ids: z
       .array(z.string())
       .min(3)
-      .describe("IDs of entities to promote (minimum 3 required)"),
+      .describe("At least 3 source entity IDs"),
     target_level: z
       .enum(["synthesized", "abstract"])
-      .describe(
-        "Target abstraction level: 'synthesized' (from raw entities) or 'abstract' (from synthesized entities)",
-      ),
-    title: z
-      .string()
-      .optional()
-      .describe(
-        "Optional: Manual title for promoted entity (otherwise LLM generates)",
-      ),
-    content: z
-      .string()
-      .optional()
-      .describe(
-        "Optional: Manual content for promoted entity (otherwise LLM generates)",
-      ),
+      .describe("'synthesized' (from raw) or 'abstract' (from synthesized)"),
+    title: z.string().optional().describe("Title (generated if omitted)"),
+    content: z.string().optional().describe("Content (generated if omitted)"),
     dry_run: z
       .boolean()
       .optional()
-      .describe(
-        "Optional: Preview mode - shows what would be created without making changes (default: false)",
-      ),
+      .describe("Preview without writing (default false)"),
   }),
   func: async (input) => {
     const result = await promoteEntities(
@@ -594,14 +489,9 @@ export const promoteEntitiesTool = new DynamicStructuredTool({
 export const traverseGraphTool = new DynamicStructuredTool({
   name: "traverse_graph",
   description:
-    "Traverse the graph to find entities connected via relationship edges. Use this to explore multi-hop relationships, discover chains of related entities, and understand how entities are connected in the knowledge graph. Accepts either 'node_id' or 'entity_id', and either 'edge_types' or 'relationship_types'.",
+    "Find entities connected to a starting entity through relationship edges, up to 5 hops. Pass the start as node_id or entity_id.",
   schema: z.object({
-    node_id: z
-      .string()
-      .optional()
-      .describe(
-        "The ID of the entity to start traversal from (also accepts 'entity_id' as alias)",
-      ),
+    node_id: z.string().optional().describe("Start entity ID"),
     entity_id: z
       .string()
       .optional()
@@ -609,15 +499,11 @@ export const traverseGraphTool = new DynamicStructuredTool({
     direction: z
       .enum(["out", "in", "both"])
       .optional()
-      .describe(
-        "Direction to traverse: 'out' (outgoing edges), 'in' (incoming edges), 'both' (bidirectional). Default: 'out'",
-      ),
+      .describe("Edge direction (default 'out')"),
     edge_types: z
       .array(z.string())
       .optional()
-      .describe(
-        "Filter by relationship types (e.g., ['EXTENDS', 'IMPLEMENTS', 'DEPENDS_ON']). Also accepts 'relationship_types' as alias.",
-      ),
+      .describe("Only follow these relationship types"),
     relationship_types: z
       .array(z.string())
       .optional()
@@ -628,9 +514,7 @@ export const traverseGraphTool = new DynamicStructuredTool({
       .min(1)
       .max(5)
       .optional()
-      .describe(
-        "Maximum depth to traverse (1 = immediate neighbors, 2 = two hops, etc.). Default: 1",
-      ),
+      .describe("Hops to follow (default 1)"),
   }),
   func: async (input) => {
     const result = await traverseGraph(

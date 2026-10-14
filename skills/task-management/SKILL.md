@@ -26,6 +26,42 @@ Detailed usage patterns and examples for the write_todos tool.
 4. **Break down complexity** — Split large tasks into smaller, trackable steps
 5. **Update as you learn** — Add new todos when you discover additional work needed
 
+## When to Use write_todos
+
+- The work needs 3 or more distinct steps, or careful planning across several operations
+- The user asks for a todo list, or gives several tasks (numbered or comma-separated)
+- The plan is likely to change once the first steps return results
+
+## When NOT to Use It
+
+- A single, straightforward task
+- A task that takes fewer than 3 trivial steps, where tracking adds nothing
+- A purely conversational or informational request
+
+If you only need a few tool calls and it is clear what to do, do the work directly.
+
+## Task States
+
+- **pending** — not started
+- **in_progress** — being worked on now. Several items may be in_progress at once only if they are independent and running in parallel. Until everything is done, keep at least one item in_progress so the user can see what you are working on.
+- **completed** — fully finished
+
+Each `write_todos` call replaces the whole list, so send the complete list every time, and never call it more than once in parallel. You may change several items in one call (for example, complete one item and start the next). Remove items that are no longer relevant; don't rewrite items you already completed.
+
+## Completion Requirements
+
+Only mark an item completed when it is fully done. Keep it in_progress, and add a new item describing what must be resolved, when:
+
+- there are unresolved errors or failing checks
+- the work is partial
+- a blocker prevents completion, or a needed resource or dependency is missing
+
+## Writing Good Items
+
+- Make each item specific and actionable
+- Split complex work into smaller steps
+- Use clear, descriptive names
+
 ## Workflow Example: Research Task
 
 ```

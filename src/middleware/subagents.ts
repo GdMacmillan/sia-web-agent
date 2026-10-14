@@ -32,52 +32,25 @@ const DEFAULT_SUBAGENT_PROMPT =
 const EXCLUDED_STATE_KEYS = ["messages", "todos", "jumpTo"] as const;
 
 const DEFAULT_GENERAL_PURPOSE_DESCRIPTION =
-  "General-purpose agent for tasks requiring isolated context and deep investigation that don't fit specialized agent categories (planner/programmer/researcher/memory). Primary benefit: context isolation - delegates heavy exploration, analysis, or multi-step workflows to keep the main thread clean and efficient. Use when you need comprehensive codebase search, complex analysis requiring many tool calls, or parallel investigation of independent topics. Has access to all tools as the main agent.";
+  "Has every tool the main agent has. Use it to isolate heavy multi-step work (broad searches, long analyses, independent investigations) so only the result comes back to this thread.";
 
-// Task tool description with subagent capabilities
+// Task tool description with subagent capabilities. Kept short: tool
+// definitions are re-sent on every model call. The when/when-not guidance
+// is also in TASK_SYSTEM_PROMPT below.
 function getTaskToolDescription(subagentDescriptions: string[]): string {
-  return `Launch an ephemeral subagent to handle complex, multi-step independent tasks with isolated context.
-Each subagent invocation is stateless and returns a single result.
+  return `Launch a sub-agent to handle a self-contained task in its own context. Each call is stateless and returns a single result; you see only that result, not its intermediate steps.
 
-Available subagents: ${subagentDescriptions.join("\n")}
+Available agents:
+${subagentDescriptions.join("\n")}
 
-## When to use the Task tool:
-- Complex multi-step tasks that can be fully delegated in isolation
-- Independent tasks that can run in parallel
-- Tasks requiring focused reasoning or heavy token/context usage
-- When you only need the final output, not intermediate reasoning steps
+Use it for complex multi-step work that can be fully delegated, for independent tasks that can run in parallel (several task calls in one response run concurrently), or for work that would flood this thread with context. The sub-agent sees nothing but your description, so make it complete: the goal, relevant paths, and what to return. Synthesize the result for the user.
 
-## Key notes:
-- Specify a subagent_type parameter to select which agent to use
-- Launch multiple subagents in parallel to maximize performance
-- Provide detailed task descriptions so subagents can work autonomously
-- The result returned is for your synthesis—integrate it back to the user
-- Be explicit about what you expect: analysis, research, code changes, etc.
+Do not use it for simple work you can finish in a few tool calls, such as reading one file and editing it.
 
-## Examples of When to Use
-
-<example> User: "Analyze the directory structure of this project and explain the main components"
-Assistant: *Launches researcher subagent to explore codebase* <commentary> Repository-wide
-exploration requires reading many files and understanding relationships. The researcher agent
-isolates this heavy context work, then returns a concise summary. Main thread stays clean and saves
-tokens on the synthesis conversation. </commentary> </example>
-
-<example> User: "Compare middleware implementation in packages/agent vs. Python DeepAgents"
-Assistant: *Launches TWO researcher subagents in PARALLEL - one for TypeScript, one for Python*
-<commentary> Each research task is independent and context-heavy. Parallel delegation completes both
-faster while each subagent focuses on one codebase. Results are synthesized by main agent for
-comparison. </commentary> </example>
-
-<example> User: "Add a comment to the getProjectRoot function explaining what it does" Assistant:
-*Uses read_file and edit_file directly* <commentary> Did NOT use task tool because this is a simple,
-single-file operation. Reading one file and adding a comment is straightforward enough for direct
-handling. No need for delegation overhead or context isolation. </commentary> </example>
-
-<example> User: "Find all places where we call the task tool and check if they're using it
-correctly" Assistant: *Launches general-purpose subagent to search, analyze patterns, and report*
-<commentary> This requires comprehensive codebase search, pattern analysis, and synthesis. Using
-general-purpose agent isolates the heavy analysis work. Main thread receives just the final findings
-without all the search history bloating context. </commentary> </example>`.trim();
+<example>
+User: "Compare the middleware in package A and package B"
+Assistant: launches two research tasks in parallel, one per package, then compares their findings.
+</example>`.trim();
 }
 
 const TASK_SYSTEM_PROMPT = `## \`task\` (subagent spawner)

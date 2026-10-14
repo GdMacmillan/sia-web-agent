@@ -11,6 +11,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
+import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import { createSearchTool } from "../../../src/tools/search-tool.js";
 
 describe("Search Tool", () => {
@@ -31,9 +32,12 @@ describe("Search Tool", () => {
       const tool = createSearchTool(tmpDir);
 
       expect(tool.name).toBe("search");
+      const schema = tool.schema as unknown as {
+        parse: (input: unknown) => Record<string, unknown>;
+      };
 
       // Verify schema has all expected fields by invoking schema parse
-      const parsed = tool.schema.parse({
+      const parsed = schema.parse({
         pattern: "test",
         fileType: "ts",
         caseSensitive: true,
@@ -44,10 +48,17 @@ describe("Search Tool", () => {
         caseSensitive: true,
       });
 
-      // Verify defaults
-      const minimal = tool.schema.parse({ pattern: "test" });
-      expect(minimal.caseSensitive).toBe(false);
+      // Optional fields stay optional: the default is applied when the
+      // search runs, not in the schema.
+      const minimal = schema.parse({ pattern: "test" });
+      expect(minimal.caseSensitive).toBeUndefined();
       expect(minimal.fileType).toBeUndefined();
+    });
+
+    it("advertises only pattern as required", () => {
+      const tool = createSearchTool(tmpDir);
+      const json = toJsonSchema(tool.schema) as { required?: string[] };
+      expect(json.required).toEqual(["pattern"]);
     });
   });
 

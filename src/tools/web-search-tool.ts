@@ -85,8 +85,12 @@ import type { WebUsage } from "../web-search/types.js";
  * converter the runtime uses.
  */
 
-/** An integer the model may have spelled as a string. */
-const looseInt = z.union([z.number().int(), z.string().regex(/^\d+$/)]);
+/**
+ * An integer the model may have spelled as a string. Declared as a plain
+ * number rather than an integer so a fractional value is rounded by the
+ * normalizer instead of failing validation.
+ */
+const looseInt = z.union([z.number(), z.string().regex(/^\d+$/)]);
 /** A number (possibly fractional) the model may have spelled as a string. */
 const looseNumber = z.union([z.number(), z.string().regex(/^\d+(\.\d+)?$/)]);
 /** A boolean the model may have spelled as a string. */
@@ -461,28 +465,19 @@ const traversalFilterSchema = {
   selectPaths: z
     .array(z.string())
     .optional()
-    .describe(
-      "Only visit URLs whose path matches one of these regexes (e.g. ['/docs/.*'])",
-    ),
+    .describe("Path regexes to visit, e.g. ['/docs/.*']"),
   selectDomains: z
     .array(z.string())
     .optional()
-    .describe(
-      "Only visit URLs whose domain matches one of these regexes (e.g. ['^docs\\\\.example\\\\.com$'])",
-    ),
-  excludePaths: z
-    .array(z.string())
-    .optional()
-    .describe("Skip URLs whose path matches one of these regexes"),
+    .describe("Domain regexes to visit"),
+  excludePaths: z.array(z.string()).optional().describe("Path regexes to skip"),
   excludeDomains: z
     .array(z.string())
     .optional()
-    .describe("Skip URLs whose domain matches one of these regexes"),
+    .describe("Domain regexes to skip"),
   allowExternal: looseBoolean
     .optional()
-    .describe(
-      "Follow links off the starting domain. Defaults to false to keep the traversal on one site.",
-    ),
+    .describe("Leave the start domain (default false)"),
 };
 
 /**
@@ -491,114 +486,68 @@ const traversalFilterSchema = {
 export function createWebSearchTool(): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: "web_search",
-    description: `Search the web for pages matching a query. This is the tool to reach for first when you need information from the internet.
-
-Returns ranked results — title, URL, relevance, publication date, and a content snippet — plus an AI-generated answer summarising them.
-
-USE WHEN: you need current information not in your knowledge, are researching an external API or library, or are looking for news and recent developments.
-
-FOLLOW UP WITH: 'web_extract' on the URLs whose full text you actually need — search snippets are excerpts, not whole pages.
-
-COST: 'basic', 'fast' and 'ultra-fast' depths cost 1 credit per search; 'advanced' and 'autoParameters' cost 2. The free tier is 1,000 credits per month, so prefer the default 'basic'.
-
-REQUIRES: TAVILY_API_KEY environment variable`,
+    description: `Search the web for pages matching a query. Returns ranked results with snippets and a short AI-generated answer. Snippets are excerpts: use 'web_extract' for the full text. The "web-search" skill covers depths and credit costs.`,
 
     schema: z.object({
-      query: z
-        .string()
-        .min(1)
-        .describe(
-          "The search query. Be specific and include relevant context (e.g. 'LangGraph interrupt() resume semantics' rather than 'langgraph').",
-        ),
+      query: z.string().min(1).describe("Specific query, with context"),
       maxResults: looseInt
         .optional()
-        .describe("Number of results to return (1-20). Defaults to 5."),
+        .describe("Results to return (1-20, default 5)"),
       searchDepth: z
         .enum(["basic", "advanced", "fast", "ultra-fast"])
         .optional()
-        .describe(
-          "'basic' (1 credit, the default) suits most queries; 'fast'/'ultra-fast' trade recall for latency at the same price; 'advanced' (2 credits) digs deeper for hard queries.",
-        ),
+        .describe("Default 'basic'; 'advanced' costs 2 credits"),
       topic: z
         .enum(["general", "news", "finance"])
         .optional()
-        .describe(
-          "Search index to query. Defaults to 'general'; use 'news' for current events and 'finance' for markets.",
-        ),
+        .describe("Default 'general'"),
       includeAnswer: z
         .union([z.boolean(), z.enum(["basic", "advanced", "true", "false"])])
         .optional()
-        .describe(
-          "Include an AI-generated answer. Defaults to true; 'advanced' produces a longer synthesis, false skips it.",
-        ),
+        .describe("AI answer (default true)"),
       chunksPerSource: looseInt
         .optional()
-        .describe(
-          "Content snippets returned per result (1-3, default 3). Lower it to keep the output small. Not available at 'ultra-fast' depth.",
-        ),
+        .describe("Snippets per result (1-3, default 3)"),
       includeDomains: z
         .array(z.string())
         .max(300)
         .optional()
-        .describe(
-          "Only return results from these domains (e.g. ['github.com', 'docs.python.org'])",
-        ),
+        .describe("Only these domains"),
       excludeDomains: z
         .array(z.string())
         .max(150)
         .optional()
-        .describe("Never return results from these domains"),
+        .describe("Never these domains"),
       includeDomainsMode: z
         .enum(["filter", "boost"])
         .optional()
-        .describe(
-          "How includeDomains applies: 'filter' returns only those domains, 'boost' merely ranks them higher. Ignored unless includeDomains is set.",
-        ),
+        .describe("How includeDomains applies"),
       language: z
         .string()
         .optional()
-        .describe(
-          "Preferred result language — ISO 639-1 code ('en', 'fr', 'zh-cn') or English name ('french'). Boosts that language in the ranking. Write the query in the same language.",
-        ),
+        .describe("ISO 639-1 code or English name"),
       filterByLanguage: looseBoolean
         .optional()
-        .describe(
-          "Drop results not in 'language' rather than merely boosting them. Ignored unless 'language' is set.",
-        ),
+        .describe("Drop other languages, not just boost"),
       timeRange: z
         .enum(["day", "week", "month", "year", "d", "w", "m", "y"])
         .optional()
-        .describe(
-          "Only return results published within this window. 'd'/'w'/'m'/'y' are the API's own aliases for the long forms and are accepted too.",
-        ),
+        .describe("Recency window"),
       startDate: z
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .optional()
-        .describe(
-          "Earliest publication date, YYYY-MM-DD. Use with endDate for an explicit window instead of timeRange.",
-        ),
+        .describe("YYYY-MM-DD"),
       endDate: z
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .optional()
-        .describe("Latest publication date, YYYY-MM-DD"),
-      country: z
-        .string()
-        .optional()
-        .describe(
-          "Boost results from this country, lowercase English name (e.g. 'united kingdom'). Only applies when topic is 'general'.",
-        ),
-      exactMatch: looseBoolean
-        .optional()
-        .describe(
-          "Require the query terms to appear verbatim. Useful for error strings and exact identifiers.",
-        ),
+        .describe("YYYY-MM-DD"),
+      country: z.string().optional().describe("Lowercase English name"),
+      exactMatch: looseBoolean.optional().describe("Match the query verbatim"),
       autoParameters: looseBoolean
         .optional()
-        .describe(
-          "Let the API choose search parameters for the query. Costs 2 credits and overrides some of your choices — use only when a plain search has already failed.",
-        ),
+        .describe("API picks parameters (2 credits)"),
     }),
 
     // `days` is omitted: it duplicates `timeRange` for the news topic, and
@@ -663,52 +612,32 @@ REQUIRES: TAVILY_API_KEY environment variable`,
 export function createWebExtractTool(): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: "web_extract",
-    description: `Read the full content of web pages whose URLs you already have. Returns each page as markdown or plain text.
-
-USE WHEN: you have specific URLs — from 'web_search' results, from the user, or from a 'web_map' listing — and need what is actually on them rather than a snippet.
-
-Pass up to 20 URLs in one call; batching is cheaper and faster than one call per URL.
-
-INTENT-BASED EXTRACTION: supply 'query' to describe what you are looking for and the page is returned as the most relevant chunks instead of in full. Use it on long pages when you want one specific fact.
-
-COST: 'basic' depth costs 1 credit per 5 URLs, 'advanced' costs 2 per 5. 'advanced' also recovers tables and embedded content.
-
-REQUIRES: TAVILY_API_KEY environment variable`,
+    description: `Read the full content of web pages whose URLs you already have (from search results, the user, or 'web_map'). Returns markdown or plain text. Batch up to 20 URLs per call. Pass 'query' to get only the most relevant chunks of long pages.`,
 
     schema: z.object({
       // A bare string is accepted and wrapped: the operation reads "one or
       // more pages", and a model handed a single URL naturally sends it alone.
       urls: z
         .union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)])
-        .describe("URLs to read (1-20 per call)"),
+        .describe("URLs to read (1-20)"),
       query: z
         .string()
         .optional()
         .describe(
-          "What you are looking for on these pages. Supplying it reranks the content and returns matching chunks instead of the whole page.",
+          "What you are looking for; returns matching chunks instead of whole pages",
         ),
       chunksPerSource: looseInt
         .optional()
-        .describe(
-          "Chunks returned per page (1-5, default 3). Only takes effect when 'query' is supplied.",
-        ),
+        .describe("Chunks per page with 'query' (1-5, default 3)"),
       extractDepth: z
         .enum(["basic", "advanced"])
         .optional()
-        .describe(
-          "'basic' (1 credit / 5 URLs, the default) for ordinary pages; 'advanced' (2 credits / 5 URLs) when you need tables or embedded content.",
-        ),
+        .describe("'advanced' recovers tables and embeds"),
       format: z
         .enum(["markdown", "text"])
         .optional()
-        .describe(
-          "'markdown' (the default) preserves headings, lists and links; 'text' is plain prose.",
-        ),
-      timeout: looseNumber
-        .optional()
-        .describe(
-          "Seconds to wait before giving up (1-60). Defaults to 10 for basic depth, 30 for advanced.",
-        ),
+        .describe("Default 'markdown'"),
+      timeout: looseNumber.optional().describe("Seconds (1-60)"),
     }),
 
     func: async (input, _runManager, config?: RunnableConfig) => {
@@ -755,60 +684,34 @@ const TRAVERSAL_DEFAULT_TIMEOUT_SECONDS = 45;
 export function createWebCrawlTool(): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: "web_crawl",
-    description: `Follow links from a starting URL and return the content of every page visited.
-
-USE WHEN: you need a whole section of a site rather than known pages — reading a documentation tree, gathering every changelog entry, surveying an API reference.
-
-DO NOT USE for a question a plain 'web_search' answers, or for pages you can already name — 'web_extract' is far cheaper for those. Crawling is the expensive option; reach for it when the site's structure is the point.
-
-Consider 'web_map' first to see which URLs exist, then 'web_extract' on the ones that matter. That is usually cheaper than crawling and returns exactly the pages you want.
-
-COST: 1 credit per 10 pages, or 2 per 10 when 'instructions' are supplied.
-
-REQUIRES: TAVILY_API_KEY environment variable`,
+    description: `Follow links from a starting URL and return the content of every page visited, e.g. a documentation tree. The expensive option: use 'web_extract' for known pages, and 'web_map' first to see which URLs exist.`,
 
     schema: z.object({
-      url: z.string().min(1).describe("The URL to start crawling from"),
+      url: z.string().min(1).describe("Start URL"),
       instructions: z
         .string()
         .optional()
-        .describe(
-          "Natural-language guidance for which pages matter (e.g. 'Find pages about authentication and rate limits'). Doubles the credit cost but sharply improves relevance.",
-        ),
-      maxDepth: looseInt
-        .optional()
-        .describe(
-          "How many links deep to follow from the start URL (1-5, default 1). Each level multiplies the pages visited.",
-        ),
+        .describe("Which pages matter (doubles the cost)"),
+      maxDepth: looseInt.optional().describe("Link depth (1-5, default 1)"),
       maxBreadth: looseInt
         .optional()
-        .describe("Maximum links followed per page (1-500). Defaults to 20."),
+        .describe("Links followed per page (1-500, default 20)"),
       limit: looseInt
         .optional()
-        .describe(
-          "Total pages to visit before stopping (1-100, default 20). Kept below the API's own default to bound both cost and output size.",
-        ),
+        .describe("Max pages to visit (1-100, default 20)"),
       chunksPerSource: looseInt
         .optional()
-        .describe(
-          "Chunks returned per page (1-5, default 3). Only takes effect when 'instructions' are supplied.",
-        ),
+        .describe("Chunks per page (1-5, default 3)"),
       extractDepth: z
         .enum(["basic", "advanced"])
         .optional()
-        .describe(
-          "Content extraction depth for each page crawled. Defaults to 'basic'; 'advanced' recovers tables and embedded content.",
-        ),
+        .describe("'advanced' recovers tables and embeds"),
       format: z
         .enum(["markdown", "text"])
         .optional()
-        .describe("Output format for page content. Defaults to 'markdown'."),
+        .describe("Default 'markdown'"),
       ...traversalFilterSchema,
-      timeout: looseNumber
-        .optional()
-        .describe(
-          "Seconds to wait before giving up (10-150). Defaults to 45; the API's own 150s default outlives most tool budgets.",
-        ),
+      timeout: looseNumber.optional().describe("Seconds (10-150, default 45)"),
     }),
 
     func: async (input, _runManager, config?: RunnableConfig) => {
@@ -858,43 +761,23 @@ REQUIRES: TAVILY_API_KEY environment variable`,
 export function createWebMapTool(): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: "web_map",
-    description: `Discover a site's URL structure. Follows links from a starting URL and returns the list of URLs found — no page content.
-
-USE WHEN: the site's shape is the question — which pages exist, how a documentation set is organised, whether a section you expect is there at all.
-
-This is the cheap reconnaissance step. Map first to see what exists, then 'web_extract' the handful of URLs that matter. Only fall back to 'web_crawl' when you genuinely need the content of everything.
-
-COST: 1 credit per 10 pages, or 2 per 10 when 'instructions' are supplied.
-
-REQUIRES: TAVILY_API_KEY environment variable`,
+    description: `Discover a site's URL structure: follows links from a starting URL and returns only the URLs, no content. Map first, then 'web_extract' the pages that matter.`,
 
     schema: z.object({
-      url: z.string().min(1).describe("The URL to start mapping from"),
+      url: z.string().min(1).describe("Start URL"),
       instructions: z
         .string()
         .optional()
-        .describe(
-          "Natural-language guidance for which parts of the site matter (e.g. 'Focus on the API reference'). Doubles the credit cost.",
-        ),
-      maxDepth: looseInt
-        .optional()
-        .describe(
-          "How many links deep to follow from the start URL (1-5). Defaults to 1.",
-        ),
+        .describe("Which parts matter (doubles the cost)"),
+      maxDepth: looseInt.optional().describe("Link depth (1-5, default 1)"),
       maxBreadth: looseInt
         .optional()
-        .describe("Maximum links followed per page (1-500). Defaults to 20."),
+        .describe("Links followed per page (1-500, default 20)"),
       limit: looseInt
         .optional()
-        .describe(
-          "Total URLs to collect before stopping (1-500, default 50). Higher limits are affordable here because no page content is returned.",
-        ),
+        .describe("Max URLs to collect (1-500, default 50)"),
       ...traversalFilterSchema,
-      timeout: looseNumber
-        .optional()
-        .describe(
-          "Seconds to wait before giving up (10-150). Defaults to 45, matching web_crawl; the API's own 150s default outlives most tool budgets.",
-        ),
+      timeout: looseNumber.optional().describe("Seconds (10-150, default 45)"),
     }),
 
     func: async (input, _runManager, config?: RunnableConfig) => {

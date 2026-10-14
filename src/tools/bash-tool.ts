@@ -206,49 +206,26 @@ export function createBashTool(projectRoot: string): DynamicStructuredTool & {
 } {
   const tool = new DynamicStructuredTool({
     name: "bash",
-    description: `Execute a shell command.
+    description: `Run a shell command in the project directory and return its output and exit code.
 
-WHEN TO USE: - Running build commands (yarn build, npm test, tsc, etc.) - Git operations (git
-status, git diff, git log, git commit, etc.) - Package management (npm install, yarn add, etc.) -
-System commands (ls, mkdir, cat, grep, find, etc.) - Any command requiring shell execution
+Use it for builds and tests, git inspection (status, diff, log), package management, and other commands that need a shell. To read, edit, write or search files, prefer read_file, edit_file, write_file, grep and search.
 
-WHEN NOT TO USE (prefer specialized tools): - Reading files: Use read_file tool instead of cat -
-Editing files: Use edit_file tool instead of sed/awk - Writing new files: Use write_file tool
-instead of echo/cat heredoc - Searching code: Use search or grep tools for better formatting
-
-FEATURES: - Runs on the platform shell (cmd.exe on Windows, sh elsewhere) - Timeout support:
-Default 2 minutes (120000ms), maximum 10 minutes (600000ms) - Output truncation: Results over
-30000 characters are truncated - Exit code reporting: Non-zero exits are clearly indicated
-
-COMMAND CHAINING: - Use && to chain commands (second runs only if first succeeds) - Use ; to chain
-commands (second always runs regardless) - For independent commands, make separate tool calls
-(enables parallel execution)
-
-IMPORTANT: - Each call runs in its own shell; there is NO persisted state between calls - Working
-directory does NOT persist — prefix with 'cd <dir> && …' when a command needs a directory -
-Environment changes (export) do NOT persist between calls
+Each call runs in a fresh shell (cmd.exe on Windows, sh elsewhere): the working directory and exported variables do not persist, so prefix 'cd <dir> && ...' when a command needs one. Chain dependent commands with &&; make independent commands separate tool calls so they can run in parallel. Output over 30,000 characters is truncated.
 
 Working directory: ${projectRoot}`,
 
     schema: z.object({
-      command: z
-        .string()
-        .describe(
-          "The shell command to execute. Can be a single command or multiple commands chained with && or ;",
-        ),
+      command: z.string().describe("The command to run"),
       description: z
         .string()
         .optional()
-        .describe(
-          "Clear, concise description of what this command does (5-10 words) for observability",
-        ),
+        .describe("What the command does, in 5-10 words"),
+      // No `.default()`: a defaulted field is advertised to the model as
+      // required. The default is applied in `func`.
       timeout: z
         .number()
         .optional()
-        .default(DEFAULT_TIMEOUT_MS)
-        .describe(
-          "Optional timeout in milliseconds (default: 120000ms/2min, max: 600000ms/10min)",
-        ),
+        .describe("Timeout in ms (default 120000, max 600000)"),
     }),
 
     func: async ({ command, description: _description, timeout }) => {
@@ -259,11 +236,7 @@ Working directory: ${projectRoot}`,
           MAX_TIMEOUT_MS,
         );
 
-        const result = await runCommand(
-          command,
-          effectiveTimeout,
-          projectRoot,
-        );
+        const result = await runCommand(command, effectiveTimeout, projectRoot);
 
         // Truncate if necessary (30KB limit like Claude Code)
         return clipOutput(result, 30000);

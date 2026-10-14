@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
+import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import { createBashTool } from "../../../src/tools/bash-tool.js";
 import * as fs from "fs";
 import * as os from "os";
@@ -79,7 +80,7 @@ describe("Bash Tool (one-shot execution)", () => {
 
     it("should NOT persist environment variables between calls", async () => {
       await bashTool.func({ command: "export TEST_VAR='persisted'" });
-      const result = await bashTool.func({ command: "echo \"[$TEST_VAR]\"" });
+      const result = await bashTool.func({ command: 'echo "[$TEST_VAR]"' });
       expect(result).not.toContain("persisted");
       expect(result).toContain("[]");
     });
@@ -141,10 +142,7 @@ describe("Bash Tool (one-shot execution)", () => {
 
           expect(result).toContain("timed out");
 
-          const pid = parseInt(
-            fs.readFileSync(pidFile, "utf8").trim(),
-            10,
-          );
+          const pid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
           expect(Number.isNaN(pid)).toBe(false);
 
           // The SIGKILL follow-up fires after a grace period, so poll
@@ -226,6 +224,11 @@ describe("Bash Tool (one-shot execution)", () => {
       expect(bashTool.name).toBe("bash");
       expect(typeof bashTool.cleanup).toBe("function");
       expect(() => bashTool.cleanup?.()).not.toThrow();
+    });
+
+    it("advertises only command as required", () => {
+      const json = toJsonSchema(bashTool.schema) as { required?: string[] };
+      expect(json.required).toEqual(["command"]);
     });
 
     it("should accept an optional description parameter", async () => {
