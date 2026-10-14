@@ -2,12 +2,16 @@
  * Contract runner — proves a component version works, in-process, through
  * the real tool or middleware it builds. See `docs/COMPONENTS.md` §6.
  *
+ * A skill or prompt version has no contract of its own: it is held to the
+ * built-in content contract (`content-contract.ts`) instead, with the same
+ * result shape, and its in-place seed (`1.0.0`) can be checked too.
+ *
  * Fail-closed: every outcome that is not a clean pass is `ok: false` with
  * the error text. The runner never throws.
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import semver from "semver";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -18,16 +22,42 @@ import {
   SimpleToolRegistry,
   normalizeToolResult,
 } from "../code-execution/ipc-bridge.js";
-import { resolveComponentRoots } from "./assemble.js";
+import { currentComponentRoots } from "./roots.js";
 import { readComponentVersion } from "./authoring.js";
-import { discoverComponents, type DiscoveredComponent } from "./discovery.js";
+import {
+  describeComponentVersion,
+  discoverComponents,
+  resolveCurrentVersion,
+  type DiscoveredComponent,
+} from "./discovery.js";
+import {
+  SEED_CONTENT_VERSION,
+  contentDigest,
+  contentSeedRoot,
+  parseContentComponentName,
+  resolveContent,
+  seedContentSource,
+  versionContentSource,
+  type ContentSource,
+} from "./content.js";
+import {
+  CONTENT_CONTRACT_LABEL,
+  CONTENT_CONTRACT_REVISION,
+  checkContent,
+} from "./content-contract.js";
 import {
   defaultImportModule,
   isMiddlewareLike,
   isToolLike,
   type ImportModule,
 } from "./loader.js";
-import { COMPONENT_NAME_PATTERN, type ComponentKind } from "./manifest.js";
+import {
+  COMPONENT_NAME_PATTERN,
+  PROMPT_ROLES,
+  isContentKind,
+  type ComponentKind,
+  type ContentKind,
+} from "./manifest.js";
 import { getActiveComponents, getActiveToolPool } from "./registry.js";
 import {
   SDK_VERSION,
@@ -75,6 +105,13 @@ export interface RunContractOptions {
   importModule?: ImportModule;
   /** Overrides the per-agent config handed to the component. */
   config?: ComponentConfig;
+  /**
+   * Skill and prompt components only: the roots to search (default: the
+   * roots as they are now) and where the in-place seeds live (default: the
+   * source tree).
+   */
+  contentRoots?: readonly string[];
+  contentSeedRoot?: string;
 }
 
 type ResolveTargetResult =
@@ -93,41 +130,6 @@ function describeFile(filePath: string, versionDir: string): LoadedFile {
     sha256 = "unreadable";
   }
   return { file: path.relative(versionDir, filePath), sha256 };
-}
-
-/**
- * The roots to search, in precedence order: the host-managed root as
- * configured now (so one that appeared after assembly is searched, and a
- * version written into it during this process can be checked), then the
- * roots recorded at assembly, then whatever else exists on disk now.
- * Deduplicated by real path.
- */
-function contractRoots(): string[] {
-  const componentsDir = getConfig().runtime.componentsDir;
-  const now = resolveComponentRoots({
-    projectRoot: getProjectRoot(),
-    componentsDir,
-  });
-  const host =
-    componentsDir === undefined
-      ? []
-      : now.filter((root) => root === path.resolve(componentsDir));
-  const roots: string[] = [];
-  const seen = new Set<string>();
-  for (const root of [...host, ...getActiveComponents().roots, ...now]) {
-    let key: string;
-    try {
-      key = realpathSync(root);
-    } catch (_error) {
-      key = path.resolve(root);
-    }
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    roots.push(root);
-  }
-  return roots;
 }
 
 /** Resolve `name` (and optionally `version`) to a described component. */
@@ -218,6 +220,180 @@ async function withTimeout<T>(
   }
 }
 
+type ResolveContentTargetResult =
+  { ok: true; source: ContentSource } | { ok: false; reason: string };
+
+/**
+ * Resolve a skill or prompt component to the version to check: `version`
+ * under the first root carrying it (or the in-place seed at `1.0.0`), or,
+ * without one, the version a root's `current` names, else the seed.
+ */
+function resolveContentTarget(
+  kind: ContentKind,
+  base: string,
+  name: string,
+  roots: readonly string[],
+  seedRoot: string,
+  version: string | undefined,
+): ResolveContentTargetResult {
+  const seed = seedContentSource(kind, base, seedRoot);
+  const fromDescribed = (
+    component: DiscoveredComponent,
+  ): ResolveContentTargetResult =>
+    component.manifest.kind === kind
+      ? {
+          ok: true,
+          source: versionContentSource(
+            kind,
+            base,
+            component.manifest.version,
+            component.versionDir,
+          ),
+        }
+      : {
+          ok: false,
+          reason: `"${name}" has kind "${component.manifest.kind}", not "${kind}"`,
+        };
+
+  if (version !== undefined) {
+    const read = readComponentVersion({ name, version, roots });
+    if (read.ok) {
+      return fromDescribed(read.component);
+    }
+    if (version === SEED_CONTENT_VERSION && seed !== null) {
+      return { ok: true, source: seed };
+    }
+    return { ok: false, reason: read.reason };
+  }
+
+  for (const rawRoot of roots) {
+    const root = path.resolve(rawRoot);
+    if (!existsSync(path.join(root, name))) {
+      continue;
+    }
+    const pointer = resolveCurrentVersion(root, name);
+    if (!pointer.ok) {
+      if (pointer.reason.startsWith("no ")) {
+        continue;
+      }
+      return { ok: false, reason: pointer.reason };
+    }
+    const described = describeComponentVersion(
+      root,
+      name,
+      pointer.versionDir,
+      pointer.versionDirName,
+    );
+    return described.ok
+      ? fromDescribed(described.component)
+      : { ok: false, reason: described.reason };
+  }
+  return seed !== null
+    ? { ok: true, source: seed }
+    : { ok: false, reason: `unknown component "${name}"` };
+}
+
+/** One identity for every file of a content version, so any change shows. */
+function describeContent(source: ContentSource): LoadedFile {
+  const entry = path.basename(source.file);
+  const others = source.files.length - 1;
+  return {
+    file:
+      others > 0
+        ? `${entry} (+${others} file${others === 1 ? "" : "s"})`
+        : entry,
+    sha256: contentDigest(source).slice(0, 12),
+  };
+}
+
+/** The built-in contract, identified like a file so run history can compare it. */
+function describeContentContract(): LoadedFile {
+  return {
+    file: CONTENT_CONTRACT_LABEL,
+    sha256: createHash("sha256")
+      .update(`content-contract:${CONTENT_CONTRACT_REVISION}`)
+      .digest("hex")
+      .slice(0, 12),
+  };
+}
+
+/**
+ * The other prompts as they would be served beside `source`, for the
+ * no-duplicate-sentences check.
+ */
+function otherPrompts(
+  source: ContentSource,
+  roots: readonly string[],
+  seedRoot: string,
+): { label: string; text: string }[] {
+  const texts: { label: string; text: string }[] = [];
+  for (const role of PROMPT_ROLES) {
+    if (role === source.base) {
+      continue;
+    }
+    const other = resolveContent("prompt", role, { roots, seedRoot });
+    if (other === null) {
+      continue;
+    }
+    try {
+      texts.push({
+        label: `${other.name}@${other.version}`,
+        text: readFileSync(other.file, "utf-8"),
+      });
+    } catch (_error) {
+      // An unreadable neighbour cannot be compared against.
+    }
+  }
+  return texts;
+}
+
+/** Hold a skill or prompt version to the built-in content contract. */
+function runContentContract(
+  kind: ContentKind,
+  base: string,
+  name: string,
+  opts: RunContractOptions,
+  started: number,
+): ContractResult {
+  const roots = opts.contentRoots ?? currentComponentRoots();
+  const seedRoot = opts.contentSeedRoot ?? contentSeedRoot();
+  const target = resolveContentTarget(
+    kind,
+    base,
+    name,
+    roots,
+    seedRoot,
+    opts.version,
+  );
+  if (!target.ok) {
+    return {
+      ok: false,
+      durationMs: Date.now() - started,
+      version: null,
+      sdkVersion: SDK_VERSION,
+      error: target.reason,
+    };
+  }
+  const { source } = target;
+  const loaded = {
+    entry: describeContent(source),
+    contract: describeContentContract(),
+  };
+  const problems = checkContent(source, {
+    ...(kind === "prompt"
+      ? { otherPrompts: otherPrompts(source, roots, seedRoot) }
+      : {}),
+  });
+  return {
+    ok: problems.length === 0,
+    durationMs: Date.now() - started,
+    version: source.version,
+    sdkVersion: SDK_VERSION,
+    loaded,
+    ...(problems.length > 0 ? { error: problems.join("; ") } : {}),
+  };
+}
+
 /**
  * Run the contract of component `name`. Targets the `current` version by
  * default, or `opts.version` under the first root that carries the
@@ -245,7 +421,17 @@ export async function runComponentContract(
     if (typeof name !== "string" || !COMPONENT_NAME_PATTERN.test(name)) {
       return fail(`invalid component name "${String(name)}"`);
     }
-    const roots = contractRoots();
+    const content = parseContentComponentName(name);
+    if (content !== null) {
+      return runContentContract(
+        content.kind,
+        content.base,
+        name,
+        opts,
+        started,
+      );
+    }
+    const roots = currentComponentRoots();
     if (roots.length === 0) {
       return fail("no component roots are present");
     }
@@ -257,6 +443,13 @@ export async function runComponentContract(
     const { component } = target;
     const { manifest } = component;
     version = manifest.version;
+    if (isContentKind(manifest.kind)) {
+      // Unreachable through a valid manifest (a content name is caught
+      // above); kept so a content version is never imported as code.
+      return fail(
+        `"${name}" has kind "${manifest.kind}" but is not named as one`,
+      );
+    }
 
     if (!semver.satisfies(SDK_VERSION, manifest.sdk)) {
       return fail(

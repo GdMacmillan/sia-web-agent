@@ -18,7 +18,10 @@ import { createMiddleware, tool, type AgentMiddleware } from "langchain";
 import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod/v3";
 import type { SkillMetadata, SkillsMiddlewareOptions } from "../types/skill.js";
-import { listSkills, getSkillContent } from "../utils/skills-loader.js";
+import {
+  getServedSkillContent,
+  listServedSkills,
+} from "../components/content-serving.js";
 import { wrapHostContext } from "../utils/host-context.js";
 
 // Skills System Documentation Template. The one home for how to use skills;
@@ -84,15 +87,23 @@ export function createSkillsMiddleware(
   options: SkillsMiddlewareOptions,
 ): AgentMiddleware {
   const { skillsDir } = options;
+  const serveOpts =
+    options.componentRoots !== undefined
+      ? { roots: options.componentRoots }
+      : {};
 
   const loadSkillTool = tool(
     async ({ skill_name }: { skill_name: string }) => {
-      const result = getSkillContent(skillsDir, skill_name);
+      const result = getServedSkillContent(skillsDir, skill_name, serveOpts);
       if (result) {
-        return result.content;
+        // A skill served from a version is not where the source tree keeps
+        // it; say where, so its supporting files are read from there.
+        return result.source?.origin === "version"
+          ? `(Served from ${result.source.name}@${result.source.version}, in ${result.source.dir}; read any supporting files it names from there.)\n\n${result.content}`
+          : result.content;
       }
 
-      const available = listSkills(skillsDir)
+      const available = listServedSkills(skillsDir, serveOpts)
         .map((s) => s.name)
         .join(", ");
       return `Skill "${skill_name}" not found. Available skills: ${available}`;
@@ -120,15 +131,18 @@ export function createSkillsMiddleware(
      * prompt and puts the skills list in a context message at the head of the
      * request's messages.
      *
-     * The list comes from `listSkills`, which reads the directory once per
-     * process, so the message is byte-identical from call to call. A skill
-     * added on disk is picked up on the next restart.
+     * The list comes from `listServedSkills` — the skills directory plus
+     * any skill version the host has activated — read once per process, so
+     * the message is byte-identical from call to call. A skill added on
+     * disk, or a version activated, is picked up on the next restart.
      *
      * Uses wrapModelCall (not beforeModel) because both changes are to the
      * outgoing request only; nothing is written to state.
      */
     wrapModelCall: async (request, handler) => {
-      const skillsMessage = buildSkillsContextMessage(listSkills(skillsDir));
+      const skillsMessage = buildSkillsContextMessage(
+        listServedSkills(skillsDir, serveOpts),
+      );
 
       // Inject into system prompt (append to existing prompt)
       const currentPrompt = request.systemPrompt || "";

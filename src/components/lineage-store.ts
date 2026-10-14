@@ -23,7 +23,9 @@ import {
   buildLineageEntity,
   buildParentEntity,
   decisionReasonLine,
+  lineageDiffPayload,
   lineageTitle,
+  type LineageDiffInput,
   settlePayload,
   type LineageEntityInput,
   type SettledOutcome,
@@ -127,6 +129,7 @@ export async function markLineageAnnounced(
   adapter: IGraphMemoryAdapter,
   entityId: string,
   announcedAt: string,
+  diff?: LineageDiffInput,
 ): Promise<AnnounceResult> {
   const { entity } = await retrieveEntity(adapter, { entity_id: entityId });
   if (entity.metadata.outcome !== "candidate") {
@@ -136,11 +139,22 @@ export async function markLineageAnnounced(
     entity.metadata.provenance && typeof entity.metadata.provenance === "object"
       ? (entity.metadata.provenance as Record<string, unknown>)
       : {};
+  // A re-announce of the same version carries the same diff; record it once.
+  const diffPayload =
+    diff && entity.metadata.diff_sha256 === undefined
+      ? lineageDiffPayload(diff)
+      : undefined;
   await updateEntity(adapter, {
     entity_id: entityId,
     tags: entity.tags.includes("announced") ? undefined : ["announced"],
     tags_mode: "merge",
-    metadata: { provenance: { ...provenance, announced_at: announcedAt } },
+    metadata: {
+      provenance: { ...provenance, announced_at: announcedAt },
+      ...(diffPayload ? diffPayload.metadata : {}),
+    },
+    ...(diffPayload
+      ? { content: diffPayload.contentLine, content_mode: "append" as const }
+      : {}),
   });
   return "stamped";
 }

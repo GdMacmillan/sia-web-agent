@@ -11,30 +11,50 @@
  * Every failure is a result string, never a throw.
  */
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod/v4";
 import { getConfig } from "../config/index.js";
 import {
+  CONTENT_KINDS,
   MIDDLEWARE_TOOL_NAMES,
   SEED_COMPONENTS_DIRNAME,
+  SEED_CONTENT_VERSION,
+  VERSIONS_DIR,
+  capDiff,
+  contentComponentName,
+  contentDigest,
   describeComponent,
+  diffContentSources,
+  discoverComponents,
   getActiveToolPool,
+  isContentKind,
   isVersionBump,
+  listComponentVersions,
+  listSeedContent,
+  parseContentComponentName,
+  parseLineageRef,
   planComponentVersion,
   planNewComponent,
   readComponentVersion,
+  readSeedBaseline,
+  readVersionOrSeed,
   resolveComponentRoots,
+  resolveContent,
   runComponentContract,
+  seedContentPath,
+  seedContentSource,
+  type ContentDiff,
+  type ContentKind,
   type ContractResult,
   type LoadedFile,
   type RunContractOptions,
   type VersionBump,
 } from "../components/index.js";
 import { createComponentHost } from "../components/host.js";
-import { lineageTitle } from "../components/lineage.js";
+import { lineageTitle, type LineageDiffInput } from "../components/lineage.js";
 import { getLineageReconciler, type LineageReconciler } from "../components/lineage-reconcile.js";
 import {
   ensureParentEntity,
@@ -180,6 +200,24 @@ function coerceOutcome(value: unknown): "candidate" | "failed" {
   return String(value ?? "").trim().toLowerCase() === "failed" ? "failed" : "candidate";
 }
 
+function coerceCreateKind(value: unknown): "tools" | "skill" | null {
+  const lowered = String(value ?? "").trim().toLowerCase();
+  if (lowered === "" || lowered === "tools" || lowered === "tool") {
+    return "tools";
+  }
+  return lowered === "skill" ? "skill" : null;
+}
+
+/** What the built-in contract of a skill or prompt checks, in one line. */
+export const CONTENT_CONTRACT_SUMMARY =
+  "built in: text only, balanced code fences, size budgets, a skill's SKILL.md frontmatter, " +
+  "a prompt's trust rules, and no sentence repeated across the prompts";
+
+/** `+a −r`, with the file count when more than one file changed. */
+function diffStatsLabel(diff: Pick<ContentDiff, "added" | "removed" | "files">): string {
+  return `+${diff.added} −${diff.removed}${diff.files > 1 ? ` in ${diff.files} files` : ""}`;
+}
+
 function realpathOr(dir: string): string {
   try {
     return realpathSync(dir);
@@ -312,12 +350,17 @@ export function createComponentTools(
         return `lineage: recorded (id ${stored.id}; root of its lineage)`;
       }
 
-      const parent = readComponentVersion({ name, version: previousVersion, roots: roots() });
+      const parent = readVersionOrSeed({
+        name,
+        version: previousVersion,
+        roots: roots(),
+        contentSeedRoot: projectRoot(),
+      });
       if (!parent.ok) {
         return `lineage: not recorded — parent ${lineageTitle(name, previousVersion)} unreadable (${parent.reason})`;
       }
-      const depth = child.ok ? child.component.manifest.depth : parent.component.manifest.depth;
-      const parentEntity = await ensureParentEntity(adapter, parent.component.manifest, {
+      const depth = child.ok ? child.component.manifest.depth : parent.manifest.depth;
+      const parentEntity = await ensureParentEntity(adapter, parent.manifest, {
         agentId: agentId(),
       });
       const stored = await storeLineageEntity(
@@ -398,10 +441,11 @@ export function createComponentTools(
     name: string,
     version: string,
     entityId: string,
+    diff?: LineageDiffInput,
   ): Promise<string> => {
     try {
       const adapter = memory();
-      const result = await markLineageAnnounced(adapter, entityId, nowIso());
+      const result = await markLineageAnnounced(adapter, entityId, nowIso(), diff);
       if (result === "already_settled") {
         return `lineage: already settled (id ${entityId})`;
       }
@@ -410,6 +454,128 @@ export function createComponentTools(
     } catch (error: unknown) {
       return `lineage: not updated — ${errorMessage(error)}`;
     }
+  };
+
+  /**
+   * A skill or prompt version's diff against its parent (a host version or
+   * the in-place seed), or null when `name` is not one, the version cannot
+   * be read, or it has no parent.
+   */
+  const contentDiffFor = (
+    name: string,
+    version: string,
+  ): { parent: string; diff: ContentDiff } | null => {
+    if (parseContentComponentName(name) === null) {
+      return null;
+    }
+    const child = readVersionOrSeed({ name, version, roots: roots(), contentSeedRoot: projectRoot() });
+    if (!child.ok || child.content === undefined) {
+      return null;
+    }
+    const parentRef = child.manifest.lineage.parent;
+    const parsed = parentRef ? parseLineageRef(parentRef) : null;
+    if (parentRef === undefined || parsed === null || parsed.name !== name) {
+      return null;
+    }
+    const parent = readVersionOrSeed({
+      name,
+      version: parsed.version,
+      roots: roots(),
+      contentSeedRoot: projectRoot(),
+    });
+    return {
+      parent: parentRef,
+      diff: diffContentSources(parent.ok ? (parent.content ?? null) : null, child.content),
+    };
+  };
+
+  /** The first root carrying `<name>/`, and the versions staged there. */
+  const stagedContent = (name: string): { root: string; versions: string[] } | null => {
+    for (const root of roots()) {
+      const dir = path.join(root, name);
+      if (existsSync(path.join(dir, VERSIONS_DIR))) {
+        return { root, versions: listComponentVersions(dir) };
+      }
+    }
+    return null;
+  };
+
+  /** `describe_component` for a skill or prompt. Null when there is nothing by that name. */
+  const describeContent = (kind: ContentKind, base: string): string | null => {
+    const name = contentComponentName(kind, base);
+    const served = resolveContent(kind, base, { roots: roots(), seedRoot: projectRoot() });
+    const seed = seedContentSource(kind, base, projectRoot());
+    const staged = stagedContent(name);
+    if (served === null && staged === null) {
+      return null;
+    }
+    const versions = [
+      ...(seed !== null ? [`${SEED_CONTENT_VERSION} (seed)`] : []),
+      ...(staged?.versions ?? []).filter((v) => seed === null || v !== SEED_CONTENT_VERSION),
+    ];
+    const lines = [
+      `Component "${name}" (the ${base} ${kind})`,
+      served === null
+        ? "  served now: nothing (no activated version and no copy in the source tree)"
+        : served.origin === "seed"
+          ? `  current version: ${served.version} (seed, served from ${served.file})`
+          : `  current version: ${served.version} (host version, served from ${served.file})`,
+      `  versions present: ${versions.join(", ") || "none"}`,
+      ...(seed !== null
+        ? [
+            `  seed: ${seedContentPath(kind, base, projectRoot())} (read in place as ${SEED_CONTENT_VERSION}; ` +
+              "change it by preparing a version, never by editing it)",
+          ]
+        : []),
+      ...(staged !== null ? [`  host versions: ${path.join(staged.root, name)}`] : []),
+      `  contract: ${CONTENT_CONTRACT_SUMMARY}`,
+    ];
+    if (served?.origin === "version" && seed !== null) {
+      const baseline = readSeedBaseline(served.dir);
+      if (baseline !== null && baseline !== contentDigest(seed)) {
+        lines.push(
+          `  seed changed since this version's lineage was prepared from it: ${served.version} does not ` +
+            "include what the source tree now ships, and a version prepared from it will not either. " +
+            "Tell your keeper if that matters.",
+        );
+      }
+    }
+    const host = hostRoot();
+    lines.push(
+      host === undefined
+        ? "  note: no host-managed component root is configured (SIA_COMPONENTS_DIR); a new version cannot be written until one is."
+        : `  host-managed root: ${host} (new versions are written there)`,
+    );
+    return lines.join("\n");
+  };
+
+  /** `describe_component` with no name: every code component, skills and prompts summarised. */
+  const describeAll = (): string => {
+    const discovered = discoverComponents(roots());
+    const code = discovered.found.filter((c) => !isContentKind(c.manifest.kind));
+    // Content components a root carries that are not seeds (a created skill).
+    const hostContent = [
+      ...discovered.found.map((c) => c.manifest.name),
+      ...discovered.skipped.map((c) => c.name),
+    ];
+    const lines = [
+      `Components: ${code.map((c) => `${c.manifest.name}@${c.manifest.version}`).join(", ") || "none"}`,
+    ];
+    for (const kind of CONTENT_KINDS) {
+      const bases = new Set(listSeedContent(kind, projectRoot()));
+      for (const entry of hostContent) {
+        const parsed = parseContentComponentName(entry);
+        if (parsed?.kind === kind) {
+          bases.add(parsed.base);
+        }
+      }
+      const withHost = [...bases].filter((b) => stagedContent(contentComponentName(kind, b)) !== null).length;
+      const names =
+        kind === "prompt" ? `: ${[...bases].sort().map((b) => contentComponentName(kind, b)).join(", ")}` : "";
+      lines.push(`${kind}s: ${bases.size} (${withHost} with host versions), named ${kind}-<name>${names}`);
+    }
+    lines.push('describe_component({ name }) describes one, e.g. "skill-planning" or "prompt-manager".');
+    return lines.join("\n");
   };
 
   const rootLabel = (root: string): string => {
@@ -428,13 +594,28 @@ export function createComponentTools(
     description:
       "Describe one of your components as the loader sees it: which root " +
       "wins, the current version, the versions present, the manifest " +
-      "(intent, kind, lineage) and the entry/contract paths. Read-only. " +
-      "Use it before iterating a component.",
+      "(intent, kind, lineage) and the entry/contract paths. Your skills " +
+      "(skill-<name>) and prompts (prompt-<role>) are components too. " +
+      "Without a name, lists them all. Read-only. Use it before iterating a component.",
     schema: z.object({
-      name: z.string().describe('The component name (directory name, e.g. "execute-code").'),
+      name: z
+        .string()
+        .optional()
+        .describe('The component name, e.g. "execute-code", "skill-planning", "prompt-manager" (default: list all).'),
     }),
-    func: async ({ name }: { name: string }): Promise<string> => {
-      const result = describeComponent({ name, roots: roots() });
+    func: async ({ name }: { name?: string }): Promise<string> => {
+      const trimmed = typeof name === "string" ? name.trim() : "";
+      if (trimmed === "") {
+        return describeAll();
+      }
+      const content = parseContentComponentName(trimmed);
+      if (content !== null) {
+        return (
+          describeContent(content.kind, content.base) ??
+          `Cannot describe component: unknown ${content.kind} "${content.base}"`
+        );
+      }
+      const result = describeComponent({ name: trimmed, roots: roots() });
       if (!result.ok) {
         return `Cannot describe component: ${result.reason}`;
       }
@@ -476,8 +657,9 @@ export function createComponentTools(
       "a person accepts it and you restart. Refuses a name that has a live " +
       "version (use prepare_component_version) or a tool name you already " +
       "have. A removed component whose versions are still staged may be " +
-      "created again, as a new lineage root above them. Returns the paths " +
-      "to edit next.",
+      "created again, as a new lineage root above them. With kind \"skill\" " +
+      "it creates a new skill (skill-<name>, a stub SKILL.md) instead. Returns " +
+      "the paths to edit next.",
     schema: z.object({
       name: z
         .string()
@@ -497,7 +679,11 @@ export function createComponentTools(
       description: z
         .string()
         .optional()
-        .describe("The tool's description for the model (default: the intent)."),
+        .describe("The tool's description for the model, or the skill's description (default: the intent)."),
+      kind: z
+        .string()
+        .optional()
+        .describe('"tools" (default) or "skill" (name it skill-<name>).'),
     }),
     func: async (
       {
@@ -506,12 +692,14 @@ export function createComponentTools(
         need,
         tool_name,
         description,
+        kind,
       }: {
         name: string;
         intent: string;
         need: string;
         tool_name?: string;
         description?: string;
+        kind?: string;
       },
       _runManager?: unknown,
       config?: RunnableConfig,
@@ -519,6 +707,10 @@ export function createComponentTools(
       // Names the model already knows — the middleware's tools and the
       // pool assembled for this agent, components included — would collide
       // at the model boundary; the component's own future tool must not.
+      const createKind = coerceCreateKind(kind);
+      if (createKind === null) {
+        return `Cannot create a component: kind must be "tools" or "skill" (got ${JSON.stringify(kind)}).`;
+      }
       const reservedToolNames = new Set<string>([
         ...MIDDLEWARE_TOOL_NAMES,
         ...getActiveToolPool().map((t) => t.name),
@@ -534,6 +726,8 @@ export function createComponentTools(
         toolName: tool_name,
         description,
         reservedToolNames,
+        kind: createKind,
+        contentSeedRoot: projectRoot(),
       });
       if (!result.ok) {
         return `Cannot create a component: ${result.reason}`;
@@ -547,6 +741,18 @@ export function createComponentTools(
         need: need.trim(),
         threadId: threadIdFrom(config),
       });
+      if (p.kind === "skill") {
+        return [
+          `Created ${p.name}@${p.version} under ${p.root} (a new skill: no parent, nothing served yet).`,
+          `  version directory: ${p.versionDir}`,
+          `  manifest: ${p.manifestPath} (kind skill, intent, lineage.need; no lineage.parent)`,
+          `  skill: ${p.entryPath} (a stub: frontmatter name and description, then the body)`,
+          `  contract: ${CONTENT_CONTRACT_SUMMARY}`,
+          `  ${lineage}`,
+          `It is served only after the host activates ${p.version} and you restart; do not create \`current\`.`,
+          `Next: write ${p.entryPath}, then run_component_contract({ name: "${p.name}", version: "${p.version}" }).`,
+        ].join("\n");
+      }
       const upstreams = await upstreamsLine();
       return [
         `Created ${p.name}@${p.version} under ${p.root} (a new component: no parent, nothing live yet).`,
@@ -575,7 +781,8 @@ export function createComponentTools(
       "component root: copies the component there if needed, creates " +
       ".versions/<next>/ from the current version, and writes its manifest " +
       "(version, lineage.parent, lineage.need). Never touches `current`. " +
-      "Returns the paths to edit next.",
+      "For a skill or prompt the current version may be the copy in the " +
+      "source tree; it is copied, never edited. Returns the paths to edit next.",
     schema: z.object({
       name: z.string().describe("The component name."),
       need: z
@@ -611,6 +818,7 @@ export function createComponentTools(
         bump: coercedBump,
         need,
         producedBy: agentId(),
+        contentSeedRoot: projectRoot(),
       });
       if (!result.ok) {
         return `Cannot prepare a version: ${result.reason}`;
@@ -628,6 +836,22 @@ export function createComponentTools(
         need,
         threadId: threadIdFrom(config),
       });
+      if (isContentKind(p.kind)) {
+        const from =
+          p.parentOrigin === "seed"
+            ? `${p.name}@${p.previousVersion} (the copy shipped with the source tree)`
+            : `${p.name}@${p.previousVersion}`;
+        return [
+          `Prepared ${p.name}@${p.nextVersion} from ${from} under ${p.root}.`,
+          `  version directory: ${p.versionDir}`,
+          `  manifest: ${p.manifestPath} (version, lineage.parent and lineage.need are set)`,
+          `  ${p.kind}: ${p.entryPath}${p.kind === "skill" ? " (its supporting files sit beside it)" : ""}`,
+          `  contract: ${CONTENT_CONTRACT_SUMMARY}`,
+          `  ${lineage}`,
+          `Edit this version only, never the source tree's copy. It governs only after your keeper accepts it and you restart; your keeper sees its diff against ${p.name}@${p.previousVersion}.`,
+          `Next: edit ${p.entryPath}, then run_component_contract({ name: "${p.name}", version: "${p.nextVersion}" }).`,
+        ].join("\n");
+      }
       return [
         `Prepared ${p.name}@${p.nextVersion} from ${p.name}@${p.previousVersion} under ${p.root}${p.copied ? " (the component was copied there first)" : ""}.`,
         `  version directory: ${p.versionDir}`,
@@ -667,15 +891,27 @@ export function createComponentTools(
       config?: RunnableConfig,
     ): Promise<string> => {
       const target = version?.trim() || undefined;
+      const isContent = parseContentComponentName(name) !== null;
       const result = await runComponentContract(name, {
         ...(opts.contract ?? {}),
         ...(target !== undefined ? { version: target } : {}),
+        ...(isContent ? { contentRoots: roots(), contentSeedRoot: projectRoot() } : {}),
       });
       const label = `${name}@${result.version ?? target ?? "current"}`;
       const headline = result.ok
-        ? `contract passed for ${label} in ${result.durationMs} ms (SDK ${result.sdkVersion})`
+        ? isContent
+          ? `contract passed for ${label} in ${result.durationMs} ms (built-in content contract)`
+          : `contract passed for ${label} in ${result.durationMs} ms (SDK ${result.sdkVersion})`
         : `contract FAILED for ${label}: ${result.error ?? "unknown error"}`;
       const detail = recordContractRun(contractRuns, threadIdFrom(config) ?? "", label, result);
+      const diffed = isContent && result.version ? contentDiffFor(name, result.version) : null;
+      if (diffed !== null) {
+        detail.push(
+          diffed.diff.text === ""
+            ? `diff against ${diffed.parent}: none yet (the version still matches its parent)`
+            : `diff against ${diffed.parent}: ${diffStatsLabel(diffed.diff)} (your keeper sees it when you announce)`,
+        );
+      }
       return [headline, ...detail].join("\n");
     },
   });
@@ -747,6 +983,11 @@ export function createComponentTools(
       }
       const parentVersion = manifest.ok ? manifest.component.manifest.lineage.parent : undefined;
       const need = manifest.ok ? manifest.component.manifest.lineage.need : undefined;
+      // A skill or prompt candidate carries its diff against its parent, so
+      // the keeper reads what changed in how the agent reasons before it
+      // governs. Code components carry none.
+      const diffed = kind === "candidate" && manifest.ok ? contentDiffFor(name, version) : null;
+      const sentDiff = diffed !== null && diffed.diff.text !== "" ? capDiff(diffed.diff.text) : null;
 
       const id = agentId();
       const threadId = threadIdFrom(config);
@@ -819,7 +1060,21 @@ export function createComponentTools(
         if (kind !== "candidate" || recorded.candidateEntityId === undefined) {
           return;
         }
-        report.push(await markCandidateAnnounced(name, version, recorded.candidateEntityId));
+        report.push(
+          await markCandidateAnnounced(
+            name,
+            version,
+            recorded.candidateEntityId,
+            diffed !== null
+              ? {
+                  parent: diffed.parent,
+                  text: diffed.diff.text,
+                  added: diffed.diff.added,
+                  removed: diffed.diff.removed,
+                }
+              : undefined,
+          ),
+        );
         if (threadId !== undefined) {
           const k = guardKey ?? announceGuardKey(threadId, name);
           pendingAnnouncements.set(k, version);
@@ -856,6 +1111,14 @@ export function createComponentTools(
         Authorization: `Bearer ${daemonToken}`,
       };
 
+      if (diffed !== null) {
+        report.push(
+          diffed.diff.text === ""
+            ? `diff: none — ${lineageTitle(name, version)} matches ${diffed.parent}.`
+            : `diff: ${diffStatsLabel(diffed.diff)} against ${diffed.parent}${sentDiff?.truncated ? " (cut to fit what the host carries)" : ""}.`,
+        );
+      }
+
       if (kind === "candidate") {
         try {
           const res = await fetchImpl(`${daemonUrl}/chat/component-version`, {
@@ -869,6 +1132,7 @@ export function createComponentTools(
               need,
               summary: trimmedSummary,
               threadId,
+              ...(sentDiff !== null ? { diff: sentDiff.text } : {}),
               timestamp: new Date().toISOString(),
             }),
             signal: AbortSignal.timeout(timeoutMs),

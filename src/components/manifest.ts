@@ -17,8 +17,63 @@ import {
 } from "../profiles/harness.js";
 
 /** What a component contributes. Exactly one thing per component. */
-export const COMPONENT_KINDS = ["middleware", "tools", "service"] as const;
+export const COMPONENT_KINDS = [
+  "middleware",
+  "tools",
+  "service",
+  "skill",
+  "prompt",
+] as const;
 export type ComponentKind = (typeof COMPONENT_KINDS)[number];
+
+/**
+ * Kinds whose version is text the agent reads (a skill's `SKILL.md` and its
+ * supporting files, or one prompt file), not code the loader imports. A
+ * content version has no entry module and no contract file of its own: its
+ * contract is built in. See `docs/COMPONENTS.md` §Skills and prompts.
+ */
+export const CONTENT_KINDS = ["skill", "prompt"] as const;
+export type ContentKind = (typeof CONTENT_KINDS)[number];
+
+/** Whether `kind` is a content kind (`skill` or `prompt`). */
+export function isContentKind(kind: unknown): kind is ContentKind {
+  return (
+    typeof kind === "string" && (CONTENT_KINDS as readonly string[]).includes(kind)
+  );
+}
+
+/** The one file a content version is served from, by kind. */
+export const CONTENT_ENTRY_FILES: Readonly<Record<ContentKind, string>> = {
+  skill: "SKILL.md",
+  prompt: "prompt.md",
+};
+
+/** The name prefix every content component carries, by kind. */
+export const CONTENT_NAME_PREFIXES: Readonly<Record<ContentKind, string>> = {
+  skill: "skill-",
+  prompt: "prompt-",
+};
+
+/**
+ * The prompt files a `prompt-<role>` component may stand in for. Only these
+ * are loaded; a prompt component for any other role would never be read.
+ */
+export const PROMPT_ROLES = [
+  "manager",
+  "planner",
+  "researcher",
+  "answer",
+  "no-web-search",
+  "shared",
+] as const;
+export type PromptRole = (typeof PROMPT_ROLES)[number];
+
+/** Whether `value` is a known prompt role. */
+export function isPromptRole(value: unknown): value is PromptRole {
+  return (
+    typeof value === "string" && (PROMPT_ROLES as readonly string[]).includes(value)
+  );
+}
 
 /** Directory name and registry key rule, shared with remote server names. */
 export const COMPONENT_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
@@ -95,6 +150,32 @@ export type ParseManifestResult =
     }
   | { ok: false; reason: string };
 
+/**
+ * The rules a content manifest follows beyond the schema: its entry is the
+ * kind's one file, it tunes no assembly, and its name carries the kind's
+ * prefix (for a prompt, followed by a known role). Null when it complies.
+ */
+function checkContentManifest(
+  manifest: ComponentManifest,
+  kind: ContentKind,
+): string | null {
+  const entry = CONTENT_ENTRY_FILES[kind];
+  if (manifest.entry !== entry) {
+    return `kind "${kind}" must have entry "${entry}" (got "${manifest.entry}")`;
+  }
+  if (manifest.profile !== undefined) {
+    return `"profile" is not valid for kind "${kind}"`;
+  }
+  const prefix = CONTENT_NAME_PREFIXES[kind];
+  if (!manifest.name.startsWith(prefix) || manifest.name.length === prefix.length) {
+    return `a component of kind "${kind}" must be named "${prefix}<name>" (got "${manifest.name}")`;
+  }
+  if (kind === "prompt" && !isPromptRole(manifest.name.slice(prefix.length))) {
+    return `"${manifest.name}" names no prompt the agent loads; known: ${PROMPT_ROLES.map((r) => `${prefix}${r}`).join(", ")}`;
+  }
+  return null;
+}
+
 /** Render a zod error as one line per issue. */
 function formatZodError(error: z.ZodError): string {
   return error.issues
@@ -139,6 +220,12 @@ export function parseComponentManifest(
       ok: false,
       reason: `"replaces" is only valid for kind "middleware" (got kind "${manifest.kind}")`,
     };
+  }
+  if (isContentKind(manifest.kind)) {
+    const contentRule = checkContentManifest(manifest, manifest.kind);
+    if (contentRule !== null) {
+      return { ok: false, reason: contentRule };
+    }
   }
 
   let profile: HarnessProfile | undefined;

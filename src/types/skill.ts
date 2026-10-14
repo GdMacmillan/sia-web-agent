@@ -36,4 +36,9 @@ export interface SkillsLoaderOptions {
 export interface SkillsMiddlewareOptions {
   /** Absolute path to the skills directory */
   skillsDir: string;
+  /**
+   * The component roots a skill version may be served from, in precedence
+   * order (default: the roots as they are now).
+   */
+  componentRoots?: () => readonly string[];
 }

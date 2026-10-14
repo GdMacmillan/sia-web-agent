@@ -8,8 +8,7 @@
  * exactly as it did before components existed.
  */
 
-import { existsSync, realpathSync, statSync } from "node:fs";
-import path from "node:path";
+import { realpathSync } from "node:fs";
 import type { AgentMiddleware } from "langchain";
 import type { StructuredTool } from "@langchain/core/tools";
 import type { HarnessProfile } from "../profiles/harness.js";
@@ -24,53 +23,15 @@ import type { ComponentConfig, ComponentInternals } from "./sdk.js";
 import { MIDDLEWARE_ONLY_TOOL_NAMES, MIDDLEWARE_TOOL_NAMES } from "./names.js";
 import { getLineageReconciler } from "./lineage-reconcile.js";
 import { createComponentsMiddleware, setActiveComponents } from "./registry.js";
+import { resolveComponentRoots } from "./roots.js";
 
 export { MIDDLEWARE_ONLY_TOOL_NAMES, MIDDLEWARE_TOOL_NAMES };
 
-/** The seed root, relative to the project root. */
-export const SEED_COMPONENTS_DIRNAME = "components";
-
-export interface ResolveComponentRootsInput {
-  projectRoot: string;
-  /** The host-managed root (`SIA_COMPONENTS_DIR`), when set. */
-  componentsDir?: string | undefined;
-}
-
-/**
- * The component roots that exist on disk, highest precedence first:
- * the host-managed root, then the seed root shipped with the source tree.
- */
-export function resolveComponentRoots(
-  input: ResolveComponentRootsInput,
-): string[] {
-  const candidates = [
-    input.componentsDir,
-    path.join(input.projectRoot, SEED_COMPONENTS_DIRNAME),
-  ];
-  const roots: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    const resolved = path.resolve(candidate);
-    let real: string;
-    try {
-      if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
-        continue;
-      }
-      real = realpathSync(resolved);
-    } catch (_error) {
-      continue;
-    }
-    if (seen.has(real)) {
-      continue;
-    }
-    seen.add(real);
-    roots.push(resolved);
-  }
-  return roots;
-}
+export {
+  SEED_COMPONENTS_DIRNAME,
+  resolveComponentRoots,
+  type ResolveComponentRootsInput,
+} from "./roots.js";
 
 export interface PrepareComponentAssemblyOptions {
   projectRoot: string;

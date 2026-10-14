@@ -6,7 +6,7 @@ description: |
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Meta-Awareness: You ARE This Codebase
@@ -88,14 +88,17 @@ record routine discoveries. Focus on:
 
 ## Where to Make Changes
 
-| What You're Changing   | Primary File              | Also Update                |
-| ---------------------- | ------------------------- | -------------------------- |
-| Your core behavior     | `prompts/manager.md`      | CLAUDE.md if significant   |
-| Your planning approach | `prompts/planner.md`      | -                          |
-| Your research methods  | `prompts/researcher.md`   | -                          |
-| Your architecture      | Code in `packages/*/src/` | CLAUDE.md                  |
-| Your conventions       | CLAUDE.md                 | Possibly prompts           |
-| Your capabilities      | `skills/`                 | CLAUDE.md "Current Skills" |
+| What You're Changing   | Where It Changes                                               | Also Update               |
+| ---------------------- | -------------------------------------------------------------- | ------------------------- |
+| Your core behavior     | A `prompt-manager` version (self-task, `iterate-component`)    | CLAUDE.md if significant  |
+| Your planning approach | A `prompt-planner` version (self-task, `iterate-component`)    | -                         |
+| Your research methods  | A `prompt-researcher` version (self-task, `iterate-component`) | -                         |
+| Your architecture      | Code in `packages/*/src/`                                      | CLAUDE.md                 |
+| Your conventions       | CLAUDE.md                                                      | Possibly a prompt version |
+| Your capabilities      | A `skill-<name>` version (self-task, `iterate-component`)      | -                         |
+
+A prompt or skill version governs only after your keeper accepts it and you restart. Editing
+`prompts/` or `skills/` directly is reported to your keeper as drift.
 
 ## Anti-Patterns
 

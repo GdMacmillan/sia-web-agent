@@ -4,10 +4,16 @@
  * Reads prompt content from markdown files in the prompts/ directory,
  * caching the results for performance. Uses getAgentPackageRoot() to
  * locate prompts, which respects SIA_PROJECT_ROOT in self-improve mode.
+ *
+ * Each prompt is also a component (`prompt-<name>`): when the host has
+ * activated a version of it that passes its built-in contract, that
+ * version is what loads; otherwise the file in prompts/ does. See
+ * `docs/COMPONENTS.md` §Skills and prompts.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveContent } from "../components/content.js";
 import { getAgentPackageRoot } from "./path-utils.js";
 
 /**
@@ -45,13 +51,15 @@ export function loadPromptFile(name: PromptName): string {
   if (cached) return cached;
 
   // Uses getAgentPackageRoot() which respects SIA_PROJECT_ROOT in self-improve mode
-  const promptPath = resolve(getAgentPackageRoot(), "prompts", `${name}.md`);
-
-  if (!existsSync(promptPath)) {
-    throw new Error(`Prompt file not found: ${promptPath}`);
+  const seedRoot = getAgentPackageRoot();
+  const source = resolveContent("prompt", name, { seedRoot });
+  if (source === null) {
+    throw new Error(
+      `Prompt file not found: ${resolve(seedRoot, "prompts", `${name}.md`)}`,
+    );
   }
 
-  const content = readFileSync(promptPath, "utf-8");
+  const content = readFileSync(source.file, "utf-8");
   promptCache.set(name, content);
   return content;
 }

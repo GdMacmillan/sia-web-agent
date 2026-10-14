@@ -337,6 +337,7 @@ Content-Type: application/json
   "need": "<lineage.need>",
   "summary": "<what changed and why>",
   "threadId": "<thread id>",
+  "diff": "--- a/SKILL.md (skill-x@1.0.0)\n+++ b/SKILL.md (skill-x@1.0.1)\n…",
   "timestamp": "<ISO 8601>"
 }
 ```
@@ -344,6 +345,14 @@ Content-Type: application/json
 The event is sent only for a candidate (a version whose contract passed);
 a failed outcome posts the room message alone. Activating the version
 remains the host's step (§1.5).
+
+`diff` is present only for a skill or prompt version that differs from its
+parent (`COMPONENTS.md` §10). It is a unified diff of the version's text
+files against the parent's, at most 32 KiB of UTF-8, cut at a line
+boundary and ending `… diff truncated: <n> more lines` when cut. It is for
+the person deciding the version; a host that does not show it may ignore
+the field, and a host that stores it should keep its own size cap, since
+the agent's cap is not a guarantee. Code versions are sent without it.
 
 ### 3.5 Component status (agent → host, optional)
 

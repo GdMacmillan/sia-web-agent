@@ -191,7 +191,7 @@ function isFilePointer(currentPath: string): boolean {
  * the form a source tree can carry to platforms where links need
  * privileges. Both resolve under the same containment rules.
  */
-function resolveCurrentVersion(
+export function resolveCurrentVersion(
   root: string,
   name: string,
 ): { ok: true; versionDir: string; versionDirName: string } | { ok: false; reason: string } {
