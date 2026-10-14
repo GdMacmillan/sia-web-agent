@@ -13,6 +13,7 @@ import {
   expect,
   beforeEach,
   afterAll,
+  afterEach,
   jest,
 } from "@jest/globals";
 
@@ -142,5 +143,49 @@ describe("getSystemPrompt — web-search capability notice", () => {
         await import("../../src/utils/prompt-loader.js");
       expect(await getSystemPrompt("answer")).toBe(loadPromptFile("answer"));
     });
+  });
+});
+
+describe("getSystemPrompt — manager environment context", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("states no model facts and no date when the host supplies none", async () => {
+    const prompt = await getSystemPrompt("manager");
+
+    expect(prompt).toContain("## System Environment");
+    expect(prompt).toContain("Working directory:");
+    expect(prompt).not.toContain("Codex");
+    expect(prompt).not.toContain("September 2024");
+    expect(prompt).not.toContain("Today's date");
+    expect(prompt).not.toContain("You are powered by");
+    expect(prompt).not.toContain("knowledge cutoff");
+  });
+
+  it("states the model facts the host supplies", async () => {
+    const prompt = await getSystemPrompt("manager", {
+      modelName: "Claude Sonnet 4.5",
+      modelId: "anthropic/claude-sonnet-4.5",
+      knowledgeCutoff: "January 2025",
+    });
+
+    expect(prompt).toContain(
+      "You are powered by the model named Claude Sonnet 4.5. The exact model ID is anthropic/claude-sonnet-4.5.",
+    );
+    expect(prompt).toContain("Assistant knowledge cutoff is January 2025.");
+  });
+
+  it("is byte-identical across a day rollover", async () => {
+    const options = { modelId: "anthropic/claude-sonnet-4.5" };
+    jest.useFakeTimers({ now: new Date("2026-03-01T23:59:00") });
+    const before = await getSystemPrompt("manager", options);
+
+    jest.setSystemTime(new Date("2026-03-02T00:01:00"));
+    clearPromptCache();
+    const after = await getSystemPrompt("manager", options);
+
+    expect(after).toBe(before);
+    expect(after).not.toContain("2026-03");
   });
 });

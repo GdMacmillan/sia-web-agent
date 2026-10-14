@@ -298,4 +298,18 @@ export interface RuntimeConfig {
    * require it (e.g. `SiadGraphMemoryAdapter`) must fail fast.
    */
   workspaceId: string | undefined;
+  /**
+   * Display name of the orchestrator model (`SIA_MODEL_NAME`).
+   *
+   * Supplied by whatever launches the agent, which knows which model it
+   * configured. Rendered into the system prompt's environment block; when
+   * unset the "powered by" name is omitted rather than guessed.
+   */
+  modelName?: string;
+  /**
+   * Training-data cutoff of the orchestrator model
+   * (`SIA_MODEL_KNOWLEDGE_CUTOFF`, free text such as "January 2025").
+   * When unset the cutoff line is omitted from the system prompt.
+   */
+  modelKnowledgeCutoff?: string;
 }

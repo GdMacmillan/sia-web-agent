@@ -358,6 +358,9 @@ function loadRuntimeConfig(): RuntimeConfig {
     agentId: env("SIA_AGENT_ID") || "self-improving-agent",
     agentName: env("SIA_AGENT_NAME") || "Self-Improving Agent",
     workspaceId: env("SIA_WORKSPACE_ID") || undefined,
+    modelName: env("SIA_MODEL_NAME")?.trim() || undefined,
+    modelKnowledgeCutoff:
+      env("SIA_MODEL_KNOWLEDGE_CUTOFF")?.trim() || undefined,
   };
 }
 

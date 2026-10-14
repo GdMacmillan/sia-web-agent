@@ -15,6 +15,7 @@ import {
   getSkill,
   getSkillContent,
   clearSkillsCache,
+  parseFrontmatterFields,
 } from "../../../src/utils/skills-loader.js";
 
 describe("Skills Loader", () => {
@@ -493,5 +494,115 @@ Content`,
       // but should still extract name and description
       expect(skills.length).toBeGreaterThanOrEqual(0);
     });
+  });
+});
+
+describe("parseFrontmatterFields", () => {
+  it("reads plain single-line values", () => {
+    expect(
+      parseFrontmatterFields("name: bash-usage\ndescription: Bash guidelines."),
+    ).toEqual({ name: "bash-usage", description: "Bash guidelines." });
+  });
+
+  it("keeps an unquoted ': ' inside a plain value (strict YAML would reject it)", () => {
+    // Taken from the shipped iterate-component skill.
+    const fields = parseFrontmatterFields(
+      "name: iterate-component\n" +
+        "description: Write a new version. If this thread opened as a self-task, you are already in it: do the work here.\n" +
+        "license: MIT",
+    );
+    expect(fields.description).toBe(
+      "Write a new version. If this thread opened as a self-task, you are already in it: do the work here.",
+    );
+    expect(fields.license).toBe("MIT");
+  });
+
+  it("reads a literal block scalar with clip chomping", () => {
+    const fields = parseFrontmatterFields(
+      "name: code-execution\n" +
+        "description: |\n" +
+        "  Execute TypeScript code. Use when processing files,\n" +
+        "  aggregating data. IMPORTANT: TypeScript only.\n" +
+        "license: MIT",
+    );
+    expect(fields.description).toBe(
+      "Execute TypeScript code. Use when processing files,\naggregating data. IMPORTANT: TypeScript only.\n",
+    );
+    expect(fields.license).toBe("MIT");
+  });
+
+  it("honours strip and keep chomping", () => {
+    expect(
+      parseFrontmatterFields("description: |-\n  one\n  two\n\n").description,
+    ).toBe("one\ntwo");
+    expect(
+      parseFrontmatterFields("description: |+\n  one\n\nnext: x").description,
+    ).toBe("one\n\n");
+  });
+
+  it("folds a folded block scalar, keeping paragraph breaks", () => {
+    expect(
+      parseFrontmatterFields(
+        "description: >-\n  first line\n  second line\n\n  new paragraph\n",
+      ).description,
+    ).toBe("first line second line\n\nnew paragraph");
+  });
+
+  it("honours an explicit indentation indicator", () => {
+    expect(
+      parseFrontmatterFields("description: |2-\n    indented\n  base\n")
+        .description,
+    ).toBe("  indented\nbase");
+  });
+
+  it("folds indented continuation lines of a plain value", () => {
+    expect(
+      parseFrontmatterFields(
+        "description: starts here\n  and continues\n  over lines\nname: x",
+      ),
+    ).toEqual({
+      description: "starts here and continues over lines",
+      name: "x",
+    });
+  });
+
+  it("unquotes single- and double-quoted values", () => {
+    expect(
+      parseFrontmatterFields(`a: "say \\"hi\\": now"\nb: 'it''s: fine'`),
+    ).toEqual({ a: 'say "hi": now', b: "it's: fine" });
+  });
+
+  it("skips nested mappings and does not lift their keys to the top level", () => {
+    const fields = parseFrontmatterFields(
+      'name: x\nmetadata:\n  author: someone\n  version: "1.0.0"\ndescription: d',
+    );
+    expect(fields).toEqual({ name: "x", description: "d" });
+  });
+
+  it("ignores comments and lines it does not understand", () => {
+    expect(
+      parseFrontmatterFields("# a comment\nname: x\n- stray\ndescription: d"),
+    ).toEqual({ name: "x", description: "d" });
+  });
+});
+
+describe("shipped skills", () => {
+  it("every skill in the repo parses with a real description", () => {
+    clearSkillsCache();
+    const skillsDir = path.resolve(__dirname, "../../../skills");
+    const skills = listSkills(skillsDir);
+    const dirs = fs
+      .readdirSync(skillsDir)
+      .filter((entry) =>
+        fs.existsSync(path.join(skillsDir, entry, "SKILL.md")),
+      );
+
+    expect(skills.map((s) => s.name).sort()).toEqual(dirs.sort());
+    for (const skill of skills) {
+      // A block-scalar indicator must never leak through as the value.
+      expect(skill.description).not.toMatch(/^[|>][+-]?$/);
+      expect(skill.description.length).toBeGreaterThan(20);
+    }
+    clearSkillsCache();
   });
 });

@@ -45,12 +45,21 @@ process; there is no out-of-band fetch.
 
 ### 1.2 Identity
 
-The agent currently reads two identity vars from env:
+The agent currently reads two identity vars from env, plus two optional
+model facts:
 
 | Variable | Purpose | Required |
 |---|---|---|
 | `SIA_WORKSPACE_ID` | Tenant scope. Echoed in usage-event payloads; the host validates the echo as defense-in-depth. | Required iff `SIAD_EVENTS_URL` is set |
 | `SIA_AGENT_ID` | Stable agent identifier. Echoed in usage-event payloads; the host scopes the per-spawn bearer token to it. Defaults to `"self-improving-agent"` when unset. | Required iff `SIAD_EVENTS_URL` is set |
+| `SIA_MODEL_NAME` | Display name of the orchestrator model the host configured. Stated in the system prompt; omitted when unset. | No |
+| `SIA_MODEL_KNOWLEDGE_CUTOFF` | That model's training cutoff, free text (e.g. `January 2025`). Stated in the system prompt; omitted when unset. | No |
+
+The model facts are the host's to supply because the host chose the model.
+The agent never fills them with a default: a model told the wrong name or
+cutoff reasons from false premises. Both are read once at startup and
+become part of the cached system prompt, so they should not change during
+the process's life.
 
 The reference `siad` implementation also stamps additional identity
 vars (`SIA_NODE_ID`, `SIA_OWNER_USER_ID`) for its own bookkeeping and

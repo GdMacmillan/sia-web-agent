@@ -58,6 +58,8 @@ defaults.
 | `SIA_AGENT_ID` | `self-improving-agent` | Echoed in usage-event payloads; the host scopes the per-spawn bearer token to it. |
 | `SIA_AGENT_NAME` | `Self-Improving Agent` | Display name. Currently informational only. |
 | `SIA_WORKSPACE_ID` | unset | Tenant scope. Echoed in usage-event payloads; the host validates the echo. Only read by `usage-events` middleware — without `SIAD_EVENTS_URL` set, ignored. |
+| `SIA_MODEL_NAME` | unset | Display name of the orchestrator model, stated in the system prompt's environment block ("You are powered by the model named …"). Unset: the line names only the model id. |
+| `SIA_MODEL_KNOWLEDGE_CUTOFF` | unset | The orchestrator model's training cutoff, free text (e.g. `January 2025`). Unset: the cutoff line is omitted. |
 
 ## Host callback (usage events)
 

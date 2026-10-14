@@ -1,9 +1,18 @@
 /**
  * System Context Builder - Generates dynamic environment context
  *
- * Builds the <env> section for system prompts with current environment
- * information including working directory, platform, and date.
- * Uses getProjectRoot() which respects SIA_PROJECT_ROOT in self-improve mode.
+ * Builds the <env> section for system prompts with environment information
+ * that is fixed for the life of the process: working directory, git status,
+ * platform and OS version, plus the model facts the host supplied.
+ *
+ * The output must be byte-stable across turns so the system prompt can be
+ * served from a provider's prompt cache. Anything that changes during the
+ * process's lifetime (today's date, for one) does NOT belong here — it is
+ * delivered per request as a context message instead (see
+ * `middleware/host-context.ts`).
+ *
+ * Model facts are never guessed: a line whose value the host didn't supply is
+ * omitted rather than filled with a default that may be false.
  */
 
 import { execSync } from "node:child_process";
@@ -18,11 +27,11 @@ import { getProjectRoot } from "./path-utils.js";
 export interface SystemContextOptions {
   /** Override the working directory (defaults to getProjectRoot()) */
   workingDirectory?: string;
-  /** Model display name (e.g., "GPT Codex 5.1 Mini") */
+  /** Model display name (e.g., "Claude Sonnet 4.5"). Line omitted when absent. */
   modelName?: string;
-  /** Model ID (e.g., "openai/gpt-5.1-codex-mini") */
+  /** Model ID (e.g., "anthropic/claude-sonnet-4.5"). Omitted when absent. */
   modelId?: string;
-  /** Knowledge cutoff date (e.g., "September 2024") */
+  /** Knowledge cutoff (e.g., "January 2025"). Line omitted when absent. */
   knowledgeCutoff?: string;
 }
 
@@ -80,29 +89,45 @@ function getPlatformInfo(): { platform: string; version: string } {
  * Uses getProjectRoot() which respects SIA_PROJECT_ROOT env var,
  * ensuring the correct working directory is shown in self-improve mode.
  *
+ * Deterministic for a given set of options within one process: it contains
+ * no clock reading, so two calls produce identical bytes.
+ *
  * @param options - Optional overrides for context values
  * @returns Formatted system context string with <env> section
  */
 export function buildSystemContext(options: SystemContextOptions = {}): string {
   // Uses getProjectRoot() which respects SIA_PROJECT_ROOT in self-improve mode
   const workingDir = options.workingDirectory ?? getProjectRoot();
-  const modelName = options.modelName ?? "GPT Codex 5.1 Mini";
-  const modelId = options.modelId ?? "openai/gpt-5.1-codex-mini";
-  const cutoff = options.knowledgeCutoff ?? "September 2024";
   const { platform, version } = getPlatformInfo();
-  const today = new Date().toISOString().split("T")[0];
 
-  return `## System Environment
+  const sections = [
+    `## System Environment
 Here is useful information about the environment you are running in:
 <env>
 Working directory: ${workingDir}
 Is directory a git repo: ${isGitRepo(workingDir) ? "Yes" : "No"}
 Platform: ${platform}
 OS Version: ${version}
-Today's date: ${today}
-</env>
+</env>`,
+  ];
 
-You are powered by the model named ${modelName}. The exact model ID is ${modelId}.
+  const modelName = nonEmpty(options.modelName);
+  const modelId = nonEmpty(options.modelId);
+  const modelLine = [
+    modelName ? `You are powered by the model named ${modelName}.` : null,
+    modelId ? `The exact model ID is ${modelId}.` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" ");
+  if (modelLine) sections.push(modelLine);
 
-Assistant knowledge cutoff is ${cutoff}.`;
+  const cutoff = nonEmpty(options.knowledgeCutoff);
+  if (cutoff) sections.push(`Assistant knowledge cutoff is ${cutoff}.`);
+
+  return sections.join("\n\n");
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }

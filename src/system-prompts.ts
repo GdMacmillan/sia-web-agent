@@ -6,6 +6,11 @@
  * prompts that reference `web_search` get a capability notice appended when
  * that tool is unavailable.
  *
+ * The result is deterministic for a given set of options within a process —
+ * no clock or per-request values — so the system prompt is byte-stable across
+ * turns and cacheable. Per-request context such as today's date is sent as a
+ * message instead (see `middleware/host-context.ts`).
+ *
  * Note: Static codebase context tools have been removed in favor of dynamic
  * discovery via filesystem tools and the codebase-navigation skill.
  */

@@ -80,21 +80,23 @@ the source of truth; the order matters.
 | 4 | `todoListMiddleware()` | LangChain built-in. Provides `write_todos` / `update_todo_status` tools for structured task tracking. |
 | 5 | `createFilesystemMiddleware` | Provides `ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep` tools backed by the configured `BackendProtocol`. |
 | 5a | `createSourceEditNoteMiddleware` | After a successful `write_file` / `edit_file` inside the installed source tree, appends a note that an update of the installed version replaces the tree (so the edit will not carry forward) and that the edit runs unreviewed until then. Never touches the request or a failed result; silent in a version-controlled working tree, in `.code-workspace/` and `node_modules/`, and when `SOURCE_EDIT_NOTE_ENABLED=false`. Registered in the sub-agent stack too. |
-| 6 | `createSkillsMiddleware` *(if projectRoot set)* | Indexes `/skills/SKILL.md` files, injects their summaries into the system prompt, exposes `load_skill` for on-demand expansion. |
+| 6 | `createSkillsMiddleware` *(if projectRoot set)* | Indexes `/skills/SKILL.md` files once per process, appends static how-to-use instructions to the system prompt, sends the name + description list as a session context message at the head of every request, and exposes `load_skill` for on-demand expansion. |
 | 7 | `createCodeExecutionMiddleware` *(if projectRoot set)* | Provides `execute_code` for TypeScript/JavaScript execution via tsx. Max execution time: 120s. The bundled registration evaluates the in-tree twin of the seed component `components/execute-code`; with the seed root present the loader's instance replaces it by name (see [`COMPONENTS.md`](./COMPONENTS.md)). |
 | 7a | `createCodeInterpreterMiddleware` *(opt-in, `ENABLE_CODE_INTERPRETER=true`)* | Provides the sandboxed QuickJS `eval` tool with in-REPL `task()` subagent fan-out. Lazily loaded. See [Code interpreter (QuickJS)](#code-interpreter-quickjs). |
 | 8 | `createSubAgentMiddleware` | Provides the `task` tool. Delegates work to sub-agents (see [Sub-agents](#sub-agents)). |
 | 9 | `summarizationMiddleware` | LangChain built-in. Compresses conversation history when token usage approaches a configured threshold. |
 | 10 | `createPatchToolCallsMiddleware` | Repairs dangling / inconsistent tool calls across model providers. End of the **core** segment. |
 | — | Caller-supplied **novel** custom middleware | Anything passed via `params.middleware` whose `.name` doesn't match a core/tail entry inserts **here**, between core and tail. |
-| 11 | `anthropicPromptCachingMiddleware` | LangChain built-in. Enables Anthropic prompt caching. `unsupportedModelBehavior: "ignore"` so non-Anthropic providers don't error. First of the **tail** segment. |
+| 11 | `anthropicPromptCachingMiddleware` | LangChain built-in. Prompt caching for a native `ChatAnthropic` model only; `unsupportedModelBehavior: "ignore"` skips every other model. First of the **tail** segment. |
+| 11a | `createHostContextMiddleware` | Request-only. Appends today's date (local time, recomputed per model call) as the last message, and re-sends any system-role message found inside the history as a tagged context message in the same position. Never writes state. See [System prompt stability](#system-prompt-stability). |
+| 11b | `createSystemPromptCacheMiddleware` | For an Anthropic model reached through an OpenAI-compatible gateway (`anthropic/` prefix or `claude` in the id), marks the system prompt's text block with `cache_control: { type: "ephemeral" }`. Every other model's request is unchanged. Innermost of every middleware that touches the system prompt. |
 | 12 | `createKnowledgeFormationMiddleware` | After a task completes, evaluates the outcome (via `outcome-critic.ts`) and stores learnings in graph memory. |
 | 13 | `humanInTheLoopMiddleware` *(if `interruptOn` provided)* | LangChain built-in. Pauses for human approval on configured tools. |
 
 The stack is assembled with `mergeMiddlewareStack(core, custom, tail)`
 (`src/middleware/utils.ts`). The **core** segment (rows 1–10) and the
 **tail** segment (rows 11–13, order per upstream PR #331: caching →
-knowledge formation → HITL) are merged with caller middleware **by
+knowledge formation → HITL, with 11a/11b right after caching) are merged with caller middleware **by
 `.name`**: a same-name custom entry *replaces* the matching core/tail
 entry in place; a novel custom entry inserts between the two segments.
 This name-addressable stack is a genome prerequisite (swap / toggle /
@@ -103,6 +105,30 @@ add / remove operators). The system prompt is composed via
 `assemblePromptParts`): a plain-string `systemPrompt` still goes before
 the base prompt (legacy), while a config can replace/remove the base or
 append a suffix (Phase 5 harness profiles drive this).
+
+### System prompt stability
+
+The system prompt the model receives is byte-identical on every call for
+the life of the process, so a provider's prompt cache can serve the tool
+definitions and system prompt from cache. Anything that changes is sent as
+an ordinary message wrapped in a single tagged envelope,
+`<host-context source="…">…</host-context>` (one helper,
+`src/utils/host-context.ts`, emits every instance):
+
+| Source | Content | Position |
+|---|---|---|
+| `session` | The skills list (read once per process). | First message of every request. |
+| `conversation` | A system-role message the host wrote into the history (a chat-room briefing, say). | Where it sits in the history. |
+| `date` | `Today's date: YYYY-MM-DD`, local time. | Last message of every request. |
+
+All three are request-only; the checkpointed history is unchanged. The
+environment block in the system prompt (`src/utils/system-context.ts`)
+carries only process-lifetime facts — working directory, git status,
+platform, OS version — plus the model name, id and knowledge cutoff when
+the host supplies them (`SIA_MODEL_NAME`, `SIA_MODEL_KNOWLEDGE_CUTOFF`; the
+id is the resolved orchestrator model). A fact the host didn't supply is
+omitted, never guessed. A middleware that appends to the system prompt
+MUST append only text that is fixed for the process's lifetime.
 
 `outcome-critic.ts` exists in `src/middleware/` but is not a standalone
 middleware — it's a utility imported by `knowledge-formation.ts`.
@@ -316,9 +342,11 @@ injects pre-created tool instances.
 - `research.md` — the research sub-agent's prompt.
 - `answer.md` — the answer sub-agent's prompt.
 
-The skills middleware concatenates summaries of all `skills/*/SKILL.md`
-files into the system prompt at boot, so the orchestrator knows what
-skills are available without holding their full bodies in context.
+The skills middleware reads the summaries of all `skills/*/SKILL.md`
+files once per process and sends them as a session context message at the
+head of every request (the system prompt carries only the static
+how-to-use text), so the orchestrator knows what skills are available
+without holding their full bodies in context.
 
 ## Harness profiles
 

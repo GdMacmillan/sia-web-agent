@@ -184,6 +184,12 @@ Non-tool middleware worth knowing about:
   loopback endpoint (see [`HOST_CONTRACT.md`](docs/HOST_CONTRACT.md))
 - `capExhaustionMiddleware` — guards against runaway recursion
 - `summarizationMiddleware` — compresses context when near token limit
+- `hostContextMiddleware` / `systemPromptCacheMiddleware` — keep the
+  system prompt byte-stable (date and in-history context go in tagged
+  messages, request-only) and mark it as a cache breakpoint for Anthropic
+  models; see `docs/ARCHITECTURE.md` §System prompt stability. A
+  middleware that appends to the system prompt must append only text that
+  is fixed for the life of the process.
 - `sourceEditNoteMiddleware` — appends a note to a successful
   `write_file` / `edit_file` of the installed source tree (the next
   install replaces the edit; it runs unreviewed until then). Silent in a
@@ -277,8 +283,10 @@ Current skills (17): `bash-usage`, `checklist`, `code-execution`,
 `skills/README.md` for orientation.
 
 To add a skill: create `skills/<name>/SKILL.md` with the required
-frontmatter (see existing skills for the schema). The agent will
-discover it on the next `load_skill` call.
+frontmatter (see existing skills for the schema). Skills are read once
+per process (the list is part of the cached request prefix), so the agent
+picks up a new or edited skill on its next restart. The frontmatter reader
+is lenient: plain, quoted and block-scalar (`|`, `>`) values all work.
 
 ## Host contract
 
