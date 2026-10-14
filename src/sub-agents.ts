@@ -37,7 +37,7 @@ export async function getPlanSubAgent(): Promise<SubAgent> {
     planSubAgentCache = {
       name: "plan",
       description:
-        "Creates structured implementation plans. Receives requirements, constraints, and target files. Returns JSON with ordered steps (each with description, expectedOutcome, fileChanges, dependencies), risks, and assumptions. Use for planning complex implementations that need structured, actionable steps.",
+        "Read-only. Produces a structured implementation plan: ordered steps with expected outcomes and file changes, plus risks and assumptions. Put the requirements, constraints and target files in the task description.",
       systemPrompt: await getSystemPrompt("plan"),
       model: await createPlanModel(),
       // tools: populated at middleware level with getPlannerTools()
@@ -61,7 +61,7 @@ export async function getResearchSubAgent(): Promise<SubAgent> {
     researchSubAgentCache = {
       name: "research",
       description:
-        "Performs deep, systematic codebase investigation. Receives depth (shallow/medium/deep), taskType (architecture/dependency/logic/pattern/comparison), and focusAreas. Returns JSON with summary, codebaseStructure, findings (with file paths and line numbers), recommendations, and issues. Use for multi-file exploration requiring systematic investigation.",
+        "Read-only, systematic codebase investigation across many files. Returns a summary, findings with file paths and line numbers, and recommendations. State the depth (shallow/medium/deep) and focus areas in the task description.",
       systemPrompt: await getSystemPrompt("research"),
       model: await createResearchModel(),
       // tools: populated at middleware level with getResearcherTools()
@@ -84,7 +84,7 @@ export async function getAnswerSubAgent(): Promise<SubAgent> {
     answerSubAgentCache = {
       name: "answer",
       description:
-        "Deep web research for questions requiring current external information. Uses search, extraction, and synthesis to provide comprehensive answers with cited sources. Use when questions need up-to-date information from the web, external documentation, or recent developments.",
+        "Web research for questions that need current external information, such as recent developments or external documentation. Returns a synthesized answer with cited sources.",
       systemPrompt: await getSystemPrompt("answer"),
       model: await createAnswerModel(),
       // tools: populated at middleware level with getAnswerTools()

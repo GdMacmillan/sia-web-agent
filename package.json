@@ -19,7 +19,8 @@
     "test:integration": "RUN_INTEGRATION=true jest tests/integration --forceExit",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "sync:seed": "node scripts/sync-seed-components.mjs"
+    "sync:seed": "node scripts/sync-seed-components.mjs",
+    "measure:prompt": "tsx scripts/measure-prompt-budget.ts"
   },
   "dependencies": {
     "@huggingface/inference": "4.13.28",

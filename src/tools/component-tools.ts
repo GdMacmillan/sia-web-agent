@@ -470,19 +470,14 @@ export function createComponentTools(
   const createTool = new DynamicStructuredTool({
     name: "create_component",
     description:
-      "Create a brand-new component — a tool you do not have yet — as its " +
-      "first version, 0.1.0, under the host-managed component root: " +
-      ".versions/0.1.0/ with a manifest (kind tools, no parent), an entry " +
-      "that contributes one stub tool which echoes its input, and a " +
-      "contract that invokes it, so the contract passes before you change " +
-      "anything. Never touches `current`: the component exists only as a " +
-      "described version until a person accepts it and you restart. Refuses " +
-      "a name any root already carries a live version of (that is " +
-      "prepare_component_version) and a tool name you already have. A name " +
-      "with no live version anywhere but versions still staged — the host " +
-      "removed it, with nothing else spoken for it — may be created again: " +
-      "the next minor above what is staged, as a fresh lineage root. " +
-      "Returns the paths to edit next.",
+      "Create a new component (a tool you do not have yet) as version " +
+      "0.1.0: a manifest, an entry contributing one stub tool that echoes " +
+      "its input, and a contract that already passes. It is not live until " +
+      "a person accepts it and you restart. Refuses a name that has a live " +
+      "version (use prepare_component_version) or a tool name you already " +
+      "have. A removed component whose versions are still staged may be " +
+      "created again, as a new lineage root above them. Returns the paths " +
+      "to edit next.",
     schema: z.object({
       name: z
         .string()
@@ -701,17 +696,13 @@ export function createComponentTools(
   const announceTool = new DynamicStructuredTool({
     name: "announce_component_version",
     description:
-      "Announce the outcome of a component iteration: tells the host about " +
-      "a candidate version and, when room announcements are enabled, posts " +
-      "one announcement with a link to this thread to the room the need was " +
-      "raised in. A need raised outside a room (a direct conversation) is " +
-      "posted nowhere in the room; its owner sees it where they asked. " +
-      "Pass `channel` to post to a room of your choosing instead. Call it " +
-      "once, after the contract ran, from the self-task thread that built " +
-      "the version — a second candidate announcement for the same " +
-      "component from the same thread while the first is still pending is " +
-      "refused, as is any call from a thread that is not a self-task. " +
-      "outcome is \"candidate\" (default) or \"failed\".",
+      "Announce a component version once its contract has run. Reports the " +
+      "candidate to the host and, when room announcements are on, posts one " +
+      "announcement linking this thread to the room the need was raised in " +
+      "(a need raised outside a room is posted nowhere; pass `channel` to " +
+      "choose a room). Call it once, from the self-task thread that built " +
+      "the version; a second pending candidate from the same thread, or a " +
+      "call from a thread that is not a self-task, is refused.",
     schema: z.object({
       name: z.string().describe("The component name."),
       version: z.string().describe("The version this thread produced."),
