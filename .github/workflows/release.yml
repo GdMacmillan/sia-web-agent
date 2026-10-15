@@ -11,11 +11,11 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           cache: 'yarn'
@@ -33,6 +33,19 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Releases are consumed as source archives and unpacked on every
+      # supported OS, and some can't create symbolic links without extra
+      # privileges. Commit a file's contents rather than a link to it.
+      - name: Reject symbolic links
+        if: steps.tag-check.outputs.exists == 'false'
+        run: |
+          links=$(git ls-files -s | awk -F '\t' '$1 ~ /^120000 / { print $2 }')
+          if [ -n "$links" ]; then
+            echo "::error::Symbolic links are not allowed in this repository:"
+            echo "$links"
+            exit 1
           fi
 
       - name: Install dependencies
