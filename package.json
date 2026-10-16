@@ -23,7 +23,7 @@
     "measure:prompt": "tsx scripts/measure-prompt-budget.ts"
   },
   "dependencies": {
-    "@huggingface/inference": "4.13.28",
+    "@huggingface/inference": "4.13.32",
     "@jitl/quickjs-ng-wasmfile-release-asyncify": "^0.32.0",
     "@langchain/community": "1.1.29",
     "@langchain/core": "1.2.17",

@@ -1175,23 +1175,23 @@
   resolved "https://registry.yarnpkg.com/@hono/node-server/-/node-server-2.1.1.tgz#9cfa8649e9ecbcd48edf505b103002402ea51e70"
   integrity sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==
 
-"@huggingface/inference@4.13.28":
-  version "4.13.28"
-  resolved "https://registry.yarnpkg.com/@huggingface/inference/-/inference-4.13.28.tgz#bcf242e2af9cec99d8d306c477228a72db9caff5"
-  integrity sha512-KTfWx7+H1xo9cbBrHvF8me/GjujV1W6DRjfKilO8z7UPiNXn8aFJgNwRl0A1g4w/FWnYo6JeNZHh8240BpG9mw==
+"@huggingface/inference@4.13.32":
+  version "4.13.32"
+  resolved "https://registry.yarnpkg.com/@huggingface/inference/-/inference-4.13.32.tgz#539fe270545e68794f659157d9ef535debd874b0"
+  integrity sha512-8ciIAPAV+Ck/om1PkvQ+flogKcoi6XEs4MDuwX9HeaYfmPdF1ooWXLsYo0wU5fRwxiYkqPaN4TuDUBXed3ywIA==
   dependencies:
-    "@huggingface/jinja" "^0.5.9"
-    "@huggingface/tasks" "^0.21.35"
+    "@huggingface/jinja" "^0.5.10"
+    "@huggingface/tasks" "^0.21.58"
 
-"@huggingface/jinja@^0.5.9":
-  version "0.5.9"
-  resolved "https://registry.yarnpkg.com/@huggingface/jinja/-/jinja-0.5.9.tgz#294f741fa098c2b3173788b44ca651958bffa36d"
-  integrity sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw==
+"@huggingface/jinja@^0.5.10":
+  version "0.5.10"
+  resolved "https://registry.yarnpkg.com/@huggingface/jinja/-/jinja-0.5.10.tgz#51e469b9cf43198ccc8f7a8a65c48d9978119e0f"
+  integrity sha512-SgS1D1bglQ94ceD4ZCL6eayUDy9uV1xuyk61OjgSxU5GJh7upqZCKII0JoTYMc6wWsg3JUgaPRX0ElQzXPk3Cw==
 
-"@huggingface/tasks@^0.21.35":
-  version "0.21.35"
-  resolved "https://registry.yarnpkg.com/@huggingface/tasks/-/tasks-0.21.35.tgz#d9344a5b65a2f9c3d9078f5326b60934c7e5e2db"
-  integrity sha512-Nqw/E01EE8Ykxp44qpsgxyu8g486mAiCWHdkHD6+c0aFU1kdtxsUUrv1AD4Zp4ePlV5sf95A/gKbLLoXP0NXqw==
+"@huggingface/tasks@^0.21.58":
+  version "0.21.61"
+  resolved "https://registry.yarnpkg.com/@huggingface/tasks/-/tasks-0.21.61.tgz#25caa6876da0cff41b2afd52d45adefdd65151af"
+  integrity sha512-bAki2SyAkxYbzYCAcOmPYq++CzCHI1CkxeVQnF2jkXAh60wnIuR+jZJ+Eha1aaI049bB1aO8H+icr4C/kvLnuw==
 
 "@humanfs/core@^0.19.2":
   version "0.19.2"
@@ -6676,7 +6676,7 @@ zod-to-json-schema@^3.25.1:
   resolved "https://registry.yarnpkg.com/zod-to-json-schema/-/zod-to-json-schema-3.25.2.tgz#3fa799a7badd554541472fb65843fdc460b2e5aa"
   integrity sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==
 
-"zod@^3.25 || ^4.0", "zod@^3.25.76 || ^4", zod@4.6.5:
+zod@4.6.5, "zod@^3.25 || ^4.0", "zod@^3.25.76 || ^4":
   version "4.6.5"
   resolved "https://registry.yarnpkg.com/zod/-/zod-4.6.5.tgz#e3af3edbdc260239c52f73caad05dbbffe6e82cd"
   integrity sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==
