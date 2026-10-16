@@ -54,7 +54,7 @@
     "quickjs-emscripten-core": "^0.32.0",
     "safe-regex": "^2.1.1",
     "semver": "^7",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "uuid": "14.0.3",
     "zod": "4.6.5"
   },
