@@ -230,7 +230,7 @@ describe("Web Tools", () => {
       await searchTool.invoke({
         query: "q",
         includeDomains: ["lemonde.fr"],
-        includeDomainsMode: "boost",
+        includeDomainsMode: "prefer",
         language: "fr",
         filterByLanguage: true,
       });
@@ -238,12 +238,40 @@ describe("Web Tools", () => {
       expect(mockSearch).toHaveBeenCalledWith(
         "q",
         expect.objectContaining({
-          includeDomainsMode: "boost",
+          includeDomainsMode: "prefer",
           language: "fr",
           filterByLanguage: true,
         }),
       );
     });
+
+    // Tavily renamed filter/boost to restrict/prefer. A model that learned the
+    // old names must still reach the API with the current ones.
+    it.each([
+      ["filter", "restrict"],
+      ["boost", "prefer"],
+      ["restrict", "restrict"],
+    ] as const)(
+      "should normalize includeDomainsMode %s to %s",
+      async (given, sent) => {
+        mockSearch.mockResolvedValueOnce({
+          query: "q",
+          results: [],
+          responseTime: 0.1,
+        });
+
+        await searchTool.invoke({
+          query: "q",
+          includeDomains: ["python.org"],
+          includeDomainsMode: given,
+        });
+
+        expect(mockSearch).toHaveBeenCalledWith(
+          "q",
+          expect.objectContaining({ includeDomainsMode: sent }),
+        );
+      },
+    );
 
     it("should drop dependent flags whose partner option is absent", async () => {
       mockSearch.mockResolvedValueOnce({

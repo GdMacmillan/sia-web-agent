@@ -49,8 +49,8 @@ export interface WebSearchOptions extends WebCommonOptions {
   includeDomains?: string[];
   /** Domains to exclude from search results */
   excludeDomains?: string[];
-  /** Whether includeDomains filters results or merely boosts them */
-  includeDomainsMode?: "filter" | "boost";
+  /** Whether includeDomains restricts results or merely prefers them */
+  includeDomainsMode?: "restrict" | "prefer";
   /** Preferred result language: ISO 639-1 code or English name */
   language?: string;
   /** Drop results not in `language` instead of merely boosting them */

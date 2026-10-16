@@ -126,6 +126,17 @@ function toIncludeAnswer(
 }
 
 /**
+ * Normalize `includeDomainsMode` to the API's current names. Tavily renamed
+ * `filter`/`boost` to `restrict`/`prefer`; the old spellings are still accepted
+ * from the model so a prompt or transcript that learned them keeps working.
+ */
+function toDomainsMode(value: unknown): "restrict" | "prefer" | undefined {
+  if (value === "restrict" || value === "filter") return "restrict";
+  if (value === "prefer" || value === "boost") return "prefer";
+  return undefined;
+}
+
+/**
  * Treat a bare host as https, the way a browser address bar would, and reject
  * a string that is not a URL under either reading.
  *
@@ -519,9 +530,9 @@ export function createWebSearchTool(): DynamicStructuredTool {
         .optional()
         .describe("Never these domains"),
       includeDomainsMode: z
-        .enum(["filter", "boost"])
+        .enum(["restrict", "prefer", "filter", "boost"])
         .optional()
-        .describe("How includeDomains applies"),
+        .describe("restrict: only includeDomains; prefer: rank them higher"),
       language: z
         .string()
         .optional()
@@ -574,7 +585,7 @@ export function createWebSearchTool(): DynamicStructuredTool {
           // in the schema instead would turn a recoverable omission into the
           // kind of validation error this tool split exists to remove.
           includeDomainsMode: input.includeDomains?.length
-            ? input.includeDomainsMode
+            ? toDomainsMode(input.includeDomainsMode)
             : undefined,
           language: input.language,
           filterByLanguage: input.language

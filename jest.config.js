@@ -54,7 +54,8 @@ export default {
     // The trailing group covers the vendored QuickJS code interpreter's
     // pure-ESM deps (src/code-interpreter/): the acorn TS plugin, the
     // p-queue concurrency chain, and the AST/string transform libs.
-    "node_modules/(?!.pnpm|@langchain|langchain|p-retry|is-network-error|decamelize|camelcase|@sveltejs|p-queue|p-timeout|eventemitter3|estree-walker|magic-string|dedent)",
+    // eventsource-parser@4 is the SSE parser @langchain/openrouter nests.
+    "node_modules/(?!.pnpm|@langchain|langchain|p-retry|is-network-error|decamelize|camelcase|@sveltejs|p-queue|p-timeout|eventemitter3|estree-walker|magic-string|dedent|eventsource-parser)",
   ],
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts", "!src/**/*.test.ts"],
   coverageDirectory: "coverage",
