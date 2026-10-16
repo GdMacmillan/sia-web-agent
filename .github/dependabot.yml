@@ -1,4 +1,8 @@
 version: 2
+
+# Every entry waits 7 days after a version is published before proposing it,
+# so a compromised or broken release has time to be noticed and pulled first.
+# Security updates ignore cooldown by design.
 updates:
   # JS/TS dependencies (Yarn, single package)
   - package-ecosystem: "npm"
@@ -6,6 +10,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
     groups:
       langchain:
         patterns:
@@ -25,6 +31,12 @@ updates:
           - "@eslint/*"
           - "eslint-plugin-*"
           - "typescript-eslint"
+    ignore:
+      # 2.x renames the client config (`servers`, `mode`), drops options the
+      # remote-tools middleware sets, and changes the tool-name separator its
+      # server lookup parses. That is a migration, not a group bump.
+      - dependency-name: "@langchain/mcp-adapters"
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 10
 
   # GitHub Actions used by the release workflow
@@ -33,4 +45,6 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
