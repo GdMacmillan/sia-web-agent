@@ -203,7 +203,8 @@ async function suggestRelatedEntities(
       limit: 5,
     });
 
-    const sameType = resp.results
+    // An older responder answers a zero-hit search with `results: null`.
+    const sameType = (resp.results ?? [])
       .map((node) => decodeNode(node))
       .filter(
         (e): e is StoredEntityShape =>
@@ -359,7 +360,8 @@ export async function searchEntities(
     limit: input.limit ?? 10,
   });
 
-  const decoded = wireResp.results
+  // An older responder answers a zero-hit search with `results: null`.
+  const decoded = (wireResp.results ?? [])
     .map((node) => decodeNode(node))
     .filter((e): e is StoredEntityShape => !!e);
 
