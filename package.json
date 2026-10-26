@@ -71,13 +71,13 @@
     "@types/semver": "^7.8.0",
     "@types/uuid": "^11.0.0",
     "babel-jest": "^30.5.2",
-    "eslint": "^10.12.0",
+    "eslint": "^10.13.0",
     "eslint-plugin-import": "^2.32.0",
     "globals": "^17.13.0",
     "jest": "^30.5.2",
     "ts-jest": "29.4.15",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",
-    "typescript-eslint": "^8.71.1"
+    "typescript-eslint": "^8.71.2"
   }
 }
