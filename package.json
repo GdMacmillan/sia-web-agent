@@ -10,6 +10,9 @@
     "type": "git",
     "url": "git+https://github.com/gdmacmillan/sia-web-agent.git"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
