@@ -5300,25 +5300,15 @@ onetime@^5.1.2:
   dependencies:
     mimic-fn "^2.1.0"
 
-openai@7.32.0:
-  version "7.32.0"
-  resolved "https://registry.yarnpkg.com/openai/-/openai-7.32.0.tgz#e4f524a0021811bf735d5a0499ed3172af83afc4"
-  integrity sha512-avqxu/jl1gsVBCBgFNPr9sTh+wZppQphuhhFy1zEvAJxEaJ4t0ery6hZdOT9kws/EcNTARoQcZs2IT3bliE1SA==
+openai@7.39.0, openai@^7.10.0, openai@^7.5.0, openai@^7.8.0:
+  version "7.39.0"
+  resolved "https://registry.yarnpkg.com/openai/-/openai-7.39.0.tgz#a884951a6db917a94e1ae020615002e104a0fa16"
+  integrity sha512-iEA9ndbrj32vhYZwJg2v9BQVuztGUOb2SBQU16ZcWNkQHWEBjtarxjqR9c6d5PbWMG0Eyfhk66OZ0iJ8XpFjyw==
 
 openai@^6.37.0:
   version "6.49.0"
   resolved "https://registry.yarnpkg.com/openai/-/openai-6.49.0.tgz#6e9f798e146935ed38d955b43d57d6796cee5e6b"
   integrity sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg==
-
-openai@^7.10.0, openai@^7.8.0:
-  version "7.34.0"
-  resolved "https://registry.yarnpkg.com/openai/-/openai-7.34.0.tgz#86ea47b0d27bdc60b3aa6906cb422e293fa25667"
-  integrity sha512-PMwuTQ/3cVyWZJOVpb6bzlrQj17uImlnUGQWqh5zHlN/snwK5ww4ZUHW8NYGtH6f9PQOEPxyD/f8WJVIHp1q2A==
-
-openai@^7.5.0:
-  version "7.5.0"
-  resolved "https://registry.yarnpkg.com/openai/-/openai-7.5.0.tgz#adacc4ba3e325ffa9f71e0aeec834058e3d2e98b"
-  integrity sha512-ZbDBz8FSB8Mv8fFYIUvzTFMdV5vl93/octp1MdtK2lfYepSpfv/ewmeugpKz/cwGtFSx+YuUM4NwpZ2P55YiPA==
 
 openapi-types@^12.1.3:
   version "12.1.3"
