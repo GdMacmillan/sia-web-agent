@@ -5285,10 +5285,10 @@ onetime@^5.1.2:
   dependencies:
     mimic-fn "^2.1.0"
 
-openai@7.39.0, openai@^7.10.0, openai@^7.5.0, openai@^7.8.0:
-  version "7.39.0"
-  resolved "https://registry.yarnpkg.com/openai/-/openai-7.39.0.tgz#a884951a6db917a94e1ae020615002e104a0fa16"
-  integrity sha512-iEA9ndbrj32vhYZwJg2v9BQVuztGUOb2SBQU16ZcWNkQHWEBjtarxjqR9c6d5PbWMG0Eyfhk66OZ0iJ8XpFjyw==
+openai@7.43.0, openai@^7.10.0, openai@^7.5.0, openai@^7.8.0:
+  version "7.43.0"
+  resolved "https://registry.yarnpkg.com/openai/-/openai-7.43.0.tgz#4cbc59539fb49b339ad0c04a0ed91ce7fe5617f2"
+  integrity sha512-fBjKaDFG8AVfkGYoIo/E+xNRlNk7nx2nQ9GoQtXfePzPjg4QcT6nejkhXayJnEwSpFGfthOrAPI2KXj5yAqg9A==
 
 openai@^6.37.0:
   version "6.49.0"
