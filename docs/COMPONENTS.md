@@ -699,7 +699,11 @@ verdict from anyone but this side:
   may simply still be under construction (a self-task in another thread
   can be mid-edit when a turn elsewhere runs this check). A turn never
   settles it; only a boot pass may, since a restart ends any self-task
-  that was still running: `abandoned`, "never announced".
+  that was still running: `abandoned`, "never announced". Since no
+  announcement ever named this version, the boot pass that settles it
+  also reports it once, best-effort (`POST /chat/component-outcome`,
+  `HOST_CONTRACT.md` §3.4). A failed or refused report is logged and not
+  retried.
 - **displaced** — it was announced, but a different, newer candidate for
   the same component now occupies the host's slot: `abandoned`, "replaced
   by `<version>`". Nobody rejected this one; it was simply superseded

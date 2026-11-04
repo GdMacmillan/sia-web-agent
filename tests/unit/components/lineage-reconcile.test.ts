@@ -11,7 +11,9 @@ import {
 import type { IGraphMemoryAdapter } from "../../../src/vendor/svc-rpc/graph-memory/adapter-interface.js";
 
 /** A graph-memory stub holding nodes in the wire shape the handlers decode. */
-function stubAdapter(seed: Array<{ id: string; title: string; outcome: string; tags?: string[] }>) {
+function stubAdapter(
+  seed: Array<{ id: string; title: string; outcome: string; tags?: string[]; meta?: Record<string, unknown> }>,
+) {
   const nodes = new Map<string, { id: string; properties: Record<string, unknown> }>();
   for (const s of seed) {
     nodes.set(s.id, {
@@ -24,7 +26,7 @@ function stubAdapter(seed: Array<{ id: string; title: string; outcome: string; t
           content: `${s.title} prose`,
           tags: s.tags ?? ["component_version", `outcome:${s.outcome}`],
           status: s.outcome === "candidate" ? "active" : "completed",
-          custom_metadata: { outcome: s.outcome, component: s.title.split("@")[0] },
+          custom_metadata: { ...(s.meta ?? {}), outcome: s.outcome, component: s.title.split("@")[0] },
         },
       },
     });
@@ -369,6 +371,151 @@ describe("boot poll", () => {
     });
     expect(result).toEqual({ status: "settled", entityId: "e-023" });
     expect(settleOf(store.updates)).toEqual(["rejected"]);
+  });
+});
+
+describe("abandoned report", () => {
+  /** `/status` answers with `statusBody`; the report endpoint answers with `report`. */
+  function routedHost(statusBody: unknown, report: number | Error) {
+    const posts: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = jest.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/chat/component-outcome")) {
+        posts.push({ url, init });
+        if (report instanceof Error) throw report;
+        return new Response("{}", { status: report });
+      }
+      return new Response(JSON.stringify(statusBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    return { fetchImpl: fetchImpl as unknown as typeof fetch, posts };
+  }
+
+  const neverAnnounced = () =>
+    stubAdapter([
+      {
+        id: "e-023",
+        title: "execute-code@0.2.3",
+        outcome: "candidate",
+        meta: {
+          need: "Retry a run that timed out once.",
+          thread_id: "thread-7",
+          provenance: { produced_by: "agent-1", parent: "execute-code@0.2.1" },
+        },
+      },
+    ]);
+
+  it("reports a never-announced version it settled at boot, with the entity's need, thread and parent", async () => {
+    const host = routedHost(status({ active: "0.2.1" }), 202);
+    const store = neverAnnounced();
+    const { clock, reconciler } = build({
+      fetchImpl: host.fetchImpl,
+      getAdapter: () => store.adapter,
+      daemonUrl: "http://127.0.0.1:7700/",
+      daemonToken: "tok",
+    });
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+
+    expect(settleOf(store.updates)).toEqual(["abandoned"]);
+    expect(host.posts).toHaveLength(1);
+    const [post] = host.posts;
+    expect(post?.url).toBe("http://127.0.0.1:7700/chat/component-outcome");
+    expect(post?.init?.method).toBe("POST");
+    expect((post?.init?.headers as Record<string, string>).Authorization).toBe("Bearer tok");
+    expect(JSON.parse(String(post?.init?.body))).toEqual({
+      agentId: "agent-1",
+      kind: "abandoned",
+      name: "execute-code",
+      version: "0.2.3",
+      parentVersion: "execute-code@0.2.1",
+      need: "Retry a run that timed out once.",
+      threadId: "thread-7",
+      reason: "never announced",
+      timestamp: new Date(1_000).toISOString(),
+    });
+  });
+
+  it("does not report a displaced version — it was already announced", async () => {
+    const host = routedHost(status({ active: "0.2.1", candidate: { version: "0.2.4" } }), 202);
+    const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl, daemonToken: "tok" });
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+
+    expect(settleOf(store.updates)).toEqual(["abandoned"]);
+    expect(host.posts).toEqual([]);
+  });
+
+  it("does not report without a daemon token", async () => {
+    const host = routedHost(status({ active: "0.2.1" }), 202);
+    const store = neverAnnounced();
+    const { clock, reconciler } = build({
+      fetchImpl: host.fetchImpl,
+      getAdapter: () => store.adapter,
+      daemonToken: "",
+    });
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+
+    expect(settleOf(store.updates)).toEqual(["abandoned"]);
+    expect(host.posts).toEqual([]);
+  });
+
+  it("does not report a version that was already settled", async () => {
+    const host = routedHost(status({ active: "0.2.1" }), 202);
+    const store = neverAnnounced();
+    const { clock, reconciler } = build({
+      fetchImpl: host.fetchImpl,
+      getAdapter: () => store.adapter,
+      daemonToken: "tok",
+    });
+    // Discovery (a search) still sees a candidate; by the time the poll
+    // reads the entity to settle it, a push has already settled it.
+    const node = store.nodes.get("e-023");
+    const meta = node?.properties.metadata as { custom_metadata: Record<string, unknown> };
+    const settledCopy = {
+      ...node,
+      properties: { ...node?.properties, metadata: { ...meta, custom_metadata: { ...meta.custom_metadata, outcome: "converged" } } },
+    };
+    (store.adapter as unknown as { retrieveEntity: jest.Mock }).retrieveEntity = jest.fn(async () => settledCopy);
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await boot;
+
+    expect(reconciler.pending()).toEqual([]);
+    expect(settleOf(store.updates)).toEqual([]);
+    expect(host.posts).toEqual([]);
+  });
+
+  it.each([
+    ["a 404 from a host without the endpoint", 404 as number | Error],
+    ["a 500", 500],
+    ["a network error", new Error("ECONNREFUSED")],
+  ])("swallows %s: the version stays settled and boot completes", async (_label, report) => {
+    const host = routedHost(status({ active: "0.2.1" }), report);
+    const store = neverAnnounced();
+    const { clock, reconciler } = build({
+      fetchImpl: host.fetchImpl,
+      getAdapter: () => store.adapter,
+      daemonToken: "tok",
+    });
+
+    const boot = reconciler.onBoot();
+    await clock.advance(0);
+    await expect(boot).resolves.toBeUndefined();
+
+    expect(host.posts).toHaveLength(1);
+    expect(settleOf(store.updates)).toEqual(["abandoned"]);
+    expect(reconciler.pending()).toEqual([]);
+    expect(reconciler.enabled()).toBe(true);
   });
 });
 
