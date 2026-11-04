@@ -10,10 +10,15 @@
  * 2. the failure-modes notes its keeper wrote about it — read from the host;
  * 3. the platform's refusal record — read from the host.
  *
+ * The versions come from the agent's own components directory; their
+ * records come from one graph-memory listing of the entities it produced,
+ * matched by title. When that listing fails or runs out of time the versions
+ * are still listed, without their records.
+ *
  * Nothing here can fail a self-task: a part that errors or runs out of time
- * is described as unreadable or left out. When no part has anything to say
- * — no versions of its own and nothing from the host — there is no
- * briefing.
+ * is described as unreadable or left out, and logged. When no part has
+ * anything to say — no versions of its own and nothing from the host —
+ * there is no briefing.
  */
 
 import { statSync } from "node:fs";
@@ -30,17 +35,20 @@ import {
 } from "../tools/host-knowledge.js";
 import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
 import type { StoredEntityShape } from "../vendor/svc-rpc/graph-memory/entity-shape.js";
-import { capDecisionReason, lineageTitle } from "./lineage.js";
+import { listEntities } from "../vendor/svc-rpc/graph-memory/tool-handlers.js";
+import { logger } from "../utils/logger.js";
+import { LINEAGE_ENTITY_TYPE, capDecisionReason, lineageTitle } from "./lineage.js";
 import { discoverProducedVersions } from "./lineage-reconcile.js";
-import { findLineageEntity } from "./lineage-store.js";
 import { VERSIONS_DIR } from "./discovery.js";
 
 /** Longest the whole briefing may take to gather. */
 export const BRIEFING_BUDGET_MS = 3_000;
 /** How many of the agent's own versions the briefing lists. */
 export const BRIEFING_LINEAGE_LIMIT = 8;
-/** How many lineage lookups one briefing may make. */
+/** How many of the agent's versions, most recently staged first, are matched to records. */
 export const BRIEFING_LOOKUP_LIMIT = 12;
+/** How many recent entities the one lineage listing reads. */
+export const BRIEFING_LISTING_LIMIT = 200;
 /** The refusal record is included whole up to this many characters. */
 export const BRIEFING_REFUSAL_RECORD_MAX_CHARS = 16_000;
 /** A need is quoted up to this many characters. */
@@ -54,6 +62,12 @@ export const LINEAGE_NONE = "No component versions of yours are recorded yet.";
 export const LINEAGE_UNREADABLE =
   "Your lineage could not be read just now; search graph memory for " +
   "component_version entities before proposing.";
+export const LINEAGE_LISTING_TIMED_OUT =
+  "Your lineage records could not be read in time; these are your versions " +
+  "on disk. Search graph memory for component_version entities before proposing.";
+export const LINEAGE_LISTING_FAILED =
+  "Your lineage records could not be read; these are your versions on disk. " +
+  "Search graph memory for component_version entities before proposing.";
 export const FAILURE_MODES_NONE = "Your keeper has not written any.";
 
 export interface VersionRef {
@@ -81,6 +95,10 @@ function isUnavailable(value: unknown): value is Unavailable {
     typeof value === "object" &&
     typeof (value as { unavailable?: unknown }).unavailable === "string"
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function str(value: unknown): string | undefined {
@@ -145,27 +163,60 @@ function mtimeOf(componentsDir: string | undefined, ref: VersionRef): number {
   }
 }
 
+type LineageSection = { text: string; hasVersions: boolean };
+
+type LineagePath =
+  | "discover_failed"
+  | "adapter_unavailable"
+  | "listing_failed"
+  | "listing_timed_out"
+  | "section_timed_out";
+
+function warnUnreadable(
+  path: LineagePath,
+  startedAt: number,
+  detail: { refs?: number; error?: unknown } = {},
+): void {
+  logger.warn(
+    {
+      path,
+      elapsedMs: Date.now() - startedAt,
+      refs: detail.refs,
+      ...(detail.error !== undefined ? { error: errorMessage(detail.error) } : {}),
+    },
+    "self-task briefing: lineage not read",
+  );
+}
+
+/** The newest record per title. */
+function recordsByTitle(entities: StoredEntityShape[]): Map<string, StoredEntityShape> {
+  const byTitle = new Map<string, StoredEntityShape>();
+  for (const entity of entities) {
+    const held = byTitle.get(entity.title);
+    if (!held || whenOf(entity).localeCompare(whenOf(held)) > 0) {
+      byTitle.set(entity.title, entity);
+    }
+  }
+  return byTitle;
+}
+
 async function lineageSection(
   opts: SelfTaskBriefingOptions,
   componentsDir: string | undefined,
-): Promise<{ text: string; hasVersions: boolean }> {
+  deadline: Promise<typeof TIMED_OUT>,
+  startedAt: number,
+): Promise<LineageSection> {
   let refs: VersionRef[];
   try {
     refs = opts.discover
       ? await opts.discover()
       : await discoverProducedVersions(componentsDir, opts.agentId);
-  } catch {
+  } catch (error) {
+    warnUnreadable("discover_failed", startedAt, { error });
     return { text: LINEAGE_UNREADABLE, hasVersions: false };
   }
   if (refs.length === 0) {
     return { text: LINEAGE_NONE, hasVersions: false };
-  }
-
-  let adapter: IGraphMemoryAdapter;
-  try {
-    adapter = (opts.getAdapter ?? getMemoryAdapter)();
-  } catch {
-    return { text: LINEAGE_UNREADABLE, hasVersions: false };
   }
 
   const candidates = refs
@@ -173,27 +224,49 @@ async function lineageSection(
     .sort((a, b) => b.mtime - a.mtime)
     .slice(0, BRIEFING_LOOKUP_LIMIT)
     .map((c) => c.ref);
+  const onDisk = (heading: string): LineageSection => ({
+    text: [heading, ...candidates.slice(0, BRIEFING_LINEAGE_LIMIT).map((ref) => lineageLine(ref, null))].join("\n"),
+    hasVersions: true,
+  });
 
-  const looked = await Promise.all(
-    candidates.map(async (ref) => {
-      try {
-        const entity = await findLineageEntity(adapter, lineageTitle(ref.name, ref.version));
-        return { ref, entity, ok: true as const };
-      } catch {
-        return { ref, entity: null, ok: false as const };
-      }
-    }),
-  );
-  if (looked.every((l) => !l.ok)) {
+  let adapter: IGraphMemoryAdapter;
+  try {
+    adapter = (opts.getAdapter ?? getMemoryAdapter)();
+  } catch (error) {
+    warnUnreadable("adapter_unavailable", startedAt, { refs: candidates.length, error });
     return { text: LINEAGE_UNREADABLE, hasVersions: false };
   }
 
-  const lines = looked
-    .filter((l) => l.ok)
+  // One listing of the lineage entities this agent produced, matched by
+  // title, rather than a search per version: a title search is easily
+  // shadowed by a summary entity, and a lookup per version does not fit the
+  // budget.
+  let listed: StoredEntityShape[] | typeof TIMED_OUT;
+  try {
+    listed = await Promise.race([
+      listEntities(adapter, {
+        entity_type: LINEAGE_ENTITY_TYPE,
+        tags: [`produced-by:${opts.agentId}`],
+        limit: BRIEFING_LISTING_LIMIT,
+      }).then((result) => result.entities),
+      deadline,
+    ]);
+  } catch (error) {
+    warnUnreadable("listing_failed", startedAt, { refs: candidates.length, error });
+    return onDisk(LINEAGE_LISTING_FAILED);
+  }
+  if (listed === TIMED_OUT) {
+    warnUnreadable("listing_timed_out", startedAt, { refs: candidates.length });
+    return onDisk(LINEAGE_LISTING_TIMED_OUT);
+  }
+
+  const byTitle = recordsByTitle(listed);
+  const lines = candidates
+    .map((ref, order) => ({ ref, order, entity: byTitle.get(lineageTitle(ref.name, ref.version)) ?? null }))
     .sort((a, b) => {
       const wa = a.entity ? whenOf(a.entity) : "";
       const wb = b.entity ? whenOf(b.entity) : "";
-      return wb.localeCompare(wa);
+      return wb.localeCompare(wa) || a.order - b.order;
     })
     .slice(0, BRIEFING_LINEAGE_LIMIT)
     .map((l) => lineageLine(l.ref, l.entity));
@@ -248,17 +321,30 @@ export async function buildSelfTaskBriefing(opts: SelfTaskBriefingOptions): Prom
     }
   }
 
+  const startedAt = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
     timer = setTimeout(() => resolve(TIMED_OUT), opts.budgetMs ?? BRIEFING_BUDGET_MS);
     timer.unref?.();
   });
 
+  // The lineage section races its own listing against the deadline and
+  // falls back to the versions on disk. Its backstop, which only catches a
+  // version scan that never finishes, fires one macrotask later so that
+  // fallback always settles first.
+  const backstop = deadline.then(
+    () => new Promise<typeof TIMED_OUT>((resolve) => setImmediate(() => resolve(TIMED_OUT))),
+  );
+
   const unreadable = { text: LINEAGE_UNREADABLE, hasVersions: false };
   const missing: Unavailable = { unavailable: "not read in time" };
   try {
     const [lineage, failureModes, refusalRecord] = await Promise.all([
-      within(lineageSection(opts, componentsDir), deadline, unreadable),
+      within(lineageSection(opts, componentsDir, deadline, startedAt), backstop, TIMED_OUT).then((section) => {
+        if (section !== TIMED_OUT) return section;
+        warnUnreadable("section_timed_out", startedAt);
+        return unreadable;
+      }),
       within((opts.readFailureModes ?? (() => readFailureModes()))(), deadline, missing),
       within((opts.readRefusalRecord ?? (() => readRefusalRecord()))(), deadline, missing),
     ]);
