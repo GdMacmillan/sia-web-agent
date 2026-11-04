@@ -9,6 +9,8 @@ import {
   BRIEFING_LINEAGE_LIMIT,
   BRIEFING_REFUSAL_RECORD_MAX_CHARS,
   FAILURE_MODES_NONE,
+  LINEAGE_LISTING_FAILED,
+  LINEAGE_LISTING_TIMED_OUT,
   LINEAGE_NONE,
   LINEAGE_UNREADABLE,
   buildSelfTaskBriefing,
@@ -16,10 +18,13 @@ import {
 } from "../../../src/components/self-task-briefing.js";
 import type { IGraphMemoryAdapter } from "../../../src/vendor/svc-rpc/graph-memory/adapter-interface.js";
 import type { StoredEntityShape } from "../../../src/vendor/svc-rpc/graph-memory/entity-shape.js";
+import { logger } from "../../../src/utils/logger.js";
 
 type Meta = Record<string, unknown>;
 
-function adapterWith(entities: Array<{ title: string; meta: Meta }>): IGraphMemoryAdapter {
+type Stored = { title: string; meta: Meta; tags?: string[]; updatedAt?: string };
+
+function adapterWith(entities: Stored[]): IGraphMemoryAdapter {
   const nodes = entities.map((e, i) => ({
     id: `n${i}`,
     properties: {
@@ -27,9 +32,9 @@ function adapterWith(entities: Array<{ title: string; meta: Meta }>): IGraphMemo
       metadata: {
         entity_type: "component_version",
         title: e.title,
-        tags: ["component_version"],
+        tags: e.tags ?? ["component_version", "produced-by:agent-1"],
         status: "completed",
-        updated_at: "2026-01-01T00:00:00Z",
+        updated_at: e.updatedAt ?? "2026-01-01T00:00:00Z",
         custom_metadata: e.meta,
       },
     },
@@ -38,6 +43,14 @@ function adapterWith(entities: Array<{ title: string; meta: Meta }>): IGraphMemo
     workspaceId: "ws",
     searchEntities: jest.fn(async () => ({ results: nodes, level_used: "raw", levels_tried: ["raw"] })),
     graphQuery: jest.fn(async () => ({ nodes, edges: [] })),
+  } as unknown as IGraphMemoryAdapter;
+}
+
+function failingAdapter(graphQuery: () => Promise<never>): IGraphMemoryAdapter {
+  return {
+    workspaceId: "ws",
+    searchEntities: jest.fn(async () => ({ results: [], level_used: "raw", levels_tried: ["raw"] })),
+    graphQuery: jest.fn(graphQuery),
   } as unknown as IGraphMemoryAdapter;
 }
 
@@ -211,5 +224,114 @@ describe("buildSelfTaskBriefing", () => {
     });
     expect(briefing).toContain(LINEAGE_UNREADABLE);
     expect(briefing).toContain("## Known failure modes — written by your keeper\nx");
+  });
+  it("reads the lineage in one listing, with no search per version", async () => {
+    const refs = Array.from({ length: 12 }, (_, i) => ({ name: "c", version: `0.0.${i}` }));
+    const adapter = adapterWith(refs.map((r) => ({ title: `c@${r.version}`, meta: { outcome: "converged" } })));
+    await buildSelfTaskBriefing({ agentId: "agent-1", discover: async () => refs, getAdapter: () => adapter, ...noHost });
+    expect(adapter.graphQuery).toHaveBeenCalledTimes(1);
+    expect(adapter.searchEntities).not.toHaveBeenCalled();
+  });
+
+  it("matches only records this agent produced, and marks a version with none", async () => {
+    const adapter = adapterWith([
+      { title: "c@1.0.0", meta: { outcome: "converged", decision_reason: "mine" } },
+      {
+        title: "c@2.0.0",
+        meta: { outcome: "converged", decision_reason: "someone else's" },
+        tags: ["component_version", "produced-by:agent-2"],
+      },
+    ]);
+    const briefing = await buildSelfTaskBriefing({
+      agentId: "agent-1",
+      discover: async () => [
+        { name: "c", version: "1.0.0" },
+        { name: "c", version: "2.0.0" },
+      ],
+      getAdapter: () => adapter,
+      ...noHost,
+    });
+    expect(briefing).toContain('- c@1.0.0 — converged. Keeper\'s reason: "mine".');
+    expect(briefing).toContain("- c@2.0.0 — no lineage record.");
+    expect(briefing).not.toContain("someone else's");
+  });
+
+  it("uses the newest record when two share a title", async () => {
+    const adapter = adapterWith([
+      { title: "c@1.0.0", meta: { outcome: "candidate" }, updatedAt: "2026-10-01T00:00:00Z" },
+      {
+        title: "c@1.0.0",
+        meta: { outcome: "converged", settled_at: "2026-10-02T00:00:00Z" },
+        updatedAt: "2026-10-02T00:00:00Z",
+      },
+    ]);
+    const briefing = await buildSelfTaskBriefing({
+      agentId: "agent-1",
+      discover: async () => [{ name: "c", version: "1.0.0" }],
+      getAdapter: () => adapter,
+      ...noHost,
+    });
+    expect(briefing).toContain("- c@1.0.0 — converged 2026-10-02.");
+  });
+
+  it("keeps the versions on disk when the listing outlasts the budget", async () => {
+    const warn = jest.spyOn(logger, "warn").mockImplementation(() => undefined);
+    try {
+      const briefing = await buildSelfTaskBriefing({
+        agentId: "agent-1",
+        discover: async () => [{ name: "c", version: "1.0.0" }],
+        getAdapter: () => failingAdapter(() => new Promise<never>(() => {})),
+        readFailureModes: async () => ({ body: "x", updatedAt: null }),
+        readRefusalRecord: async () => ({ unavailable: "down" }),
+        budgetMs: 100,
+      });
+      expect(briefing).toContain(`${LINEAGE_LISTING_TIMED_OUT}\n- c@1.0.0 — no lineage record.`);
+      expect(briefing).not.toContain(LINEAGE_UNREADABLE);
+      expect(briefing).toContain("## Known failure modes — written by your keeper\nx");
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "listing_timed_out", refs: 1 }),
+        "self-task briefing: lineage not read",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps the versions on disk when the listing fails", async () => {
+    const warn = jest.spyOn(logger, "warn").mockImplementation(() => undefined);
+    try {
+      const briefing = await buildSelfTaskBriefing({
+        agentId: "agent-1",
+        discover: async () => [{ name: "c", version: "1.0.0" }],
+        getAdapter: () => failingAdapter(async () => Promise.reject(new Error("broker down"))),
+        ...noHost,
+      });
+      expect(briefing).toContain(`${LINEAGE_LISTING_FAILED}\n- c@1.0.0 — no lineage record.`);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "listing_failed", error: "broker down" }),
+        "self-task briefing: lineage not read",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("logs a version scan that fails", async () => {
+    const warn = jest.spyOn(logger, "warn").mockImplementation(() => undefined);
+    try {
+      await buildSelfTaskBriefing({
+        agentId: "agent-1",
+        discover: async () => {
+          throw new Error("disk");
+        },
+        ...noHost,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "discover_failed", error: "disk" }),
+        "self-task briefing: lineage not read",
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
