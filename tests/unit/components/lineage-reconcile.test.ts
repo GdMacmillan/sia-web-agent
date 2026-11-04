@@ -413,7 +413,7 @@ describe("abandoned report", () => {
       fetchImpl: host.fetchImpl,
       getAdapter: () => store.adapter,
       daemonUrl: "http://127.0.0.1:7700/",
-      daemonToken: "bridge-tok",
+      daemonToken: "tok",
     });
 
     const boot = reconciler.onBoot();
@@ -425,7 +425,7 @@ describe("abandoned report", () => {
     const [post] = host.posts;
     expect(post?.url).toBe("http://127.0.0.1:7700/chat/component-outcome");
     expect(post?.init?.method).toBe("POST");
-    expect((post?.init?.headers as Record<string, string>).Authorization).toBe("Bearer bridge-tok");
+    expect((post?.init?.headers as Record<string, string>).Authorization).toBe("Bearer tok");
     expect(JSON.parse(String(post?.init?.body))).toEqual({
       agentId: "agent-1",
       kind: "abandoned",
@@ -439,9 +439,9 @@ describe("abandoned report", () => {
     });
   });
 
-  it("does not report a displaced version — it was announced, so the host already has it", async () => {
+  it("does not report a displaced version — it was already announced", async () => {
     const host = routedHost(status({ active: "0.2.1", candidate: { version: "0.2.4" } }), 202);
-    const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl, daemonToken: "bridge-tok" });
+    const { clock, store, reconciler } = build({ fetchImpl: host.fetchImpl, daemonToken: "tok" });
 
     const boot = reconciler.onBoot();
     await clock.advance(0);
@@ -451,7 +451,7 @@ describe("abandoned report", () => {
     expect(host.posts).toEqual([]);
   });
 
-  it("does not report without a bridge token", async () => {
+  it("does not report without a daemon token", async () => {
     const host = routedHost(status({ active: "0.2.1" }), 202);
     const store = neverAnnounced();
     const { clock, reconciler } = build({
@@ -474,7 +474,7 @@ describe("abandoned report", () => {
     const { clock, reconciler } = build({
       fetchImpl: host.fetchImpl,
       getAdapter: () => store.adapter,
-      daemonToken: "bridge-tok",
+      daemonToken: "tok",
     });
     // Discovery (a search) still sees a candidate; by the time the poll
     // reads the entity to settle it, a push has already settled it.
@@ -505,7 +505,7 @@ describe("abandoned report", () => {
     const { clock, reconciler } = build({
       fetchImpl: host.fetchImpl,
       getAdapter: () => store.adapter,
-      daemonToken: "bridge-tok",
+      daemonToken: "tok",
     });
 
     const boot = reconciler.onBoot();

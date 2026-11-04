@@ -320,8 +320,8 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
         );
         continue;
       }
-      // Only a version nobody ever saw is reported: a displaced one was
-      // announced, so the host already holds a record of it.
+      // Only a never-announced version is reported: a displaced one was
+      // already announced.
       if (result === "settled" && decision.outcome === "abandoned" && !tracked.announced) {
         await reportAbandoned(a, tracked, decision.reason);
       }
@@ -329,11 +329,11 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
   };
 
   /**
-   * Tell the host a version was settled without ever being announced, so
-   * it can keep a record of it. Best effort: the host may not implement
-   * the endpoint (404) or may refuse it, and nothing is retried — a lost
-   * report leaves the host without that record and changes nothing on
-   * the agent's side. Never throws.
+   * Report a version that was settled without ever being announced
+   * (`docs/HOST_CONTRACT.md` §3.4). Best effort: the host may not
+   * implement the endpoint (404) or may refuse it, and nothing is
+   * retried; the outcome changes nothing on the agent's side. Never
+   * throws.
    */
   const reportAbandoned = async (
     a: IGraphMemoryAdapter,
@@ -359,7 +359,7 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
       if (res.ok) {
         logger.info(where, "component lineage: abandoned version reported to the host");
       } else if (res.status === 404) {
-        logger.debug({ ...where, status: res.status }, "component lineage: the host keeps no record of abandoned versions");
+        logger.debug({ ...where, status: res.status }, "component lineage: the host does not accept abandoned reports");
       } else {
         logger.warn({ ...where, status: res.status }, "component lineage: the host refused the abandoned report");
       }

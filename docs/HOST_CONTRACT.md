@@ -358,8 +358,8 @@ the agent's cap is not a guarantee. Code versions are sent without it.
 **Abandoned version report** — an endpoint the host *may* implement. When
 a boot pass settles a version `abandoned` because it was **never
 announced** (`COMPONENTS.md` §6 — the self-task that staged it ended
-before it announced), the agent tells the host once, since no candidate
-event ever did:
+before it announced), the agent reports it once, since no announcement
+ever named it:
 
 ```
 POST {SIA_DAEMON_URL}/chat/component-outcome
@@ -380,14 +380,12 @@ Content-Type: application/json
 ```
 
 `kind` is always `abandoned`. A version displaced by a newer candidate is
-**not** reported: it was announced, so the host already knows it. The
+**not** reported: it was already announced. The
 report is sent only on the boot pass that actually settled the version,
 only with both `SIA_DAEMON_URL` and `SIA_DAEMON_TOKEN` set, and is never
 retried — a `404` (a host without the endpoint), any other refusal, or a
 network failure is logged and dropped, and the version stays settled on
-the agent's side either way. The host should refuse a version it does not
-hold on disk, or one that is its current candidate, active or previous
-version for the component; the agent does not depend on the answer.
+the agent's side either way. The agent does not depend on the answer.
 
 ### 3.5 Component status (agent → host, optional)
 
