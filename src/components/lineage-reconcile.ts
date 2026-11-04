@@ -22,6 +22,7 @@ import { getConfig } from "../config/index.js";
 import { getMemoryAdapter } from "../tools/memory-adapter.js";
 import { logger } from "../utils/logger.js";
 import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
+import { retrieveEntity } from "../vendor/svc-rpc/graph-memory/tool-handlers.js";
 import { listComponentVersions } from "./authoring.js";
 import { MANIFEST_FILE, VERSIONS_DIR } from "./discovery.js";
 import { readHostComponents } from "./lineage-host.js";
@@ -115,6 +116,42 @@ function key(name: string, version: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+/**
+ * The `POST /chat/component-outcome` body for a version settled
+ * `abandoned` because it was never announced, built from its lineage
+ * entity's metadata (see `docs/HOST_CONTRACT.md` §3.4).
+ */
+export function abandonedOutcomeBody(
+  agentId: string,
+  version: PendingVersion,
+  metadata: Record<string, unknown>,
+  reason: string | undefined,
+  timestamp: string,
+): Record<string, string> {
+  const provenance =
+    metadata.provenance && typeof metadata.provenance === "object"
+      ? (metadata.provenance as Record<string, unknown>)
+      : {};
+  const parentVersion = nonEmpty(provenance.parent);
+  const need = nonEmpty(metadata.need);
+  const threadId = nonEmpty(metadata.thread_id);
+  return {
+    agentId,
+    kind: "abandoned",
+    name: version.name,
+    version: version.version,
+    ...(parentVersion ? { parentVersion } : {}),
+    ...(need ? { need } : {}),
+    ...(threadId ? { threadId } : {}),
+    ...(reason ? { reason } : {}),
+    timestamp,
+  };
 }
 
 /**
@@ -273,14 +310,61 @@ export function createLineageReconciler(opts: LineageReconcilerOptions = {}): Li
       if (decision.action !== "settle") {
         continue;
       }
+      let result: "settled" | "already_settled";
       try {
-        await settle(a, tracked, decision);
+        result = await settle(a, tracked, decision);
       } catch (error) {
         logger.warn(
           { component: tracked.name, version: tracked.version, error: errorMessage(error) },
           "component lineage: settle failed",
         );
+        continue;
       }
+      // Only a version nobody ever saw is reported: a displaced one was
+      // announced, so the host already holds a record of it.
+      if (result === "settled" && decision.outcome === "abandoned" && !tracked.announced) {
+        await reportAbandoned(a, tracked, decision.reason);
+      }
+    }
+  };
+
+  /**
+   * Tell the host a version was settled without ever being announced, so
+   * it can keep a record of it. Best effort: the host may not implement
+   * the endpoint (404) or may refuse it, and nothing is retried — a lost
+   * report leaves the host without that record and changes nothing on
+   * the agent's side. Never throws.
+   */
+  const reportAbandoned = async (
+    a: IGraphMemoryAdapter,
+    tracked: TrackedVersion,
+    reason: string | undefined,
+  ): Promise<void> => {
+    const { agentId, daemonUrl, daemonToken } = runtime();
+    const base = (daemonUrl ?? "").trim().replace(/\/+$/, "");
+    const token = (daemonToken ?? "").trim();
+    if (!base || !token || !agentId) {
+      return;
+    }
+    const where = { component: tracked.name, version: tracked.version };
+    try {
+      const { entity } = await retrieveEntity(a, { entity_id: tracked.entityId });
+      const body = abandonedOutcomeBody(agentId, tracked, entity.metadata, reason, new Date(now()).toISOString());
+      const res = await fetchImpl(`${base}/chat/component-outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+      if (res.ok) {
+        logger.info(where, "component lineage: abandoned version reported to the host");
+      } else if (res.status === 404) {
+        logger.debug({ ...where, status: res.status }, "component lineage: the host keeps no record of abandoned versions");
+      } else {
+        logger.warn({ ...where, status: res.status }, "component lineage: the host refused the abandoned report");
+      }
+    } catch (error) {
+      logger.warn({ ...where, error: errorMessage(error) }, "component lineage: reporting an abandoned version failed");
     }
   };
 

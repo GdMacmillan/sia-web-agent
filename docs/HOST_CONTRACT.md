@@ -283,7 +283,8 @@ failures never crash a run. The adapter has no retry.
 *Authoring a version*) uses the same base URL and bearer as §3. Both calls
 are best-effort: any failure is reported in the tool result, never
 thrown, and with `SIA_DAEMON_URL` or `SIA_DAEMON_TOKEN` unset neither is
-attempted.
+attempted. The lineage reconciler's abandoned report (below) follows the
+same rules, logging instead of reporting in a tool result.
 
 **Room message** — an endpoint the host implements. Sent **only when
 `SIA_ANNOUNCE_TO_CHAT` is truthy** (`1`, `true`, `yes`, `on`) **and a room
@@ -353,6 +354,40 @@ boundary and ending `… diff truncated: <n> more lines` when cut. It is for
 the person deciding the version; a host that does not show it may ignore
 the field, and a host that stores it should keep its own size cap, since
 the agent's cap is not a guarantee. Code versions are sent without it.
+
+**Abandoned version report** — an endpoint the host *may* implement. When
+a boot pass settles a version `abandoned` because it was **never
+announced** (`COMPONENTS.md` §6 — the self-task that staged it ended
+before it announced), the agent tells the host once, since no candidate
+event ever did:
+
+```
+POST {SIA_DAEMON_URL}/chat/component-outcome
+Authorization: Bearer {SIA_DAEMON_TOKEN}
+Content-Type: application/json
+
+{
+  "agentId": "<SIA_AGENT_ID>",
+  "kind": "abandoned",
+  "name": "execute-code",
+  "version": "0.1.2",
+  "parentVersion": "execute-code@0.1.1",   // optional
+  "need": "<lineage.need>",                 // optional
+  "threadId": "<thread id>",                // optional, the self-task thread
+  "reason": "never announced",              // optional
+  "timestamp": "<ISO 8601>"
+}
+```
+
+`kind` is always `abandoned`. A version displaced by a newer candidate is
+**not** reported: it was announced, so the host already knows it. The
+report is sent only on the boot pass that actually settled the version,
+only with both `SIA_DAEMON_URL` and `SIA_DAEMON_TOKEN` set, and is never
+retried — a `404` (a host without the endpoint), any other refusal, or a
+network failure is logged and dropped, and the version stays settled on
+the agent's side either way. The host should refuse a version it does not
+hold on disk, or one that is its current candidate, active or previous
+version for the component; the agent does not depend on the answer.
 
 ### 3.5 Component status (agent → host, optional)
 
