@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createComponentTools, buildAnnouncementText } from "../../../src/tools/component-tools.js";
+import { COMPONENT_WORK_IN_SELF_TASK } from "../../../src/tools/self-task-context.js";
 import { createLineageReconciler } from "../../../src/components/lineage-reconcile.js";
 import type { IGraphMemoryAdapter } from "../../../src/vendor/svc-rpc/graph-memory/adapter-interface.js";
 import {
@@ -523,6 +524,66 @@ describe("component tools", () => {
     });
   });
 
+  describe("building outside a self-task", () => {
+    const hostTools = (host404OrSelfTask: { thread?: number; selfTask?: boolean }) => {
+      const { fetchImpl, captured } = fakeHost(host404OrSelfTask);
+      const tools = createComponentTools({
+        projectRoot: project,
+        componentsDir: host,
+        agentId: "agent-1",
+        env: {},
+        serverUrl: "http://127.0.0.1:2024",
+        fetchImpl,
+      });
+      return { tools, captured };
+    };
+    const create = (tools: ReturnType<typeof createComponentTools>) =>
+      byName(tools, "create_component").invoke(
+        { name: "parse-time-expression", intent: "Turn phrases into timestamps.", need: "4 days from now" },
+        config,
+      );
+    const prepareHello = (tools: ReturnType<typeof createComponentTools>) =>
+      byName(tools, "prepare_component_version").invoke({ name: "hello", need: "say it louder" }, config);
+
+    it("create_component refuses in a thread known not to be a self-task, with the shared sentence", async () => {
+      const { tools, captured } = hostTools({ selfTask: false });
+      const text = await create(tools);
+      expect(text).toBe(`Cannot create a component here: ${COMPONENT_WORK_IN_SELF_TASK}`);
+      expect(existsSync(path.join(host, "parse-time-expression"))).toBe(false);
+      expect(captured[0]).toMatchObject({
+        method: "GET",
+        url: `http://127.0.0.1:2024/threads/${THREAD}`,
+        headers: { "X-SIA-Agent-Id": "agent-1" },
+      });
+    });
+
+    it("prepare_component_version refuses in a thread known not to be a self-task", async () => {
+      const { tools } = hostTools({ selfTask: false });
+      const text = await prepareHello(tools);
+      expect(text).toBe(`Cannot prepare a version here: ${COMPONENT_WORK_IN_SELF_TASK}`);
+      expect(existsSync(path.join(host, "hello"))).toBe(false);
+    });
+
+    it("both proceed in a self-task thread", async () => {
+      const { tools } = hostTools({ selfTask: true });
+      expect(await create(tools)).toContain("Created parse-time-expression@0.1.0");
+      expect(await prepareHello(tools)).toContain("Prepared hello@0.1.1");
+    });
+
+    it("both proceed when the thread cannot be read — an unknown thread is not a refusal", async () => {
+      const { tools } = hostTools({ thread: 404, selfTask: false });
+      expect(await create(tools)).toContain("Created parse-time-expression@0.1.0");
+      expect(await prepareHello(tools)).toContain("Prepared hello@0.1.1");
+    });
+
+    it("both proceed with no thread id, reading nothing", async () => {
+      const { tools, captured } = hostTools({ selfTask: false });
+      const text = await byName(tools, "prepare_component_version").invoke({ name: "hello", need: "louder" });
+      expect(text).toContain("Prepared hello@0.1.1");
+      expect(captured.some((c) => c.url.includes("/threads/"))).toBe(false);
+    });
+  });
+
   describe("announce_component_version", () => {
     const prepare = async (tools: ReturnType<typeof createComponentTools>) => {
       const text = await byName(tools, "prepare_component_version").invoke({
@@ -752,8 +813,8 @@ describe("component tools", () => {
         config,
       );
       expect(text).toBe(
-        "Cannot announce: this is not the self-task thread that built the candidate. " +
-          "announce_component_version is called from the self-task thread that produced " +
+        `Cannot announce here: ${COMPONENT_WORK_IN_SELF_TASK} ` +
+          "announce_component_version is called from the self-task thread that built " +
           "the version (see the iterate-component skill), so a version is announced by " +
           "the work that made it, not by whatever thread happens to call the tool.",
       );
@@ -778,7 +839,7 @@ describe("component tools", () => {
         { name: "hello", version: "0.1.1", summary: "Three rounds, still failing.", outcome: "failed" },
         config,
       );
-      expect(text).toContain("Cannot announce: this is not the self-task thread");
+      expect(text).toContain(`Cannot announce here: ${COMPONENT_WORK_IN_SELF_TASK}`);
       expect(captured.some((c) => c.url.endsWith("/chat/component-version"))).toBe(false);
       expect(captured.some((c) => c.url.endsWith("/chat/publish"))).toBe(false);
     });

@@ -66,7 +66,7 @@ import {
 import { allowPathRoot, getProjectRoot } from "../utils/path-utils.js";
 import type { IGraphMemoryAdapter } from "../vendor/svc-rpc/graph-memory/adapter-interface.js";
 import { getMemoryAdapter } from "./memory-adapter.js";
-import { resolveOwnServerUrl } from "./self-task-tool.js";
+import { COMPONENT_WORK_IN_SELF_TASK, readThreadMetadata } from "./self-task-context.js";
 
 /** Longest any single call to the host may take. */
 export const DEFAULT_ANNOUNCE_TIMEOUT_MS = 10_000;
@@ -292,6 +292,33 @@ export function createComponentTools(
   const memory = (): IGraphMemoryAdapter => (opts.adapter ?? getMemoryAdapter)();
   const reconciler = (): LineageReconciler => opts.reconciler ?? getLineageReconciler();
   const nowIso = (): string => (opts.now ?? (() => new Date()))().toISOString();
+
+  /** The current thread's metadata, or `undefined` when it is unknown. */
+  const threadMetadataOf = (config?: RunnableConfig): Promise<Record<string, unknown> | undefined> =>
+    readThreadMetadata({
+      threadId: threadIdFrom(config),
+      agentId: agentId(),
+      serverUrl: opts.serverUrl,
+      env,
+      argv: opts.argv,
+      fetchImpl: opts.fetchImpl,
+      timeoutMs,
+    });
+
+  /**
+   * The refusal for building outside a self-task: the same sentence the
+   * prompt, the skill and the deferred-tools line use. Only a thread known
+   * not to be a self-task is refused; unknown metadata proceeds.
+   */
+  const notInSelfTask = async (
+    verb: string,
+    config?: RunnableConfig,
+  ): Promise<string | undefined> => {
+    const metadata = await threadMetadataOf(config);
+    return metadata !== undefined && metadata.self_task !== true
+      ? `Cannot ${verb} here: ${COMPONENT_WORK_IN_SELF_TASK}`
+      : undefined;
+  };
 
   /**
    * The upstreams a component may call through `deps.host`, read live from
@@ -707,6 +734,10 @@ export function createComponentTools(
       // Names the model already knows — the middleware's tools and the
       // pool assembled for this agent, components included — would collide
       // at the model boundary; the component's own future tool must not.
+      const refused = await notInSelfTask("create a component", config);
+      if (refused !== undefined) {
+        return refused;
+      }
       const createKind = coerceCreateKind(kind);
       if (createKind === null) {
         return `Cannot create a component: kind must be "tools" or "skill" (got ${JSON.stringify(kind)}).`;
@@ -806,6 +837,10 @@ export function createComponentTools(
       _runManager?: unknown,
       config?: RunnableConfig,
     ): Promise<string> => {
+      const refused = await notInSelfTask("prepare a version", config);
+      if (refused !== undefined) {
+        return refused;
+      }
       const coercedBump = coerceBump(bump);
       if (coercedBump === null) {
         return `Cannot prepare a version: bump must be "patch", "minor" or "major" (got ${JSON.stringify(bump)}).`;
@@ -998,35 +1033,15 @@ export function createComponentTools(
       // supposed to be doing the announcing. A lookup failure (no thread
       // id, a 404, a network error) is not a refusal: both checks below
       // simply proceed as they always have when the metadata is unknown.
-      let inheritedChannel: string | undefined;
-      let threadMetadata: Record<string, unknown> | undefined;
-      if (threadId !== undefined) {
-        const serverUrl = (
-          opts.serverUrl ?? resolveOwnServerUrl({ env, argv: opts.argv })
-        ).replace(/\/+$/, "");
-        try {
-          const res = await fetchImpl(`${serverUrl}/threads/${encodeURIComponent(threadId)}`, {
-            method: "GET",
-            headers: { "X-SIA-Agent-Id": id },
-            signal: AbortSignal.timeout(timeoutMs),
-          });
-          if (res.ok) {
-            const thread = (await res.json()) as { metadata?: Record<string, unknown> };
-            threadMetadata = thread?.metadata;
-            const value = threadMetadata?.channel;
-            if (typeof value === "string" && value) {
-              inheritedChannel = value;
-            }
-          }
-        } catch (_error) {
-          // No room known, no self-task check possible: proceed as before.
-        }
-      }
+      const threadMetadata = await threadMetadataOf(config);
+      const channelValue = threadMetadata?.channel;
+      const inheritedChannel =
+        typeof channelValue === "string" && channelValue ? channelValue : undefined;
 
       if (threadMetadata !== undefined && threadMetadata.self_task !== true) {
         return (
-          "Cannot announce: this is not the self-task thread that built the candidate. " +
-          "announce_component_version is called from the self-task thread that produced " +
+          `Cannot announce here: ${COMPONENT_WORK_IN_SELF_TASK} ` +
+          "announce_component_version is called from the self-task thread that built " +
           "the version (see the iterate-component skill), so a version is announced by " +
           "the work that made it, not by whatever thread happens to call the tool."
         );
