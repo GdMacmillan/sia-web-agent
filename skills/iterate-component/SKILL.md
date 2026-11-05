@@ -4,7 +4,7 @@ description: Write, check and announce a new version of one of your own componen
 license: MIT
 metadata:
   author: self-improving-agent
-  version: "1.7.0"
+  version: "1.8.0"
 ---
 
 # Iterate a component
@@ -63,10 +63,18 @@ memory being unreachable never stops an iteration.
 
 ## Working principles
 
-0. **You are already inside the self-task.** A thread whose first message says it is a self-task
-   is the one `start_self_task` created; calling it again here is refused. The person confirmed
-   when this thread was started. Do not ask whether to proceed, and do not ask them anything else
-   here — they are not in this thread. Proceed; your questions, if any, go into the announcement.
+0. **Check that this thread is the self-task.** If its first message says it is a self-task, you
+   are already inside it: it is the one `start_self_task` created, and calling that again here is
+   refused. The person confirmed when this thread was started. Do not ask whether to proceed, and
+   do not ask them anything else here — they are not in this thread. Proceed; your questions, if
+   any, go into the announcement.
+
+   If it does not, this is the conversation where the need was raised, and nothing below happens
+   here. Building or changing one of your own components (a tool, skill or prompt) happens in a
+   self-task, never in the conversation where the need was raised: confirm the need once (an
+   instruction is its own confirmation), then call `start_self_task` with skill
+   `"iterate-component"` and the need in the person's words, and stop. The component-building tools
+   are not available in this conversation.
 1. **Name the component from the need.** Tool names and component names differ (`execute_code` is
    the tool; `execute-code` is the component). `describe_component` shows the manifest `intent`,
    the current version, which root wins and the paths — read it before deciding what to change.
