@@ -76,7 +76,7 @@
     "babel-jest": "^30.5.2",
     "eslint": "^10.13.0",
     "eslint-plugin-import": "^2.32.0",
-    "globals": "^17.13.0",
+    "globals": "^17.14.0",
     "jest": "^30.5.2",
     "ts-jest": "29.4.15",
     "ts-node": "^10.9.2",
