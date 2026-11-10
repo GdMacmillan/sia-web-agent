@@ -156,6 +156,41 @@ describe("createUsageEventsMiddleware", () => {
     expect(body.model).toBe("m-x");
   });
 
+  it("forwards cacheWriteTokens from the raw OpenRouter usage", async () => {
+    const httpPost = jest.fn<any>().mockResolvedValue(undefined);
+    const mw = createUsageEventsMiddleware({ ...baseOptions, httpPost });
+
+    const response = makeResponse({
+      usageMetadata: { input_tokens: 100, output_tokens: 5, total_tokens: 105 },
+      responseMetadata: {
+        usage: { prompt_tokens_details: { cache_write_tokens: 90 } },
+      },
+    });
+    await invokeWrap(mw, makeRequest(), response);
+
+    const [, body] = httpPost.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(body.cacheWriteTokens).toBe(90);
+  });
+
+  it("omits cacheWriteTokens when the response does not report it", async () => {
+    const httpPost = jest.fn<any>().mockResolvedValue(undefined);
+    const mw = createUsageEventsMiddleware({ ...baseOptions, httpPost });
+
+    const response = makeResponse({
+      usageMetadata: { input_tokens: 100, output_tokens: 5, total_tokens: 105 },
+    });
+    await invokeWrap(mw, makeRequest(), response);
+
+    const [, body] = httpPost.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect("cacheWriteTokens" in body).toBe(false);
+  });
+
   it("swallows POST errors and returns the response", async () => {
     const httpPost = jest
       .fn<any>()
