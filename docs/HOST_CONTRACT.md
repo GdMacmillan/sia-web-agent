@@ -179,6 +179,7 @@ Content-Type: application/json
   "threadId":    "<thread_id from runtime.configurable, optional>",
   "runId":       "<UUID generated per LLM call, optional>",
   "cachedTokens": <int, optional>,
+  "cacheWriteTokens": <int, optional>,
   "providerMetadata": { "generationId": "...", "model": "..." }
 }
 ```
@@ -195,6 +196,13 @@ Content-Type: application/json
 - `runId` — UUIDv4 generated per LLM call. Lets the host dedupe.
 - `cachedTokens` — included only when the provider reported cache reads.
   Omitting the field is distinct from sending `0`.
+- `cacheWriteTokens` — prompt-cache write tokens, included only when the
+  provider reported them (OpenRouter:
+  `usage.prompt_tokens_details.cache_write_tokens`). `0` means "reported,
+  none written"; an omitted field means "not reported", and a host should
+  keep the two apart. Like `cachedTokens`, these are counted inside
+  `inputTokens` as the provider reports it, so a host pricing them at their
+  own rate carves them out of the prompt count rather than adding them.
 - `providerMetadata` — provider-specific extras (OpenRouter generation
   ID, resolved model, etc.). The host may persist or discard.
 

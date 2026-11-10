@@ -85,6 +85,8 @@ export interface UsageEnvelopeParams {
   inputTokens: number;
   outputTokens: number;
   cachedTokens?: number;
+  /** Prompt-cache write tokens. Omitted = not reported; 0 = none written. */
+  cacheWriteTokens?: number;
   threadId?: string;
   providerMetadata?: Record<string, unknown>;
 }
@@ -117,6 +119,8 @@ export async function emitUsageEnvelope(
     if (params.threadId) body.threadId = params.threadId;
     if (params.cachedTokens !== undefined)
       body.cachedTokens = params.cachedTokens;
+    if (params.cacheWriteTokens !== undefined)
+      body.cacheWriteTokens = params.cacheWriteTokens;
     if (
       params.providerMetadata &&
       Object.keys(params.providerMetadata).length > 0
@@ -141,6 +145,65 @@ export async function emitUsageEnvelope(
   }
 }
 
+/** A token count is a finite non-negative integer; anything else is unreported. */
+function asTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+/** `prompt_tokens_details.cache_write_tokens` from a raw provider usage object. */
+function rawCacheWrite(usage: unknown): number | undefined {
+  const details = (
+    usage as { prompt_tokens_details?: { cache_write_tokens?: unknown } }
+  )?.prompt_tokens_details;
+  return asTokenCount(details?.cache_write_tokens);
+}
+
+/**
+ * Prompt-cache write count carried on a chat message, or `undefined` when the
+ * message does not report one. Checked in order:
+ *
+ * 1. `usage_metadata.input_token_details.cache_creation` — LangChain's
+ *    normalized field. Some chat models set it; ChatOpenRouter 0.4.x does not.
+ * 2. `response_metadata.usage.prompt_tokens_details.cache_write_tokens` — the
+ *    raw provider usage, where a model keeps it on the message.
+ *
+ * 0 is a real answer ("none written") and is returned as 0.
+ */
+export function readCacheWriteTokensFromMessage(
+  message: unknown,
+): number | undefined {
+  const m = message as
+    | {
+        usage_metadata?: {
+          input_token_details?: { cache_creation?: unknown };
+        };
+        response_metadata?: { usage?: unknown };
+      }
+    | undefined;
+  return (
+    asTokenCount(m?.usage_metadata?.input_token_details?.cache_creation) ??
+    rawCacheWrite(m?.response_metadata?.usage)
+  );
+}
+
+/**
+ * Prompt-cache write count from an `LLMResult`: the generation's message
+ * first (see `readCacheWriteTokensFromMessage`), then the raw usage on
+ * `llmOutput.tokenUsage`, which is where ChatOpenRouter keeps it.
+ */
+export function readCacheWriteTokens(output: LLMResult): number | undefined {
+  const gen = output?.generations?.[0]?.[0] as ChatGeneration | undefined;
+  const message = (gen as { message?: unknown } | undefined)?.message;
+  return (
+    readCacheWriteTokensFromMessage(message) ??
+    rawCacheWrite(
+      (output?.llmOutput as { tokenUsage?: unknown } | undefined)?.tokenUsage,
+    )
+  );
+}
+
 /**
  * Extract normalized token usage from a LangChain `LLMResult`. Mirrors the
  * middleware's read of an `AIMessage`, but works from the raw result so it
@@ -155,6 +218,9 @@ export function extractUsageFromLLMResult(
 ): UsageEnvelopeParams | null {
   const gen = output?.generations?.[0]?.[0] as ChatGeneration | undefined;
   const message = (gen as { message?: unknown } | undefined)?.message;
+  const cacheWriteTokens = readCacheWriteTokens(output);
+  const cacheWrite =
+    cacheWriteTokens !== undefined ? { cacheWriteTokens } : {};
 
   if (message && isAIMessage(message as never)) {
     const aiMessage = message as {
@@ -195,6 +261,7 @@ export function extractUsageFromLLMResult(
         inputTokens,
         outputTokens,
         cachedTokens,
+        ...cacheWrite,
         providerMetadata:
           Object.keys(providerMetadata).length > 0
             ? providerMetadata
@@ -222,7 +289,7 @@ export function extractUsageFromLLMResult(
         ? tokenUsage.completionTokens
         : 0;
     if (inputTokens === 0 && outputTokens === 0) return null;
-    return { model: "unknown", inputTokens, outputTokens };
+    return { model: "unknown", inputTokens, outputTokens, ...cacheWrite };
   }
 
   return null;

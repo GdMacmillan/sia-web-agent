@@ -20,6 +20,7 @@ import { createMiddleware, type AgentMiddleware } from "langchain";
 import { AIMessage, isAIMessage } from "@langchain/core/messages";
 import {
   emitUsageEnvelope,
+  readCacheWriteTokensFromMessage,
   type HttpPost,
   type UsageEnvelopeParams,
 } from "./usage-emit.js";
@@ -100,6 +101,7 @@ export function createUsageEventsMiddleware(
         inputTokens,
         outputTokens,
         cachedTokens,
+        cacheWriteTokens: readCacheWriteTokensFromMessage(aiMessage),
         threadId,
         providerMetadata:
           Object.keys(providerMetadata).length > 0

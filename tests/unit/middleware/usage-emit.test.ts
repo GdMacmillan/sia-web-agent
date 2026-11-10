@@ -13,6 +13,8 @@ import type { LLMResult } from "@langchain/core/outputs";
 import {
   emitUsageEnvelope,
   extractUsageFromLLMResult,
+  readCacheWriteTokens,
+  readCacheWriteTokensFromMessage,
   type UsageEnvelopeParams,
 } from "../../../src/middleware/usage-emit.js";
 
@@ -62,7 +64,25 @@ describe("emitUsageEnvelope", () => {
     // Omitted optionals stay absent.
     expect(body.threadId).toBeUndefined();
     expect(body.cachedTokens).toBeUndefined();
+    expect("cacheWriteTokens" in body).toBe(false);
     expect(body.providerMetadata).toBeUndefined();
+  });
+
+  it.each([
+    ["a positive count", 1200],
+    ["zero (reported, none written)", 0],
+  ])("forwards cacheWriteTokens for %s", async (_name, count) => {
+    const httpPost = jest.fn<any>().mockResolvedValue(undefined);
+    await emitUsageEnvelope(
+      { ...baseParams, cacheWriteTokens: count },
+      { ...baseOptions, httpPost },
+    );
+
+    const [, body] = httpPost.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(body.cacheWriteTokens).toBe(count);
   });
 
   it("forwards threadId, cachedTokens, and providerMetadata when present", async () => {
@@ -172,5 +192,129 @@ describe("extractUsageFromLLMResult", () => {
 
     const empty = { generations: [[{ text: "ok" } as any]] } as LLMResult;
     expect(extractUsageFromLLMResult(empty)).toBeNull();
+  });
+
+  it("carries cacheWriteTokens from the message's raw usage", () => {
+    const out = chatGenResult(
+      { input_tokens: 100, output_tokens: 5, total_tokens: 105 },
+      { usage: { prompt_tokens_details: { cache_write_tokens: 90 } } },
+    );
+    expect(extractUsageFromLLMResult(out)?.cacheWriteTokens).toBe(90);
+  });
+
+  it("carries cacheWriteTokens on the llmOutput fallback", () => {
+    const out = {
+      generations: [[{ text: "ok" } as any]],
+      llmOutput: {
+        tokenUsage: {
+          promptTokens: 7,
+          completionTokens: 3,
+          prompt_tokens_details: { cache_write_tokens: 4 },
+        },
+      },
+    } as LLMResult;
+    expect(extractUsageFromLLMResult(out)).toEqual({
+      model: "unknown",
+      inputTokens: 7,
+      outputTokens: 3,
+      cacheWriteTokens: 4,
+    });
+  });
+
+  it("leaves cacheWriteTokens out when nothing reports it", () => {
+    const out = chatGenResult({
+      input_tokens: 100,
+      output_tokens: 5,
+      total_tokens: 105,
+    });
+    const params = extractUsageFromLLMResult(out);
+    expect(params).not.toBeNull();
+    expect("cacheWriteTokens" in (params as object)).toBe(false);
+  });
+});
+
+describe("readCacheWriteTokens", () => {
+  function message(opts: {
+    cacheCreation?: unknown;
+    rawUsage?: unknown;
+  }): AIMessage {
+    return new AIMessage({
+      content: "ok",
+      usage_metadata: {
+        input_tokens: 100,
+        output_tokens: 5,
+        total_tokens: 105,
+        ...(opts.cacheCreation !== undefined
+          ? { input_token_details: { cache_creation: opts.cacheCreation } }
+          : {}),
+      } as AIMessage["usage_metadata"],
+      response_metadata:
+        opts.rawUsage !== undefined ? { usage: opts.rawUsage } : {},
+    });
+  }
+
+  function result(msg?: AIMessage, tokenUsage?: unknown): LLMResult {
+    return {
+      generations: [[{ text: "ok", ...(msg ? { message: msg } : {}) } as any]],
+      ...(tokenUsage !== undefined ? { llmOutput: { tokenUsage } } : {}),
+    } as LLMResult;
+  }
+
+  it("reads the normalized usage_metadata cache_creation", () => {
+    expect(readCacheWriteTokensFromMessage(message({ cacheCreation: 30 }))).toBe(
+      30,
+    );
+  });
+
+  it("reads response_metadata.usage.prompt_tokens_details.cache_write_tokens", () => {
+    const msg = message({
+      rawUsage: { prompt_tokens_details: { cache_write_tokens: 40 } },
+    });
+    expect(readCacheWriteTokensFromMessage(msg)).toBe(40);
+  });
+
+  it("reads llmOutput.tokenUsage.prompt_tokens_details.cache_write_tokens", () => {
+    const out = result(message({}), {
+      prompt_tokens_details: { cache_write_tokens: 50 },
+    });
+    expect(readCacheWriteTokens(out)).toBe(50);
+  });
+
+  it("prefers the normalized field over the raw usage", () => {
+    const msg = message({
+      cacheCreation: 30,
+      rawUsage: { prompt_tokens_details: { cache_write_tokens: 40 } },
+    });
+    expect(
+      readCacheWriteTokens(
+        result(msg, { prompt_tokens_details: { cache_write_tokens: 50 } }),
+      ),
+    ).toBe(30);
+  });
+
+  it("returns 0 when 0 is reported (distinct from not reported)", () => {
+    const msg = message({
+      rawUsage: { prompt_tokens_details: { cache_write_tokens: 0 } },
+    });
+    expect(readCacheWriteTokensFromMessage(msg)).toBe(0);
+  });
+
+  it("returns undefined when nothing reports it", () => {
+    expect(readCacheWriteTokensFromMessage(message({}))).toBeUndefined();
+    expect(readCacheWriteTokens(result())).toBeUndefined();
+    expect(readCacheWriteTokensFromMessage(undefined)).toBeUndefined();
+  });
+
+  it.each([
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["a string", "12"],
+    ["NaN", Number.NaN],
+    ["null", null],
+  ])("ignores a %s count", (_name, value) => {
+    const msg = message({
+      rawUsage: { prompt_tokens_details: { cache_write_tokens: value } },
+    });
+    expect(readCacheWriteTokensFromMessage(msg)).toBeUndefined();
   });
 });
