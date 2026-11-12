@@ -331,9 +331,30 @@ export interface SearchEntitiesInput {
   tags?: string[];
   priority?: Priority;
   status?: string;
+  context?: string;
   limit?: number;
   threshold?: number;
+  /**
+   * Ask the responder for more than `limit` hits so post-filters don't starve
+   * the result (default true). Latency-budgeted callers set false.
+   */
+  overfetch?: boolean;
 }
+
+/**
+ * Statuses default search hides: forgetting writes `forgotten`; `merged` is
+ * the legacy consolidation marker. `archived` is deliberately NOT here —
+ * consolidation also writes it on merged sources, but agents archive by hand
+ * too and component_version lineage that was wrongly archived (AGI-579 B2)
+ * must stay findable until it is restored. An explicit `status` filter
+ * bypasses the exclusion so a caller can still ask for them.
+ */
+const INACTIVE_STATUSES: ReadonlySet<string> = new Set(["forgotten", "merged"]);
+
+/** Over-fetch factor: filters run after the server's top-N cut. */
+const SEARCH_OVERFETCH = 4;
+const SEARCH_FETCH_MIN = 40;
+const SEARCH_FETCH_MAX = 200;
 
 export interface SearchEntitiesResult {
   query: string;
@@ -354,10 +375,20 @@ export async function searchEntities(
     throw new Error("query is required");
   }
 
+  const limit = input.limit ?? 10;
+  // The responder cuts to top-`limit` before our filters run, so ask for more
+  // and trim afterwards — otherwise inactive/non-matching hits eat the slots.
+  const fetchLimit =
+    input.overfetch === false
+      ? limit
+      : Math.min(
+          Math.max(limit * SEARCH_OVERFETCH, SEARCH_FETCH_MIN, limit),
+          Math.max(SEARCH_FETCH_MAX, limit),
+        );
   const wireResp = await adapter.searchEntities({
     query: input.query,
     threshold: input.threshold ?? 0.3,
-    limit: input.limit ?? 10,
+    limit: fetchLimit,
   });
 
   // An older responder answers a zero-hit search with `results: null`.
@@ -365,12 +396,16 @@ export async function searchEntities(
     .map((node) => decodeNode(node))
     .filter((e): e is StoredEntityShape => !!e);
 
-  const filtered = applyFilters(decoded, {
+  const live = input.status
+    ? decoded
+    : decoded.filter((e) => !INACTIVE_STATUSES.has(e.status));
+  const filtered = applyFilters(live, {
     entity_type: input.entity_type,
     tags: input.tags,
     priority: input.priority,
     status: input.status,
-  });
+    context: input.context,
+  }).slice(0, limit);
 
   return {
     query: input.query,
@@ -379,6 +414,7 @@ export async function searchEntities(
       tags: input.tags,
       priority: input.priority,
       status: input.status,
+      context: input.context,
       limit: input.limit,
     },
     level_used: wireResp.level_used,
@@ -408,15 +444,43 @@ export interface ListEntitiesResult {
   next_step: string;
 }
 
+/**
+ * Build the `MATCH CONVERSATIONS RECENT` query. The graph-memory server
+ * filters and pages over the whole workspace and reports the pre-paging match
+ * count as `metadata.total` (AGI-579). Values are double-quoted; a `"` cannot
+ * be escaped in the DSL so it is dropped from the value.
+ */
+function buildRecentQuery(
+  limit: number,
+  offset: number,
+  f: ListEntitiesFilters,
+): string {
+  const q = (v: string) => `"${v.replace(/"/g, "")}"`;
+  const parts = [`MATCH CONVERSATIONS RECENT LIMIT ${limit}`];
+  if (offset > 0) parts.push(`OFFSET ${offset}`);
+  if (f.status) parts.push(`STATUS ${q(f.status)}`);
+  if (f.entity_type) parts.push(`ENTITY_TYPE ${q(f.entity_type)}`);
+  if (f.priority) parts.push(`PRIORITY ${q(f.priority)}`);
+  if (f.context) parts.push(`CONTEXT ${q(f.context)}`);
+  if (f.tags && f.tags.length > 0) parts.push(`TAGS ${q(f.tags.join(","))}`);
+  return parts.join(" ");
+}
+
 export async function listEntities(
   adapter: IGraphMemoryAdapter,
   input: ListEntitiesInput,
 ): Promise<ListEntitiesResult> {
   const limit = input.limit ?? 100;
   const offset = input.offset && input.offset > 0 ? input.offset : 0;
-  const fetchLimit = limit + offset;
+  const filters: ListEntitiesFilters = {
+    entity_type: input.entity_type,
+    tags: input.tags,
+    priority: input.priority,
+    status: input.status,
+    context: input.context,
+  };
   const wireResp = await adapter.graphQuery({
-    query: `MATCH CONVERSATIONS RECENT LIMIT ${fetchLimit}`,
+    query: buildRecentQuery(limit, offset, filters),
   });
 
   const nodes = wireResp.nodes ?? [];
@@ -424,16 +488,16 @@ export async function listEntities(
     .map((node) => decodeNode(node))
     .filter((e): e is StoredEntityShape => !!e);
 
-  entities = applyFilters(entities, {
-    entity_type: input.entity_type,
-    tags: input.tags,
-    priority: input.priority,
-    status: input.status,
-    context: input.context,
-  });
-
-  if (offset > 0) entities = entities.slice(offset);
-  entities = entities.slice(0, limit);
+  // The server filters and pages and says so by returning `total`. Filtering
+  // again here is idempotent. A server that predates AGI-579 ignores the
+  // clauses and returns the newest `limit` nodes unfiltered, so there the
+  // client filters (best effort) and `total` is what it could see.
+  const serverTotal = (wireResp.metadata as Record<string, unknown> | undefined)
+    ?.total;
+  const serverPaged = typeof serverTotal === "number";
+  entities = applyFilters(entities, filters);
+  if (!serverPaged) entities = entities.slice(0, limit);
+  const total = serverPaged ? serverTotal : entities.length;
 
   const entityTypes = new Map<string, number>();
   for (const e of entities) {
@@ -442,10 +506,13 @@ export async function listEntities(
 
   return {
     filters_applied: input,
-    total_count: entities.length,
+    total_count: total,
     entity_types: Object.fromEntries(entityTypes),
     entities,
-    message: `Listed ${entities.length} entities`,
+    message:
+      total > entities.length
+        ? `Listed ${entities.length} of ${total} entities`
+        : `Listed ${entities.length} entities`,
     next_step: nextStepForList(entities.length),
   };
 }
@@ -869,7 +936,10 @@ function applyFilters(
     out = out.filter((e) => e.entity_type === filters.entity_type);
   if (filters.priority)
     out = out.filter((e) => e.priority === filters.priority);
-  if (filters.status) out = out.filter((e) => e.status === filters.status);
+  if (filters.status) {
+    const want = filters.status.toLowerCase();
+    out = out.filter((e) => e.status.toLowerCase() === want);
+  }
   if (filters.context) out = out.filter((e) => e.context === filters.context);
   if (filters.tags && filters.tags.length > 0) {
     const tags = filters.tags;

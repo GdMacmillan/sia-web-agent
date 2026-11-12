@@ -390,6 +390,8 @@ export async function augmentSearch(
     query,
     limit: options.limit ?? 5,
     threshold: options.threshold ?? 0.3,
+    // Budgeted (hard timeout): keep the wire payload tight.
+    overfetch: false,
   });
   // A late rejection after the timeout won fires as unhandled otherwise.
   lookup.catch(() => undefined);

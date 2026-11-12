@@ -131,7 +131,14 @@ export function decodeNode(
     typeof props.user_input === "string" ? props.user_input : undefined,
   );
 
-  const now = new Date().toISOString();
+  // Never "now": a node whose creation time we cannot establish must not
+  // look newly created (forgetting's recency score and 7-day grace read it).
+  const createdAt =
+    pickString(metadata.created_at) ??
+    pickString(props.created_at) ??
+    pickString(props.timestamp) ??
+    createdAtFromId(node.id) ??
+    "";
   return {
     id: node.id,
     entity_type:
@@ -152,9 +159,24 @@ export function decodeNode(
         ? (metadata.custom_metadata as Record<string, unknown>)
         : {}) ?? {},
     agent_id: pickString(props.agent_id),
-    created_at: pickString(metadata.created_at) ?? now,
-    updated_at: pickString(metadata.updated_at) ?? now,
+    created_at: createdAt,
+    updated_at: pickString(metadata.updated_at) ?? createdAt,
   };
+}
+
+/**
+ * Conversation ids are `conv_<unix-nanos>` (graph-memory `storeConversation`,
+ * promoter, merger), so the id carries the creation instant for nodes stored
+ * before `created_at` was stamped server-side. Returns undefined for any id
+ * that is not of that shape or is not a plausible instant.
+ */
+export function createdAtFromId(id: string): string | undefined {
+  const m = /^conv_(\d{15,19})$/.exec(id);
+  if (!m) return undefined;
+  const ms = Number(BigInt(m[1]) / 1_000_000n);
+  if (!Number.isFinite(ms)) return undefined;
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
 /**
