@@ -465,7 +465,8 @@ What the agent depends on from the host:
 - Optional identity (env): `SIA_WORKSPACE_ID`, `SIA_AGENT_ID`,
   `SIA_NODE_ID`.
 - Optional usage-event sink: `SIAD_EVENTS_URL` + `SIAD_LOCAL_TOKEN`.
-- Optional graph-memory backend: `GRAPH_MEMORY_HOST` / `_PORT` / `_API`.
+- Optional graph-memory backend: reached through the host process at
+  `SIA_DAEMON_URL`, authenticated with `SIA_DAEMON_TOKEN`.
 - Optional web search: `TAVILY_API_KEY`.
 
 When unset, the corresponding capability no-ops gracefully. The agent

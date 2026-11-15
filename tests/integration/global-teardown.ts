@@ -15,7 +15,12 @@ export default async function globalTeardown() {
   try {
     const response = await fetch(`${GRAPH_MEMORY_API}/admin/bulk-delete`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // Same workspace the integration tests write to.
+        "X-Workspace-Id":
+          process.env.TEST_WORKSPACE_ID ?? "ws_integration-test",
+      },
       body: JSON.stringify({ agent_id: "test-agent" }),
       signal: AbortSignal.timeout(10000),
     });
