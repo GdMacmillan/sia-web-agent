@@ -24,6 +24,8 @@ import type {
   EntitiesListResponse,
   EntitiesPromoteRequest,
   EntitiesPromoteResponse,
+  EntitiesFindSimilarRequest,
+  EntitiesFindSimilarResponse,
   EntitiesRetrieveRequest,
   EntitiesRetrieveResponse,
   EntitiesSearchRequest,
@@ -140,6 +142,15 @@ export class SiadGraphMemoryAdapter implements IGraphMemoryAdapter {
   searchEntities(req: EntitiesSearchRequest): Promise<EntitiesSearchResponse> {
     return this.call<EntitiesSearchRequest, EntitiesSearchResponse>(
       "entities.search",
+      req,
+    );
+  }
+
+  findSimilarEntities(
+    req: EntitiesFindSimilarRequest,
+  ): Promise<EntitiesFindSimilarResponse> {
+    return this.call<EntitiesFindSimilarRequest, EntitiesFindSimilarResponse>(
+      "entities.find_similar",
       req,
     );
   }

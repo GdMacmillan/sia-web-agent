@@ -124,9 +124,15 @@ Highest to lowest:
 | `KNOWLEDGE_FORMATION_SENSITIVITY`     | `balanced` | Preset: aggressive/balanced/conservative |
 | `KNOWLEDGE_FORMATION_MIN_CONFIDENCE`  | `0.7`      | Min confidence to store                  |
 | `KNOWLEDGE_FORMATION_MAX_LEARNINGS`   | `3`        | Max learnings per task                   |
-| `KNOWLEDGE_FORMATION_DEDUP_THRESHOLD` | `0.9`      | Deduplication similarity                 |
+| `KNOWLEDGE_FORMATION_DEDUP_THRESHOLD` | `0.9`      | Score that counts as a duplicate         |
 | `KNOWLEDGE_FORMATION_EXCLUDE_AGENTS`  | (empty)    | Comma-separated agent types              |
 | `KNOWLEDGE_FORMATION_DEBUG`           | `false`    | Debug logging                            |
+
+The dedup threshold is compared with the score memory gives a new learning
+against each stored entity; at or above it, the learning is skipped. It does
+not filter search results. An exact title match is a duplicate at any
+threshold. Each outcome is logged at `info`, so `KNOWLEDGE_FORMATION_DEBUG`
+is not needed to see what was stored or skipped.
 
 ### Outcome Tracking
 

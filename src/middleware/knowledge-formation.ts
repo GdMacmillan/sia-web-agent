@@ -1,8 +1,9 @@
 /**
  * Automated Knowledge Formation Middleware
  *
- * Extracts learnings from completed agent tasks and stores them in graph-memory.
- * Runs asynchronously after task completion to avoid blocking responses.
+ * After each run, extracts what that run is worth remembering and stores it
+ * in graph-memory unless it is already there. Runs asynchronously after the
+ * run completes to avoid blocking responses.
  */
 
 import { createMiddleware } from "langchain";
@@ -34,6 +35,7 @@ import {
 } from "../vendor/svc-rpc/graph-memory/tool-handlers.js";
 import { getMemoryAdapter } from "../tools/memory-adapter.js";
 import { getConfig } from "../config/index.js";
+import { HOST_CONTEXT_TAG } from "../utils/host-context.js";
 
 // Types
 interface ExtractedLearning {
@@ -69,63 +71,128 @@ export interface KnowledgeFormationMiddlewareOptions {
 }
 
 // Extraction Prompts
-const EXTRACTION_SYSTEM_PROMPT = `You are a knowledge extraction specialist. Analyze the conversation below and extract structured
-learnings that would be valuable for future reference.
+const EXTRACTION_SYSTEM_PROMPT = `You are a knowledge extraction specialist. You read one turn of an agent's work or conversation
+and record what would be worth knowing later, for this agent or for others who share its memory.
 
-IMPORTANT RULES: 1. Only extract genuinely useful learnings - not routine operations 2. Focus on:
-bug fixes, architectural discoveries, patterns, tradeoffs, edge cases, gotchas 3. Assign honest
-confidence scores based on how generalizable/reusable the learning is 4. If nothing valuable was
-learned, return an empty array
+Worth recording:
+- Technical knowledge: bug fixes, architectural discoveries, patterns, tradeoffs, edge cases, gotchas.
+- Facts shared in conversation that will still matter later: who or what something is, what was
+  decided and why, what a participant reported, a date, a preference, a commitment.
+
+Not worth recording: greetings and small talk, routine operations, things true only for this moment,
+and the agent's own guesses. What a participant said is recorded as what they said and who said it,
+not as a verified fact.
+
+RULES:
+1. Each learning must stand on its own. A reader who never saw this conversation should understand
+   it, so name the people, things and dates involved.
+2. Assign an honest confidence score: how sure you are that this is durable and worth recalling.
+3. If nothing was worth recording, return an empty array.
 
 Output JSON only, no markdown. Follow this exact schema: { "learnings": [ { "entity_type":
-"learning" | "pattern" | "decision" | "note", "title": "Concise 3-8 word summary", "content":
-"Detailed explanation with context, file paths, function names, and specifics", "context": "system
-area (e.g., graph-memory, agent-tools, middleware)", "tags": ["tag1", "tag2"], "priority": "low" |
-"medium" | "high", "confidence": 0.0-1.0 } ] }
+"learning" | "pattern" | "decision" | "note", "title": "Concise 3-8 word summary naming the subject",
+"content": "Detailed explanation with context and specifics (names, dates, file paths, function names)",
+"context": "subject area (e.g., graph-memory, middleware, team, product)", "tags": ["tag1", "tag2"],
+"priority": "low" | "medium" | "high", "confidence": 0.0-1.0 } ] }
 
-Entity type guidance: - "learning": New knowledge from debugging, discoveries, API behaviors -
-"pattern": Recurring approaches, conventions, anti-patterns - "decision": Explicit choices with
-rationale and tradeoffs - "note": General observations, quirks, workarounds`;
+Entity type guidance: - "learning": New knowledge from debugging, discoveries, API behaviors, or
+facts learned in conversation - "pattern": Recurring approaches, conventions, anti-patterns -
+"decision": Explicit choices with rationale and tradeoffs - "note": General observations, quirks,
+workarounds`;
 
-const EXTRACTION_USER_PROMPT = `## Task Context
+const EXTRACTION_USER_PROMPT = `## Turn Context
 Agent Type: {agent_type}
-Task Duration: {duration_ms}ms
+Turn Duration: {duration_ms}ms
 Tool Calls Made: {tool_count}
 
-## Conversation Summary
+## Said or asked this turn
 {conversation_summary}
 
-## Final Messages (last 5)
+## How the turn went (last messages)
 {final_messages}
 
 ---
 
-Extract valuable learnings from this task completion. Be selective - only extract genuinely reusable
-knowledge.`;
+Extract what is worth remembering from this turn. Be selective - only record knowledge someone
+would want to recall later.`;
 
-async function searchForDuplicates(
-  content: string,
+/** How many search hits the title comparison looks at. */
+const TITLE_MATCH_CANDIDATES = 10;
+
+/** Why a learning was judged to be stored already, or how far the check got. */
+type DuplicateVerdict =
+  | {
+      duplicate: true;
+      reason: "same-title" | "similar-content";
+      matchedId: string;
+      similarity?: number;
+    }
+  | { duplicate: false; check: "scored" | "title-only" };
+
+/**
+ * Reduce a title to the form two titles are compared in: lower case, with
+ * every run of punctuation or whitespace collapsed to one space.
+ */
+export function normalizeTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * Decide whether a learning is already in memory.
+ *
+ * A search hit alone is not evidence of that: search returns whatever shares
+ * a keyword with the query. Two things count. An entity with the same title
+ * is the same learning. Otherwise memory is asked to score the learning
+ * against what it holds, and only a score at or above `threshold` counts.
+ *
+ * Every failure resolves to "not a duplicate". Storing the same thing twice
+ * can be merged later; a learning that is dropped is gone.
+ */
+async function findDuplicate(
+  learning: ExtractedLearning,
   threshold: number,
-): Promise<{ isDuplicate: boolean; similarId?: string }> {
+): Promise<DuplicateVerdict> {
   try {
-    const result = await searchEntities(getMemoryAdapter(), {
-      query: content.substring(0, 500),
-      threshold,
-      limit: 1,
+    const wanted = normalizeTitle(learning.title);
+    const found = await searchEntities(getMemoryAdapter(), {
+      query: learning.title,
+      limit: TITLE_MATCH_CANDIDATES,
     });
+    const sameTitle = found.entities.find(
+      (entity) => normalizeTitle(entity.title) === wanted,
+    );
+    if (sameTitle) {
+      return { duplicate: true, reason: "same-title", matchedId: sameTitle.id };
+    }
+  } catch (_error) {
+    // The adapter also throws when no workspace is configured, so this
+    // covers the fail-fast: nothing is read without a workspace.
+  }
 
-    if (result.count > 0) {
+  try {
+    const scored = await getMemoryAdapter().findSimilarEntities({
+      title: learning.title,
+      content: learning.content,
+    });
+    const match = (scored.results ?? []).find(
+      (candidate) => candidate.similarity >= threshold,
+    );
+    if (match) {
       return {
-        isDuplicate: true,
-        similarId: result.entities[0]?.id,
+        duplicate: true,
+        reason: "similar-content",
+        matchedId: match.id,
+        similarity: match.similarity,
       };
     }
-    return { isDuplicate: false };
+    return { duplicate: false, check: "scored" };
   } catch (_error) {
-    // On error, assume not duplicate to avoid losing knowledge.
-    // The workspace-bound adapter throws when SIA_WORKSPACE_ID is
-    // unset, so this path also covers the fail-fast — no unscoped read.
-    return { isDuplicate: false };
+    // Memory could not score the learning (an older host, or an outage).
+    // The title comparison is then the whole check.
+    return { duplicate: false, check: "title-only" };
   }
 }
 
@@ -162,9 +229,110 @@ async function storeEntity(
   }
 }
 
+/** Longest slice of one message handed to the extractor. */
+const MESSAGE_CHARS = 600;
+/** Most messages of each kind handed to the extractor. */
+const REQUEST_MESSAGES = 10;
+const CLOSING_MESSAGES = 5;
+
+const ROOM_MESSAGE_PATTERN =
+  /^\s*<room-message\b([^>]*)>\n[^\n]*\n([\s\S]*?)\n<\/room-message>\s*$/;
+const HOST_CONTEXT_PATTERN = new RegExp(
+  `\\s*<${HOST_CONTEXT_TAG}\\b[^>]*>[\\s\\S]*?</${HOST_CONTEXT_TAG}>`,
+  "g",
+);
+
+/** The text of a message, whether its content is a string or content blocks. */
+function messageText(msg: BaseMessage): string {
+  const content: unknown = msg.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block: unknown) => {
+      if (typeof block === "string") {
+        return block;
+      }
+      const text = (block as { type?: string; text?: unknown })?.text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 /**
- * Summarize conversation for extraction context
- * Uses last N messages and counts tool calls
+ * Strip what the host wrapped around a message, keeping what was said.
+ *
+ * A message from another participant arrives in an envelope whose first line
+ * is a fixed trust statement; it becomes `sender (source): text`. Context the
+ * host attached (retrieved memory, for one) is removed outright, so entries
+ * that are already in memory are not extracted a second time.
+ */
+function plainText(msg: BaseMessage): string {
+  const text = messageText(msg).replace(HOST_CONTEXT_PATTERN, "");
+  const room = ROOM_MESSAGE_PATTERN.exec(text);
+  if (!room) {
+    return text.trim();
+  }
+  const attrs = room[1] ?? "";
+  const from = /\bfrom="([^"]*)"/.exec(attrs)?.[1] ?? "participant";
+  const source = /\bsource="([^"]*)"/.exec(attrs)?.[1];
+  return `${from}${source ? ` (${source})` : ""}: ${(room[2] ?? "").trim()}`;
+}
+
+function clip(text: string): string {
+  return text.length > MESSAGE_CHARS
+    ? `${text.substring(0, MESSAGE_CHARS)}…`
+    : text;
+}
+
+/** Where the current run's messages begin in the thread. */
+interface RunStart {
+  /** Id of the run's first message, when it has one. */
+  firstId?: string;
+  /** Its position when the run began. */
+  index: number;
+}
+
+/**
+ * Mark where a run begins: at the human messages that arrived with it, which
+ * sit at the end of the thread when the run starts.
+ */
+function markRunStart(messages: BaseMessage[]): RunStart {
+  let index = messages.length;
+  while (index > 0 && messages[index - 1]?.getType?.() === "human") {
+    index--;
+  }
+  return { firstId: messages[index]?.id, index };
+}
+
+/**
+ * The messages that belong to the current run. A thread can carry a long
+ * history from earlier runs; only this run is new. Without a usable mark the
+ * whole thread is returned.
+ */
+function messagesOfRun(
+  messages: BaseMessage[],
+  start: RunStart | undefined,
+): BaseMessage[] {
+  if (!start) {
+    return messages;
+  }
+  const index = start.firstId
+    ? messages.findIndex((m) => m.id === start.firstId)
+    : start.index;
+  if (index < 0 || index >= messages.length) {
+    return messages;
+  }
+  return messages.slice(index);
+}
+
+/**
+ * Summarize one run for extraction: what was said or asked, which tools ran,
+ * and how the run ended.
  */
 function summarizeConversation(messages: BaseMessage[]): {
   summary: string;
@@ -172,45 +340,42 @@ function summarizeConversation(messages: BaseMessage[]): {
   toolCount: number;
 } {
   let toolCount = 0;
-  const summaryParts: string[] = [];
+  const said: string[] = [];
+  const toolLines: string[] = [];
+  const replies: string[] = [];
 
-  // Count tool calls and build summary
   for (const msg of messages) {
-    const msgType = msg.getType?.() || "unknown";
-    if (msgType === "tool") {
+    const type = msg.getType?.() ?? "unknown";
+    if (type === "human") {
+      const text = plainText(msg);
+      if (text) {
+        said.push(`- ${clip(text)}`);
+      }
+      continue;
+    }
+    if (type === "system") {
+      continue;
+    }
+    if (type === "tool") {
       toolCount++;
     }
-    if (msgType === "ai" && msg instanceof AIMessage) {
-      if (msg.tool_calls?.length) {
-        toolCount += msg.tool_calls.length;
-        summaryParts.push(
-          `Called tools: ${msg.tool_calls.map((tc) => tc.name).join(", ")}`,
-        );
-      }
+    if (msg instanceof AIMessage && msg.tool_calls?.length) {
+      toolCount += msg.tool_calls.length;
+      toolLines.push(
+        `Called tools: ${msg.tool_calls.map((tc) => tc.name).join(", ")}`,
+      );
+    }
+    const text = plainText(msg);
+    if (text) {
+      replies.push(`[${type}]: ${clip(text)}`);
     }
   }
 
-  // Get last 5 messages for detailed context
-  const lastMessages = messages.slice(-5);
-  const finalMessages = lastMessages
-    .map((msg) => {
-      const content =
-        typeof msg.content === "string"
-          ? msg.content.substring(0, 500)
-          : JSON.stringify(msg.content).substring(0, 500);
-      const type = msg.getType?.() ?? "unknown";
-      return `[${type}]: ${content}`;
-    })
-    .join("\n\n");
-
-  // Build summary from first human message and key interactions
-  const firstHuman = messages.find((m) => {
-    const type = m.getType?.();
-    return type === "human";
-  });
-  const summary = firstHuman
-    ? `Task: ${String(firstHuman.content).substring(0, 300)}\n${summaryParts.slice(0, 10).join("\n")}`
-    : summaryParts.slice(0, 10).join("\n");
+  const summary = [
+    ...said.slice(-REQUEST_MESSAGES),
+    ...toolLines.slice(0, REQUEST_MESSAGES),
+  ].join("\n");
+  const finalMessages = replies.slice(-CLOSING_MESSAGES).join("\n\n");
 
   return { summary, finalMessages, toolCount };
 }
@@ -227,11 +392,13 @@ async function extractLearnings(
   const { summary, finalMessages, toolCount } = summarizeConversation(messages);
   const duration = Date.now() - startTime;
 
-  const prompt = EXTRACTION_USER_PROMPT.replace("{agent_type}", agentType)
-    .replace("{duration_ms}", String(duration))
-    .replace("{tool_count}", String(toolCount))
-    .replace("{conversation_summary}", summary)
-    .replace("{final_messages}", finalMessages);
+  // Function replacers: the inserted text is conversation content, and a
+  // string replacement would read `$&` and friends in it as patterns.
+  const prompt = EXTRACTION_USER_PROMPT.replace("{agent_type}", () => agentType)
+    .replace("{duration_ms}", () => String(duration))
+    .replace("{tool_count}", () => String(toolCount))
+    .replace("{conversation_summary}", () => summary)
+    .replace("{final_messages}", () => finalMessages);
 
   try {
     const response = await model.invoke([
@@ -380,43 +547,67 @@ async function processLearningsAsync(
     );
 
     if (!result.learnings || result.learnings.length === 0) {
-      if (config.debugLogging) {
-        logger.debug("[KnowledgeFormation] No learnings extracted");
-      }
+      logger.info(
+        { agentType, messages: messages.length },
+        "[KnowledgeFormation] No learnings extracted",
+      );
       return;
     }
 
     metrics.learningsExtracted += result.learnings.length;
 
-    // Filter by confidence and limit count
-    const qualifiedLearnings = result.learnings
-      .filter((l) => l.confidence >= config.minConfidence)
-      .slice(0, config.maxLearningsPerTask);
+    let accepted = 0;
+    for (const learning of result.learnings) {
+      const title = learning.title?.trim() ?? "";
 
-    metrics.lowConfidenceSkipped +=
-      result.learnings.length - qualifiedLearnings.length;
-
-    // Process each learning
-    for (const learning of qualifiedLearnings) {
-      // Skip learnings with empty title/content to prevent broken entities
-      if (!learning.title?.trim() || !learning.content?.trim()) {
+      // An empty title or body would make a broken entity.
+      if (!title || !learning.content?.trim()) {
         metrics.lowConfidenceSkipped++;
+        logger.info(
+          { title, reason: "empty" },
+          "[KnowledgeFormation] Skipped learning",
+        );
         continue;
       }
+      if (!(learning.confidence >= config.minConfidence)) {
+        metrics.lowConfidenceSkipped++;
+        logger.info(
+          {
+            title,
+            reason: "below-confidence",
+            confidence: learning.confidence,
+            minConfidence: config.minConfidence,
+          },
+          "[KnowledgeFormation] Skipped learning",
+        );
+        continue;
+      }
+      if (accepted >= config.maxLearningsPerTask) {
+        metrics.lowConfidenceSkipped++;
+        logger.info(
+          { title, reason: "over-limit", limit: config.maxLearningsPerTask },
+          "[KnowledgeFormation] Skipped learning",
+        );
+        continue;
+      }
+      accepted++;
 
-      // Check for duplicates
-      const { isDuplicate, similarId } = await searchForDuplicates(
-        `${learning.title} ${learning.content}`,
+      const verdict = await findDuplicate(
+        learning,
         config.deduplicationThreshold,
       );
 
-      if (isDuplicate) {
+      if (verdict.duplicate) {
         metrics.duplicatesSkipped++;
-        if (config.debugLogging) {
-          logger.debug(
-            `[KnowledgeFormation] Duplicate skipped: "${learning.title}" (similar to ${similarId})`,
-          );
-        }
+        logger.info(
+          {
+            title,
+            reason: verdict.reason,
+            matchedId: verdict.matchedId,
+            similarity: verdict.similarity,
+          },
+          "[KnowledgeFormation] Skipped learning",
+        );
         continue;
       }
 
@@ -424,11 +615,16 @@ async function processLearningsAsync(
       const storedId = await storeEntity(learning);
       if (storedId) {
         metrics.learningsStored++;
-        if (config.debugLogging) {
-          logger.debug(
-            `[KnowledgeFormation] Stored: "${learning.title}" (${storedId})`,
-          );
-        }
+        logger.info(
+          {
+            title,
+            entityId: storedId,
+            entityType: learning.entity_type,
+            confidence: learning.confidence,
+            duplicateCheck: verdict.check,
+          },
+          "[KnowledgeFormation] Stored learning",
+        );
       }
     }
   } catch (error) {
@@ -470,11 +666,18 @@ export function createKnowledgeFormationMiddleware(
   // Track task start time
   let taskStartTime = 0;
 
+  // Where each thread's current run began, set in beforeAgent and consumed
+  // in afterAgent.
+  const runStarts = new Map<string, RunStart>();
+  const threadKey = (runtime: any): string =>
+    String(runtime?.configurable?.thread_id ?? "");
+
   return createMiddleware({
     name: "knowledgeFormationMiddleware",
 
-    beforeAgent: async () => {
+    beforeAgent: async (state: any, runtime: any) => {
       taskStartTime = Date.now();
+      runStarts.set(threadKey(runtime), markRunStart(state?.messages ?? []));
       return; // No state modification
     },
 
@@ -489,11 +692,16 @@ export function createKnowledgeFormationMiddleware(
         return;
       }
 
+      const key = threadKey(runConfig);
+      const runStart = runStarts.get(key);
+      runStarts.delete(key);
+
       const messages = state.messages;
       if (!messages || messages.length < 3) {
         // Skip trivial conversations
         return;
       }
+      const runMessages = messagesOfRun(messages, runStart);
 
       // Get model from options
       const model = options.model;
@@ -508,7 +716,7 @@ export function createKnowledgeFormationMiddleware(
       setImmediate(() => {
         processLearningsAsync(
           model,
-          messages,
+          runMessages,
           config,
           agentType,
           taskStartTime,

@@ -91,6 +91,17 @@ describe("SiadGraphMemoryAdapter — wire envelope", () => {
     );
   });
 
+  it("sends the similarity check as its own verb with that verb's hash", async () => {
+    const { adapter, captured } = makeAdapter();
+    await adapter.findSimilarEntities({ title: "t", content: "c" });
+
+    expect(captured[0]!.body.verb).toBe("entities.find_similar");
+    expect(captured[0]!.body.verbHash).toBe(
+      GRAPH_MEMORY_VERB_SCHEMA_HASHES["entities.find_similar"],
+    );
+    expect(captured[0]!.body.verbHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("still sends the whole-service schemaHash alongside it", async () => {
     // Both scopes ride the envelope: the service-wide hash identifies
     // the IDL as a whole, the per-verb hash identifies just this verb.
