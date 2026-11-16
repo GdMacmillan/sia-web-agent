@@ -27,6 +27,10 @@ describeIntegration("Memory Abstraction Layers Integration", () => {
   const GRAPH_MEMORY_API =
     process.env.TEST_GRAPH_MEMORY_URL || "http://localhost:8080";
   const TEST_CONTEXT = "integration-test-abstraction";
+  // The graph-memory API scopes every request to a workspace and rejects one
+  // without the header.
+  const TEST_WORKSPACE_ID =
+    process.env.TEST_WORKSPACE_ID ?? "ws_integration-test";
 
   // Store created entity IDs for cleanup
   const createdEntityIds: string[] = [];
@@ -42,6 +46,7 @@ describeIntegration("Memory Abstraction Layers Integration", () => {
         method,
         url: `${GRAPH_MEMORY_API}${endpoint}`,
         data,
+        headers: { "X-Workspace-Id": TEST_WORKSPACE_ID },
         timeout: 10000,
       });
       return { success: true, data: response.data };
