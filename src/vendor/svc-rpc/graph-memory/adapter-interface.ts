@@ -9,6 +9,8 @@
 import type {
   AdminHttpRequest,
   AdminHttpResponse,
+  EntitiesFindSimilarRequest,
+  EntitiesFindSimilarResponse,
   EntitiesListRequest,
   EntitiesListResponse,
   EntitiesPromoteRequest,
@@ -54,6 +56,14 @@ export interface IGraphMemoryAdapter {
   ): Promise<EntitiesRetrieveResponse>;
   listEntities(req: EntitiesListRequest): Promise<EntitiesListResponse>;
   searchEntities(req: EntitiesSearchRequest): Promise<EntitiesSearchResponse>;
+  /**
+   * Score a candidate that is not stored yet against existing entities.
+   * The duplicate check to run before `storeEntity`: results carry a
+   * `similarity` per entity, which `searchEntities` does not.
+   */
+  findSimilarEntities(
+    req: EntitiesFindSimilarRequest,
+  ): Promise<EntitiesFindSimilarResponse>;
   updateEntityStatus(
     req: EntitiesUpdateStatusRequest,
   ): Promise<EntitiesUpdateStatusResponse>;

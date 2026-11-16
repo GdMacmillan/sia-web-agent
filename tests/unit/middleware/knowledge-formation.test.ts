@@ -51,6 +51,7 @@ function makeStubAdapter(
     retrieveEntity: noop,
     listEntities: noop,
     searchEntities: noop,
+    findSimilarEntities: noop,
     updateEntityStatus: noop,
     updateEntity: noop,
     promoteEntities: noop,
@@ -74,6 +75,70 @@ function emptySearchResponse() {
     total_results: 0,
     timestamp: "2026-01-01T00:00:00Z",
   };
+}
+
+/** One stored entity as it arrives in a search wire response. */
+function searchHit(id: string, title: string, content: string) {
+  return {
+    id,
+    type: "Conversation",
+    properties: {
+      user_input: `[learning] ${title}`,
+      agent_output: content,
+      metadata: { entity_type: "learning", title, status: "active" },
+    },
+  };
+}
+
+/** A model reply carrying one learning that clears the confidence bar. */
+function extractionResponse(learning: {
+  title: string;
+  content: string;
+  confidence?: number;
+}) {
+  return {
+    content: JSON.stringify({
+      learnings: [
+        {
+          entity_type: "learning",
+          tags: ["test"],
+          priority: "medium",
+          confidence: 0.9,
+          ...learning,
+        },
+      ],
+    }),
+  };
+}
+
+/** A store mock that answers with a well-formed stored entity. */
+function storedResponseMock(): jest.Mock {
+  return jest.fn(async () => ({
+    id: "conv_new",
+    agent_id: "memory_agent",
+    user_input: "[learning] stored",
+    agent_output: "stored",
+    timestamp: "2026-01-01T00:00:00Z",
+    metadata: {},
+  })) as unknown as jest.Mock;
+}
+
+const TASK_MESSAGES = [
+  new HumanMessage("How do I fix this bug?"),
+  new AIMessage("Update the config"),
+  new ToolMessage("Config updated", "tool_1"),
+  new AIMessage("Fixed"),
+];
+
+/** Run one agent turn through the middleware and flush its async work. */
+async function runOnce(
+  middleware: ReturnType<typeof createKnowledgeFormationMiddleware>,
+  messages: unknown[],
+  before: unknown[] = messages,
+): Promise<void> {
+  await middleware.beforeAgent?.({ messages: before } as any);
+  await middleware.afterAgent?.({ messages } as any);
+  await jest.runAllTimersAsync();
 }
 
 describe("Knowledge Formation Middleware", () => {
@@ -424,6 +489,392 @@ describe("Knowledge Formation Middleware", () => {
       expect(loggerError).toHaveBeenCalled();
 
       loggerError.mockRestore();
+    });
+  });
+
+  describe("duplicate check", () => {
+    it("stores a learning when search returns an unrelated entity", async () => {
+      // A search hit only says some entity shares a word with the query.
+      // It is not evidence that this learning is already stored.
+      mockModel.invoke.mockResolvedValue(
+        extractionResponse({
+          title: "Release train leaves on Thursdays",
+          content: "The team agreed in the room to ship every Thursday.",
+        }),
+      );
+      const storeMock = storedResponseMock();
+      _setMemoryAdapterForTests(
+        makeStubAdapter({
+          searchEntities: jest.fn(async () => ({
+            ...emptySearchResponse(),
+            results: [
+              searchHit("conv_other", "Thursday standup notes", "Standup."),
+            ],
+          })) as any,
+          storeEntity: storeMock as any,
+        }),
+      );
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        TASK_MESSAGES,
+      );
+
+      expect(storeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips a learning whose title is already stored, without scoring it", async () => {
+      mockModel.invoke.mockResolvedValue(
+        extractionResponse({
+          title: "Release train: leaves on Thursdays!",
+          content: "The team ships every Thursday.",
+        }),
+      );
+      const storeMock = storedResponseMock();
+      const similarMock = jest.fn(async () => ({ results: [] }));
+      const loggerInfo = jest.spyOn(logger, "info").mockImplementation();
+      _setMemoryAdapterForTests(
+        makeStubAdapter({
+          // Same title apart from case, punctuation and spacing.
+          searchEntities: jest.fn(async () => ({
+            ...emptySearchResponse(),
+            results: [
+              searchHit("conv_other", "Unrelated", "Other."),
+              searchHit(
+                "conv_same",
+                "release train  leaves on thursdays",
+                "Old.",
+              ),
+            ],
+          })) as any,
+          findSimilarEntities: similarMock as any,
+          storeEntity: storeMock as any,
+        }),
+      );
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        TASK_MESSAGES,
+      );
+
+      expect(storeMock).not.toHaveBeenCalled();
+      expect(similarMock).not.toHaveBeenCalled();
+      expect(loggerInfo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "same-title",
+          matchedId: "conv_same",
+        }),
+        "[KnowledgeFormation] Skipped learning",
+      );
+      loggerInfo.mockRestore();
+    });
+
+    it("skips a learning scored at or above the threshold", async () => {
+      mockModel.invoke.mockResolvedValue(
+        extractionResponse({ title: "A new title", content: "Same fact." }),
+      );
+      const storeMock = storedResponseMock();
+      const similarMock = jest.fn(async () => ({
+        results: [
+          {
+            id: "conv_close",
+            title: "Old title",
+            similarity: 0.9,
+            similarity_type: "embedding",
+            lexical_overlap: 0.6,
+          },
+        ],
+      }));
+      const loggerInfo = jest.spyOn(logger, "info").mockImplementation();
+      _setMemoryAdapterForTests(
+        makeStubAdapter({
+          searchEntities: jest.fn(async () => emptySearchResponse()) as any,
+          findSimilarEntities: similarMock as any,
+          storeEntity: storeMock as any,
+        }),
+      );
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({
+          model: mockModel as any,
+          config: { deduplicationThreshold: 0.9 },
+        }),
+        TASK_MESSAGES,
+      );
+
+      expect(similarMock).toHaveBeenCalledWith({
+        title: "A new title",
+        content: "Same fact.",
+      });
+      expect(storeMock).not.toHaveBeenCalled();
+      expect(loggerInfo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "similar-content",
+          matchedId: "conv_close",
+          similarity: 0.9,
+        }),
+        "[KnowledgeFormation] Skipped learning",
+      );
+      loggerInfo.mockRestore();
+    });
+
+    it("stores a learning scored below the threshold", async () => {
+      mockModel.invoke.mockResolvedValue(
+        extractionResponse({ title: "A new title", content: "A new fact." }),
+      );
+      const storeMock = storedResponseMock();
+      const loggerInfo = jest.spyOn(logger, "info").mockImplementation();
+      _setMemoryAdapterForTests(
+        makeStubAdapter({
+          searchEntities: jest.fn(async () => emptySearchResponse()) as any,
+          findSimilarEntities: jest.fn(async () => ({
+            results: [
+              {
+                id: "conv_far",
+                title: "Old title",
+                similarity: 0.89,
+                similarity_type: "embedding",
+                lexical_overlap: 0.2,
+              },
+            ],
+          })) as any,
+          storeEntity: storeMock as any,
+        }),
+      );
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({
+          model: mockModel as any,
+          config: { deduplicationThreshold: 0.9 },
+        }),
+        TASK_MESSAGES,
+      );
+
+      expect(storeMock).toHaveBeenCalledTimes(1);
+      expect(loggerInfo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "A new title",
+          entityId: "conv_new",
+          duplicateCheck: "scored",
+        }),
+        "[KnowledgeFormation] Stored learning",
+      );
+      loggerInfo.mockRestore();
+    });
+
+    it("stores a learning when memory cannot score it", async () => {
+      // An older host does not know the scoring call. The title
+      // comparison is then the whole check, and the learning is kept.
+      mockModel.invoke.mockResolvedValue(
+        extractionResponse({ title: "A new title", content: "A new fact." }),
+      );
+      const storeMock = storedResponseMock();
+      const loggerInfo = jest.spyOn(logger, "info").mockImplementation();
+      _setMemoryAdapterForTests(
+        makeStubAdapter({
+          searchEntities: jest.fn(async () => emptySearchResponse()) as any,
+          findSimilarEntities: jest.fn(async () => {
+            throw new Error("unknown verb");
+          }) as any,
+          storeEntity: storeMock as any,
+        }),
+      );
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        TASK_MESSAGES,
+      );
+
+      expect(storeMock).toHaveBeenCalledTimes(1);
+      expect(loggerInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ duplicateCheck: "title-only" }),
+        "[KnowledgeFormation] Stored learning",
+      );
+      loggerInfo.mockRestore();
+    });
+
+    it("stores a fact once when the same thread runs twice", async () => {
+      mockModel.invoke.mockResolvedValue(
+        extractionResponse({
+          title: "Release train leaves on Thursdays",
+          content: "The team ships every Thursday.",
+        }),
+      );
+      // A memory that holds what was stored into it.
+      const held: ReturnType<typeof searchHit>[] = [];
+      const storeMock = jest.fn(async () => {
+        held.push(
+          searchHit(
+            "conv_new",
+            "Release train leaves on Thursdays",
+            "The team ships every Thursday.",
+          ),
+        );
+        return { id: "conv_new", metadata: {} };
+      });
+      _setMemoryAdapterForTests(
+        makeStubAdapter({
+          searchEntities: jest.fn(async () => ({
+            ...emptySearchResponse(),
+            results: [...held],
+          })) as any,
+          findSimilarEntities: jest.fn(async () => ({ results: [] })) as any,
+          storeEntity: storeMock as any,
+        }),
+      );
+      const middleware = createKnowledgeFormationMiddleware({
+        model: mockModel as any,
+      });
+
+      await runOnce(middleware, TASK_MESSAGES);
+      await runOnce(middleware, [
+        ...TASK_MESSAGES,
+        new HumanMessage("And when do we ship?"),
+        new AIMessage("Thursdays."),
+      ]);
+
+      expect(mockModel.invoke).toHaveBeenCalledTimes(2);
+      expect(storeMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("outcome logging", () => {
+    it("logs at info when nothing was extracted", async () => {
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({ learnings: [] }),
+      });
+      const loggerInfo = jest.spyOn(logger, "info").mockImplementation();
+      _setMemoryAdapterForTests(makeStubAdapter());
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        TASK_MESSAGES,
+      );
+
+      expect(loggerInfo).toHaveBeenCalledWith(
+        expect.any(Object),
+        "[KnowledgeFormation] No learnings extracted",
+      );
+      loggerInfo.mockRestore();
+    });
+
+    it("logs at info when a learning is below the confidence bar", async () => {
+      mockModel.invoke.mockResolvedValue(
+        extractionResponse({
+          title: "A weak guess",
+          content: "Maybe.",
+          confidence: 0.2,
+        }),
+      );
+      const storeMock = storedResponseMock();
+      const loggerInfo = jest.spyOn(logger, "info").mockImplementation();
+      _setMemoryAdapterForTests(
+        makeStubAdapter({ storeEntity: storeMock as any }),
+      );
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        TASK_MESSAGES,
+      );
+
+      expect(storeMock).not.toHaveBeenCalled();
+      expect(loggerInfo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "A weak guess",
+          reason: "below-confidence",
+          confidence: 0.2,
+        }),
+        "[KnowledgeFormation] Skipped learning",
+      );
+      loggerInfo.mockRestore();
+    });
+  });
+
+  describe("extraction input", () => {
+    /** The user prompt handed to the extraction model. */
+    function extractionPrompt(): string {
+      const sent = mockModel.invoke.mock.calls[0]![0] as { content: string }[];
+      return sent[1]!.content;
+    }
+
+    it("covers the current run, not the start of a long thread", async () => {
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({ learnings: [] }),
+      });
+      _setMemoryAdapterForTests(makeStubAdapter());
+
+      const history = [
+        new HumanMessage({ content: "OLD TOPIC from last week", id: "h1" }),
+        new AIMessage({ content: "OLD REPLY", id: "a1" }),
+      ];
+      const arrived = new HumanMessage({
+        id: "h2",
+        content:
+          '<room-message from="dana" source="member" requested-by="member">\n' +
+          "A member of this room. Help them.\n" +
+          "The launch moved to March 3.\n" +
+          "</room-message>",
+      });
+      const reply = new AIMessage({
+        id: "a2",
+        content: [{ type: "text", text: "Noted, March 3." }],
+      });
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        [...history, arrived, reply],
+        [...history, arrived],
+      );
+
+      const prompt = extractionPrompt();
+      expect(prompt).toContain("dana (member): The launch moved to March 3.");
+      expect(prompt).toContain("[ai]: Noted, March 3.");
+      expect(prompt).not.toContain("OLD TOPIC");
+      expect(prompt).not.toContain("OLD REPLY");
+      // The envelope and its fixed first line are not conversation.
+      expect(prompt).not.toContain("room-message");
+      expect(prompt).not.toContain("A member of this room");
+    });
+
+    it("leaves out context the host attached to a tool result", async () => {
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({ learnings: [] }),
+      });
+      _setMemoryAdapterForTests(makeStubAdapter());
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        [
+          new HumanMessage("Find the retry setting"),
+          new AIMessage("Searching"),
+          new ToolMessage(
+            '2 matches\n\n<host-context source="memory" kind="memory">\n' +
+              "Retrieved from shared memory.\nAN OLD MEMORY ENTRY\n</host-context>",
+            "tool_1",
+          ),
+          new AIMessage("It is in config.ts"),
+        ],
+      );
+
+      const prompt = extractionPrompt();
+      expect(prompt).toContain("[tool]: 2 matches");
+      expect(prompt).not.toContain("AN OLD MEMORY ENTRY");
+    });
+
+    it("falls back to the whole thread when the run start is unknown", async () => {
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({ learnings: [] }),
+      });
+      _setMemoryAdapterForTests(makeStubAdapter());
+      const middleware = createKnowledgeFormationMiddleware({
+        model: mockModel as any,
+      });
+
+      // No beforeAgent call: nothing marked where the run began.
+      await middleware.afterAgent?.({ messages: TASK_MESSAGES } as any);
+      await jest.runAllTimersAsync();
+
+      expect(extractionPrompt()).toContain("How do I fix this bug?");
     });
   });
 

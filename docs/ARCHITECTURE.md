@@ -90,7 +90,7 @@ the source of truth; the order matters.
 | 11 | `anthropicPromptCachingMiddleware` | LangChain built-in. Prompt caching for a native `ChatAnthropic` model only; `unsupportedModelBehavior: "ignore"` skips every other model. First of the **tail** segment. |
 | 11a | `createHostContextMiddleware` | Request-only. Appends today's date (local time, recomputed per model call) as the last message, and re-sends any system-role message found inside the history as a tagged context message in the same position. Never writes state. See [System prompt stability](#system-prompt-stability). |
 | 11b | `createSystemPromptCacheMiddleware` | For an Anthropic model reached through an OpenAI-compatible gateway (`anthropic/` prefix or `claude` in the id), marks the system prompt's text block with `cache_control: { type: "ephemeral" }`. Every other model's request is unchanged. Innermost of every middleware that touches the system prompt. |
-| 12 | `createKnowledgeFormationMiddleware` | After a task completes, evaluates the outcome (via `outcome-critic.ts`) and stores learnings in graph memory. |
+| 12 | `createKnowledgeFormationMiddleware` | After a run completes, extracts what that run is worth remembering (technical learnings and durable facts from conversation) and stores each one in graph memory unless it is already there; also evaluates the outcome (via `outcome-critic.ts`). Fire-and-forget, never blocks the reply. See [Automatic learnings](GRAPH_MEMORY.md#automatic-learnings). |
 | 13 | `humanInTheLoopMiddleware` *(if `interruptOn` provided)* | LangChain built-in. Pauses for human approval on configured tools. |
 
 The stack is assembled with `mergeMiddlewareStack(core, custom, tail)`

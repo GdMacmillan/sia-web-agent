@@ -72,6 +72,24 @@ export interface EntitiesSearchResponse {
   timestamp: string;
 }
 
+export interface EntitiesFindSimilarRequest {
+  title: string;
+  content: string;
+  limit?: number;
+}
+/** One stored entity scored against the candidate. */
+export interface EntitiesFindSimilarMatch {
+  id: string;
+  title: string;
+  similarity: number;
+  /** "embedding" or "jaccard". */
+  similarity_type: string;
+  lexical_overlap: number;
+}
+export interface EntitiesFindSimilarResponse {
+  results: EntitiesFindSimilarMatch[];
+}
+
 export interface EntitiesUpdateStatusRequest {
   nodeId: string;
   status: string;

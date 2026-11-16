@@ -535,6 +535,35 @@ The agent uses memory throughout its lifecycle:
    automatically by `knowledge-formation.ts` middleware).
 4. **During evaluation** — update idea status based on results.
 
+### Automatic learnings
+
+After every run, `knowledge-formation.ts` asks a model what in that run is
+worth remembering and stores the answers as entities tagged `auto-extracted`.
+It is the normal way knowledge reaches memory, and it is how one agent comes
+to know what another was told.
+
+- **What it reads.** The current run only: the messages that arrived with
+  it, the tools it called and how it ended. A long-lived thread's older
+  history is not re-read. Envelopes and context the host added are stripped,
+  so retrieved memory is not stored a second time.
+- **What it keeps.** Technical knowledge, and facts shared in conversation
+  that will still matter later (who or what something is, a decision, a
+  date, something a participant reported). Small talk and routine operations
+  are left out. A learning below `KNOWLEDGE_FORMATION_MIN_CONFIDENCE` is
+  dropped.
+- **Duplicates.** A learning is skipped when an entity with the same title
+  exists (compared ignoring case, punctuation and spacing), or when memory
+  scores it at or above `KNOWLEDGE_FORMATION_DEDUP_THRESHOLD` against an
+  existing entity. A search hit alone never counts. If memory cannot score
+  the learning, the title comparison is the whole check and the learning is
+  stored: a duplicate can be merged later, a dropped learning cannot be
+  recovered.
+- **Logs.** Each outcome is one `info` line prefixed `[KnowledgeFormation]`:
+  `Stored learning` (with the entity id), `Skipped learning` (with a
+  `reason` of `same-title`, `similar-content`, `below-confidence`,
+  `over-limit` or `empty`, and the matched id for a duplicate), or
+  `No learnings extracted`.
+
 ## Troubleshooting
 
 ### "Failed to connect to graph-memory"

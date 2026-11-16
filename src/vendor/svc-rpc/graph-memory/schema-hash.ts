@@ -2,7 +2,7 @@
 // Source IDL: see import below.
 
 /** Deterministic SHA-256 of the canonical IDL projection for the graph-memory.v1 service. */
-export const GRAPH_MEMORY_SCHEMA_HASH = "6852ad08e5a73b77b8f507f7745ca565edbd9989e656e228cb888c6e31206960";
+export const GRAPH_MEMORY_SCHEMA_HASH = "ac3c750ae9314950529132b88ec3b6e6e8d344951c41edb827977158ab4e5b99";
 
 /**
  * Per-verb schema hashes for the graph-memory.v1 service.
@@ -14,6 +14,7 @@ export const GRAPH_MEMORY_SCHEMA_HASH = "6852ad08e5a73b77b8f507f7745ca565edbd998
  */
 export const GRAPH_MEMORY_VERB_SCHEMA_HASHES: Record<string, string> = {
   "admin.http": "86d83e91afd34d1aa8c558c614a2f421c25e509480daaa08901a6eb00aebca08",
+  "entities.find_similar": "85e5860d01acde181127ccb8177a454d580aa5b0252af7e8a26dc7b79543dc13",
   "entities.list": "6e2d2fd2f5037cea27f327717295ab1826be6a67c678a27e30f8ebd8e4d74f2a",
   "entities.promote": "bc3e423bc0d6151f37dc984fea021cb05aa9abbe7d5989f4c8b6f1a0a61eec82",
   "entities.retrieve": "d14878c805a17c040639505837b688dfdc80af8a1fc81766064fc1be6a4248d1",
