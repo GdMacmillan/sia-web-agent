@@ -39,6 +39,7 @@ import {
   performStringReplacement,
   truncateFileInfos,
   truncateGrepMatches,
+  NO_EXTGLOB,
 } from "./utils.js";
 import { toLf } from "../utils/eol.js";
 import { resolveRipgrep } from "../utils/fs-compat.js";
@@ -629,7 +630,7 @@ export class FilesystemBackend implements BackendProtocol {
         // Filter by glob if provided
         if (
           includeGlob &&
-          !micromatch.isMatch(path.basename(fp), includeGlob)
+          !micromatch.isMatch(path.basename(fp), includeGlob, NO_EXTGLOB)
         ) {
           continue;
         }
@@ -714,6 +715,8 @@ export class FilesystemBackend implements BackendProtocol {
         onlyFiles: true,
         dot: true,
         suppressErrors: true,
+        // Extglob syntax is matched literally; see NO_EXTGLOB.
+        extglob: false,
       });
 
       for (const matchedPath of matches) {

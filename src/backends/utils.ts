@@ -13,6 +13,17 @@ import type { FileData, FileInfo, GrepMatch } from "./protocol.js";
 import { isFileDataV1 } from "./protocol.js";
 import { detectEol, toLf, toEol } from "../utils/eol.js";
 
+/**
+ * Matching options that treat extglob syntax (`+(...)`, `*(...)`, `!(...)`,
+ * `?(...)`, `@(...)`) as literal text.
+ *
+ * Glob patterns given to the file tools come from the model. A repeated
+ * extglob can compile to a regular expression that backtracks exponentially
+ * against certain file names, and matching is synchronous, so one such pattern
+ * could stall the process. Wildcards, globstars and braces are unaffected.
+ */
+export const NO_EXTGLOB = { noextglob: true } as const;
+
 /** Max accepted length of a caller-supplied grep/search regex pattern. */
 const MAX_REGEX_PATTERN_LENGTH = 1000;
 
@@ -369,6 +380,7 @@ export function globSearchFiles(
       micromatch.isMatch(relative, effectivePattern, {
         dot: true,
         nobrace: false,
+        ...NO_EXTGLOB,
       })
     ) {
       matches.push([filePath, fileData.modified_at]);
@@ -459,7 +471,11 @@ export function grepSearchFiles(
   if (glob) {
     filtered = Object.fromEntries(
       Object.entries(filtered).filter(([fp]) =>
-        micromatch.isMatch(basename(fp), glob, { dot: true, nobrace: false }),
+        micromatch.isMatch(basename(fp), glob, {
+          dot: true,
+          nobrace: false,
+          ...NO_EXTGLOB,
+        }),
       ),
     );
   }
@@ -521,7 +537,11 @@ export function grepMatchesFromFiles(
   if (glob) {
     filtered = Object.fromEntries(
       Object.entries(filtered).filter(([fp]) =>
-        micromatch.isMatch(basename(fp), glob, { dot: true, nobrace: false }),
+        micromatch.isMatch(basename(fp), glob, {
+          dot: true,
+          nobrace: false,
+          ...NO_EXTGLOB,
+        }),
       ),
     );
   }
