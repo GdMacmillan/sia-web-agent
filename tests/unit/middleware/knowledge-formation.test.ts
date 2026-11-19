@@ -836,6 +836,38 @@ describe("Knowledge Formation Middleware", () => {
       expect(prompt).not.toContain("A member of this room");
     });
 
+    it("keeps an attached file's name and drops where it is stored", async () => {
+      mockModel.invoke.mockResolvedValue({
+        content: JSON.stringify({ learnings: [] }),
+      });
+      _setMemoryAdapterForTests(makeStubAdapter());
+
+      const arrived = new HumanMessage({
+        id: "h1",
+        content: [
+          { type: "text", text: "Summarise the Q3 numbers." },
+          {
+            type: "text",
+            text: '<attached-file name="Q3 &amp; Q4.csv" mime="text/csv" size="2048" path="/Users/dana/.host/inbox/9f.csv"/>',
+          },
+        ],
+      });
+      const working = new AIMessage({ id: "a1", content: "Reading the file." });
+      const reply = new AIMessage({ id: "a2", content: "Revenue rose 4%." });
+
+      await runOnce(
+        createKnowledgeFormationMiddleware({ model: mockModel as any }),
+        [arrived, working, reply],
+        [arrived],
+      );
+
+      const prompt = extractionPrompt();
+      expect(prompt).toContain("Summarise the Q3 numbers.");
+      expect(prompt).toContain("[attached file: Q3 & Q4.csv]");
+      expect(prompt).not.toContain("attached-file");
+      expect(prompt).not.toContain("/Users/dana");
+    });
+
     it("leaves out context the host attached to a tool result", async () => {
       mockModel.invoke.mockResolvedValue({
         content: JSON.stringify({ learnings: [] }),

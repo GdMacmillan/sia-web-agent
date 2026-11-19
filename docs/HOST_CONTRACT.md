@@ -58,6 +58,7 @@ about the model and the machine it runs on:
 | `SIA_SANDBOX_STATUS` | How strongly the host confines the agent process, in the host's own words (e.g. `enforced`, `partial`, `not_enforced`). Stated in the environment block; omitted when unset. | No |
 | `SIA_SANDBOX_MECHANISM` | What does the confining (e.g. `seatbelt`, `landlock+seccomp`). Stated alongside the status; omitted when unset. | No |
 | `SIA_AGENT_SOURCE_VERSION` | The version of this source tree the host staged and runs. Stated in the environment block; omitted when unset. Drift from it is reported per request (§3.5). | No |
+| `SIA_INBOX_DIR` | Absolute path of the directory where the host stores files a person attached to a message (§1.8). The file tools may read it in addition to the project root; stated in the environment block. Omitted when unset. | No |
 
 The model and machine facts are the host's to supply because the host
 chose them. The agent never fills them with a default: a model told the
@@ -150,6 +151,38 @@ process: the agent reads the run's stream to its end in the background,
 and a restart mid-run leaves the thread without a persisted result — which
 is why `prepare_component_version` and `create_component` record lineage in
 graph memory before anything is edited (`COMPONENTS.md` §6).
+
+### 1.8 Attached files (optional)
+
+A host that lets a person hand the agent a file does two things.
+
+1. It stores the file in one directory and names that directory in
+   `SIA_INBOX_DIR`. The agent's file tools may then read under it as well as
+   under the project root, and the environment block states it as
+   `Attached files (read-only): <dir>`. The agent treats the directory as
+   read-only; a host that confines the agent process should grant it read
+   access there and nothing more. The directory may be empty or absent at
+   startup.
+2. It adds one text content block per file to the person's message. The whole
+   block is a single self-closing tag:
+
+   ```
+   <attached-file name="report.csv" mime="text/csv" size="1234" path="/abs/inbox/3f9a.csv"/>
+   ```
+
+   `name` is the person's label for the file, `mime` its media type, `size`
+   its length in bytes and `path` the absolute path the agent reads it from.
+   Attribute values are XML-escaped (`&amp;`, `&lt;`, `&gt;`, `&quot;`).
+
+The model sees the tag as written. Where message text leaves the
+conversation — what the agent stores in memory — the tag is reduced to
+`[attached file: <name>]`, so a path on one machine is not recorded
+(`src/utils/attached-files.ts`). `attached-file` is a reserved tag: the agent
+escapes it inside any context it wraps (§ `src/utils/host-context.ts`), so
+retrieved text cannot pose as an attachment. A host that wraps other people's
+messages in its own envelope should escape it there too.
+
+With `SIA_INBOX_DIR` unset none of this applies, and the tag is ordinary text.
 
 ---
 

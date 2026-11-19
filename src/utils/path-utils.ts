@@ -399,6 +399,20 @@ export function allowPathRoot(dir: string): void {
   }
 }
 
+/**
+ * Allow `dir` under both of its spellings: as given and with symlinks
+ * resolved, since a tool may be handed either. A directory that does not
+ * exist yet is allowed as given.
+ */
+export function allowPathRootResolved(dir: string): void {
+  allowPathRoot(dir);
+  try {
+    allowPathRoot(fs.realpathSync(dir));
+  } catch (_error) {
+    // Nothing to resolve; the given spelling is all there is to allow.
+  }
+}
+
 /** Forget every extra root registered with {@link allowPathRoot}. Test hook. */
 export function clearAllowedPathRoots(): void {
   allowedPathRoots.clear();

@@ -331,4 +331,10 @@ export interface RuntimeConfig {
    * package.json; omitted when unset.
    */
   agentSourceVersion?: string;
+  /**
+   * Directory where the host places files a user attached to a message
+   * (`SIA_INBOX_DIR`). The file tools may read it in addition to the project
+   * root, and the environment block names it. Unset means no such directory.
+   */
+  inboxDir?: string;
 }

@@ -36,6 +36,7 @@ import {
 import { getMemoryAdapter } from "../tools/memory-adapter.js";
 import { getConfig } from "../config/index.js";
 import { HOST_CONTEXT_TAG } from "../utils/host-context.js";
+import { describeAttachedFiles } from "../utils/attached-files.js";
 
 // Types
 interface ExtractedLearning {
@@ -269,10 +270,13 @@ function messageText(msg: BaseMessage): string {
  * A message from another participant arrives in an envelope whose first line
  * is a fixed trust statement; it becomes `sender (source): text`. Context the
  * host attached (retrieved memory, for one) is removed outright, so entries
- * that are already in memory are not extracted a second time.
+ * that are already in memory are not extracted a second time. An attached
+ * file is reduced to its name: where it sits on this machine is not a learning.
  */
 function plainText(msg: BaseMessage): string {
-  const text = messageText(msg).replace(HOST_CONTEXT_PATTERN, "");
+  const text = describeAttachedFiles(
+    messageText(msg).replace(HOST_CONTEXT_PATTERN, ""),
+  );
   const room = ROOM_MESSAGE_PATTERN.exec(text);
   if (!room) {
     return text.trim();
@@ -741,9 +745,7 @@ export function createKnowledgeFormationMiddleware(
                   (m: BaseMessage) => m.getType?.() === "human",
                 );
                 const originalRequest = firstHumanMsg
-                  ? typeof firstHumanMsg.content === "string"
-                    ? firstHumanMsg.content
-                    : JSON.stringify(firstHumanMsg.content)
+                  ? describeAttachedFiles(messageText(firstHumanMsg))
                   : "Unknown task";
 
                 // Evaluate task outcome

@@ -64,6 +64,7 @@ defaults.
 | `SIA_SANDBOX_STATUS` | unset | How strongly the host confines the agent process (e.g. `enforced`, `partial`, `not_enforced`). Stated in the environment block; unset: omitted. |
 | `SIA_SANDBOX_MECHANISM` | unset | What does the confining (e.g. `seatbelt`, `landlock+seccomp`). Stated with the status; unset: omitted. |
 | `SIA_AGENT_SOURCE_VERSION` | unset | The version of this source tree the host staged. Stated in the environment block; unset: omitted. Drift from it is reported per request ([`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §3.5). |
+| `SIA_INBOX_DIR` | unset | Directory where the host stores files a person attached to a message. The file tools may read it besides the project root; stated in the environment block. Unset: no such directory ([`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §1.8). |
 
 All four are read once at startup and are part of the cached system prompt
 ([`HOST_CONTRACT.md`](./HOST_CONTRACT.md) §1.2).
