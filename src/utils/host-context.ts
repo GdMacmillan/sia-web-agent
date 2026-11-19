@@ -13,6 +13,8 @@
  * before the content rather than having to infer it.
  */
 
+import { ATTACHED_FILE_TAG } from "./attached-files.js";
+
 /**
  * Who supplied a piece of host context.
  *
@@ -43,11 +45,13 @@ export const HOST_CONTEXT_TAG = "host-context";
 /**
  * Tag names a body must never be able to open or close. `host-context` is
  * this wrapper; `room-message` is the envelope a host uses for messages from
- * other participants. Neither may be forged from inside another envelope.
+ * other participants; `attached-file` marks a file a person attached. None
+ * may be forged from inside another envelope.
  */
 export const RESERVED_CONTEXT_TAGS: readonly string[] = Object.freeze([
   HOST_CONTEXT_TAG,
   "room-message",
+  ATTACHED_FILE_TAG,
 ]);
 
 /** The trust statement that opens every envelope, one per source. */

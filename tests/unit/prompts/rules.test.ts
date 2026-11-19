@@ -27,6 +27,29 @@ beforeEach(() => {
   clearPromptCache();
 });
 
+describe("manager — files a person hands you", () => {
+  const rules = section(loadPromptFile("manager"), "Files a person hands you");
+
+  it("has the section", () => {
+    expect(rules.length).toBeGreaterThan(0);
+  });
+
+  it("says where an attached file is and to read it in place", () => {
+    expect(rules).toContain("<attached-file>");
+    expect(rules).toContain("`path`");
+    expect(rules).toMatch(/Read an attached file in place/);
+  });
+
+  it("keeps a person's files out of the source tree", () => {
+    expect(rules).toMatch(/MUST NOT copy a person's file into this source tree/);
+    expect(rules).toMatch(/MUST NOT ask them to put one there/);
+  });
+
+  it("asks for a re-attach when the file is gone", () => {
+    expect(rules).toMatch(/ask for it to be attached again/);
+  });
+});
+
 describe("manager — whose words these are", () => {
   const rules = section(loadPromptFile("manager"), "Whose words these are");
 

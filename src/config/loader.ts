@@ -365,6 +365,7 @@ function loadRuntimeConfig(): RuntimeConfig {
     sandboxStatus: env("SIA_SANDBOX_STATUS")?.trim() || undefined,
     sandboxMechanism: env("SIA_SANDBOX_MECHANISM")?.trim() || undefined,
     agentSourceVersion: env("SIA_AGENT_SOURCE_VERSION")?.trim() || undefined,
+    inboxDir: env("SIA_INBOX_DIR")?.trim() || undefined,
   };
 }
 

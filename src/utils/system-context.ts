@@ -46,6 +46,8 @@ export interface SystemContextOptions {
   sandboxMechanism?: string;
   /** Source version the host staged this process from. Omitted when absent. */
   agentSourceVersion?: string;
+  /** Directory holding files a user attached. Omitted when absent. */
+  inboxDir?: string;
 }
 
 /**
@@ -166,6 +168,9 @@ function hostEnvLines(options: SystemContextOptions): string[] {
   if (sourceVersion) {
     lines.push(`Agent source version: ${sourceVersion} (as staged by the host)`);
   }
+
+  const inboxDir = nonEmpty(options.inboxDir);
+  if (inboxDir) lines.push(`Attached files (read-only): ${inboxDir}`);
 
   const provider = nonEmpty(options.provider);
   if (provider) lines.push(`Model provider: ${provider}`);

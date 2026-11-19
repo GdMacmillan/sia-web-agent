@@ -3,11 +3,18 @@
  * with the same resolve-then-contain semantics as the project root.
  */
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   allowPathRoot,
+  allowPathRootResolved,
   clearAllowedPathRoots,
   getAllowedPathRoots,
   clearProjectRootCache,
@@ -79,5 +86,27 @@ describe("allowPathRoot", () => {
   it("ignores empty input", () => {
     allowPathRoot("");
     expect(getAllowedPathRoots()).toEqual([]);
+  });
+
+  it("allows a directory under both its given and its resolved spelling", () => {
+    const link = `${extra}-link`;
+    symlinkSync(extra, link, "dir");
+    try {
+      allowPathRootResolved(link);
+      expect(() =>
+        validatePathInProject(path.join(link, "report.csv")),
+      ).not.toThrow();
+      expect(() =>
+        validatePathInProject(path.join(realpathSync(extra), "report.csv")),
+      ).not.toThrow();
+    } finally {
+      unlinkSync(link);
+    }
+  });
+
+  it("allows a directory that does not exist yet as given", () => {
+    const missing = path.join(extra, "not-yet");
+    allowPathRootResolved(missing);
+    expect(getAllowedPathRoots()).toEqual([path.resolve(missing)]);
   });
 });

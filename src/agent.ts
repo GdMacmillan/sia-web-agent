@@ -60,6 +60,7 @@ import {
 import { readReplaces } from "./components/replaces-tag.js";
 import { COMPONENTS_MIDDLEWARE_NAME } from "./components/names.js";
 import { logger } from "./utils/logger.js";
+import { allowPathRootResolved } from "./utils/path-utils.js";
 import type { BackendProtocol } from "./backends/index.js";
 import { InteropZodObject } from "@langchain/core/utils/types";
 import { AnnotationRoot } from "@langchain/langgraph";
@@ -227,6 +228,7 @@ async function getBasePrompt(options: SystemContextOptions): Promise<string> {
     options.sandboxStatus ?? null,
     options.sandboxMechanism ?? null,
     options.agentSourceVersion ?? null,
+    options.inboxDir ?? null,
   ]);
   let prompt = basePromptCache.get(key);
   if (!prompt) {
@@ -295,6 +297,11 @@ export async function createDeepAgent<
   // tool visibility/descriptions, and middleware composition — orthogonal to
   // model selection. Empty profile (no match / "off") is a no-op.
   const runtimeConfig = getConfig();
+  // Files a person attached sit in a host-supplied directory outside the
+  // project root; let the file tools reach it. Unset is a no-op.
+  if (runtimeConfig.runtime.inboxDir) {
+    allowPathRootResolved(runtimeConfig.runtime.inboxDir);
+  }
   const orchestratorModel = resolveModelEndpoint(
     runtimeConfig.llm,
     "orchestrator",
@@ -324,6 +331,7 @@ export async function createDeepAgent<
     sandboxStatus: runtimeConfig.runtime.sandboxStatus,
     sandboxMechanism: runtimeConfig.runtime.sandboxMechanism,
     agentSourceVersion: runtimeConfig.runtime.agentSourceVersion,
+    inboxDir: runtimeConfig.runtime.inboxDir,
   });
   const promptConfig = normalizeSystemPrompt(systemPrompt);
   const baseSection =

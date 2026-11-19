@@ -646,23 +646,27 @@ describe("loadConfig", () => {
       process.env.SIA_SANDBOX_STATUS = "enforced";
       process.env.SIA_SANDBOX_MECHANISM = "seatbelt";
       process.env.SIA_AGENT_SOURCE_VERSION = "0.13.0";
+      process.env.SIA_INBOX_DIR = " /var/host/inbox ";
       try {
         const { runtime } = loadConfig();
         expect(runtime.nodeId).toBe("node-1");
         expect(runtime.sandboxStatus).toBe("enforced");
         expect(runtime.sandboxMechanism).toBe("seatbelt");
         expect(runtime.agentSourceVersion).toBe("0.13.0");
+        expect(runtime.inboxDir).toBe("/var/host/inbox");
       } finally {
         delete process.env.SIA_NODE_ID;
         delete process.env.SIA_SANDBOX_STATUS;
         delete process.env.SIA_SANDBOX_MECHANISM;
         delete process.env.SIA_AGENT_SOURCE_VERSION;
+        delete process.env.SIA_INBOX_DIR;
       }
     });
 
     it("leaves the host's account undefined when unset or blank", () => {
       process.env.OPENROUTER_API_KEY = "sk-key";
       process.env.SIA_NODE_ID = "  ";
+      process.env.SIA_INBOX_DIR = " ";
       delete process.env.SIA_SANDBOX_STATUS;
       try {
         const { runtime } = loadConfig();
@@ -670,8 +674,10 @@ describe("loadConfig", () => {
         expect(runtime.sandboxStatus).toBeUndefined();
         expect(runtime.sandboxMechanism).toBeUndefined();
         expect(runtime.agentSourceVersion).toBeUndefined();
+        expect(runtime.inboxDir).toBeUndefined();
       } finally {
         delete process.env.SIA_NODE_ID;
+        delete process.env.SIA_INBOX_DIR;
       }
     });
   });
