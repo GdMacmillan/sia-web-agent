@@ -13,6 +13,25 @@ describe("Bash Tool (one-shot execution)", () => {
     bashTool = createBashTool(projectRoot);
   });
 
+  describe("Description", () => {
+    it("names the working directory and a writable temp directory", () => {
+      const tool = createBashTool(projectRoot, "/var/host/tmp");
+      expect(tool.description).toContain(`Working directory: ${projectRoot}`);
+      expect(tool.description).toMatch(
+        /Temp directory \(writable[^)]*\): \/var\/host\/tmp$/,
+      );
+    });
+
+    it("falls back to the operating system's temp directory", () => {
+      expect(bashTool.description).toContain(`: ${os.tmpdir()}`);
+    });
+
+    it("steers toward absolute paths over changing directory", () => {
+      expect(bashTool.description).toMatch(/pass its absolute path/);
+      expect(bashTool.description).toMatch(/read-only directory/);
+    });
+  });
+
   describe("Basic Command Execution", () => {
     it("should execute a simple echo command", async () => {
       const result = await bashTool.func({ command: "echo 'Hello, World!'" });

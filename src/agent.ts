@@ -38,7 +38,9 @@ import {
   createCapExhaustionMiddleware,
   createHostContextMiddleware,
   createSituationContextMiddleware,
+  createFileViewMiddleware,
   createSystemPromptCacheMiddleware,
+  FILE_VIEW_MIDDLEWARE_NAME,
   HOST_CONTEXT_MIDDLEWARE_NAME,
   SITUATION_CONTEXT_MIDDLEWARE_NAME,
   SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,
@@ -154,6 +156,7 @@ export const KNOWN_MIDDLEWARE_NAMES: ReadonlySet<string> = new Set([
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  FILE_VIEW_MIDDLEWARE_NAME,
   SITUATION_CONTEXT_MIDDLEWARE_NAME,
   HOST_CONTEXT_MIDDLEWARE_NAME,
   SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,
@@ -229,6 +232,7 @@ async function getBasePrompt(options: SystemContextOptions): Promise<string> {
     options.sandboxMechanism ?? null,
     options.agentSourceVersion ?? null,
     options.inboxDir ?? null,
+    options.tempDir ?? null,
   ]);
   let prompt = basePromptCache.get(key);
   if (!prompt) {
@@ -259,6 +263,7 @@ function getSummarizationConfig() {
  * - Conversation summarization (summarizationMiddleware)
  * - Prompt caching (anthropicPromptCachingMiddleware, systemPromptCacheMiddleware)
  * - Per-request context messages: date, in-history context (hostContextMiddleware)
+ * - Images and scanned PDFs shown to the model for the turn that read them (fileViewMiddleware)
  * - Tool call patching (createPatchToolCallsMiddleware)
  * - Human-in-the-loop (humanInTheLoopMiddleware) - optional
  *
@@ -302,6 +307,9 @@ export async function createDeepAgent<
   if (runtimeConfig.runtime.inboxDir) {
     allowPathRootResolved(runtimeConfig.runtime.inboxDir);
   }
+  // Scratch files belong in the process's temp directory, which is also
+  // outside the project root; the file tools may read and write there.
+  allowPathRootResolved(runtimeConfig.runtime.tempDir);
   const orchestratorModel = resolveModelEndpoint(
     runtimeConfig.llm,
     "orchestrator",
@@ -332,6 +340,7 @@ export async function createDeepAgent<
     sandboxMechanism: runtimeConfig.runtime.sandboxMechanism,
     agentSourceVersion: runtimeConfig.runtime.agentSourceVersion,
     inboxDir: runtimeConfig.runtime.inboxDir,
+    tempDir: runtimeConfig.runtime.tempDir,
   });
   const promptConfig = normalizeSystemPrompt(systemPrompt);
   const baseSection =
@@ -528,6 +537,9 @@ export async function createDeepAgent<
     anthropicPromptCachingMiddleware({
       unsupportedModelBehavior: "ignore",
     }),
+    // Subagent middleware: show the model an image or scanned PDF that
+    // read_file named, on the outgoing request only.
+    createFileViewMiddleware({ backend: filesystemBackend }),
     // Subagent middleware: date and in-history context as messages, then the
     // system prompt cache breakpoint — innermost, after every middleware
     // that edits the system prompt.
@@ -547,11 +559,15 @@ export async function createDeepAgent<
   // in-history context as messages. Both sit after every middleware that
   // edits the system prompt; custom entries insert before the tail. The
   // situation middleware sits just outside it, so its message lands before
-  // the date. Main stack only: a sub-agent works on a narrower task.
+  // the date. Main stack only: a sub-agent works on a narrower task. The
+  // file view middleware sits outside both, so it sees the conversation
+  // before any context message is appended and can tell where the turn
+  // starts.
   const tailMiddleware: AgentMiddleware[] = [
     anthropicPromptCachingMiddleware({
       unsupportedModelBehavior: "ignore",
     }),
+    createFileViewMiddleware({ backend: filesystemBackend }),
     createSituationContextMiddleware(),
     createHostContextMiddleware(),
     createSystemPromptCacheMiddleware({ modelId: orchestratorModel }),

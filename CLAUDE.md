@@ -124,6 +124,9 @@ the orchestrator:
   allowlist (`read_file` always included). Backends implement protocol
   **v2** — every read-style method returns a structured `{ ..., error? }`
   Result (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#protocol-v2-structured-result-returns)).
+  `read_file` returns a PDF's text; an image or a scanned PDF is shown to
+  the model for that turn by `file-view.ts`, never stored in the
+  conversation (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#files-the-model-looks-at)).
 - **Search** (`custom-tools.ts`): `search` — ripgrep-based codebase
   search
 - **Bash** (`tools/bash-tool.ts`): `bash` — shell command execution

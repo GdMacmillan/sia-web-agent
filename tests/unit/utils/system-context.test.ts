@@ -80,11 +80,12 @@ describe("buildSystemContext", () => {
       sandboxMechanism: "landlock+seccomp",
       agentSourceVersion: "0.13.0",
       inboxDir: "/var/host/inbox",
+      tempDir: "/var/host/tmp",
       provider: "openrouter",
     });
 
     expect(context).toMatch(
-      /\nOS Version: .+\nNode: node-3f2c\nSandbox: partial \(landlock\+seccomp\)\nAgent source version: 0\.13\.0 \(as staged by the host\)\nAttached files \(read-only\): \/var\/host\/inbox\nModel provider: openrouter\n<\/env>$/,
+      /\nOS Version: .+\nNode: node-3f2c\nSandbox: partial \(landlock\+seccomp\)\nAgent source version: 0\.13\.0 \(as staged by the host\)\nAttached files \(read-only\): \/var\/host\/inbox\nTemp directory \(writable\): \/var\/host\/tmp\nModel provider: openrouter\n<\/env>$/,
     );
   });
 
@@ -100,6 +101,7 @@ describe("buildSystemContext", () => {
     expect(context).not.toContain("Node:");
     expect(context).not.toContain("Agent source version:");
     expect(context).not.toContain("Attached files");
+    expect(context).not.toContain("Temp directory");
     expect(context).not.toContain("Model provider:");
 
     const mechanismAlone = buildSystemContext({

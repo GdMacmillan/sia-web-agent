@@ -59,6 +59,7 @@ about the model and the machine it runs on:
 | `SIA_SANDBOX_MECHANISM` | What does the confining (e.g. `seatbelt`, `landlock+seccomp`). Stated alongside the status; omitted when unset. | No |
 | `SIA_AGENT_SOURCE_VERSION` | The version of this source tree the host staged and runs. Stated in the environment block; omitted when unset. Drift from it is reported per request (§3.5). | No |
 | `SIA_INBOX_DIR` | Absolute path of the directory where the host stores files a person attached to a message (§1.8). The file tools may read it in addition to the project root; stated in the environment block. Omitted when unset. | No |
+| `TMPDIR` (`TEMP` / `TMP` on Windows) | A writable directory for scratch files. The agent states it in the environment block and in its shell tool's description, and its file tools may read and write under it. A host that denies the process the system-wide temp directory must set this to one the process can write, or the agent has nowhere to put scratch files. Falls back to the operating system's default. | No |
 
 The model and machine facts are the host's to supply because the host
 chose them. The agent never fills them with a default: a model told the

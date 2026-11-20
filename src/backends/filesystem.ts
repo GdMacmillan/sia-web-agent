@@ -47,6 +47,12 @@ import { resolveRipgrep } from "../utils/fs-compat.js";
 const SUPPORTS_NOFOLLOW = fsSync.constants.O_NOFOLLOW !== undefined;
 
 /**
+ * Largest binary file `read` loads into memory. A larger one is reported by
+ * size and MIME type only.
+ */
+export const MAX_BINARY_READ_BYTES = 25 * 1024 * 1024;
+
+/**
  * Backend that reads and writes files directly from the filesystem.
  *
  * Files are accessed using their actual filesystem paths. Relative paths are
@@ -233,6 +239,11 @@ export class FilesystemBackend implements BackendProtocol {
         if (!stat.isFile()) {
           return { error: `File '${filePath}' not found` };
         }
+        // Decide on the size before reading: a caller that only wants to
+        // describe a large binary must not pay for loading it.
+        if (stat.size > MAX_BINARY_READ_BYTES) {
+          return { mimeType, size: stat.size };
+        }
         const flags = SUPPORTS_NOFOLLOW
           ? fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW
           : fsSync.constants.O_RDONLY;
@@ -242,6 +253,7 @@ export class FilesystemBackend implements BackendProtocol {
           return {
             content: new Uint8Array(buf),
             mimeType,
+            size: buf.byteLength,
           };
         } finally {
           await fd.close();

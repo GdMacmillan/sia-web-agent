@@ -116,10 +116,19 @@ export function isFileDataV1(data: FileData): data is FileDataV1 {
 export interface ReadResult {
   /** Error message on failure, undefined on success */
   error?: string;
-  /** File content: string for text, Uint8Array for binary. Undefined on failure. */
+  /**
+   * File content: string for text, Uint8Array for binary. Undefined on
+   * failure, and for a binary file too large to load (see `size`).
+   */
   content?: string | Uint8Array;
   /** MIME type of the file, when available */
   mimeType?: string;
+  /**
+   * Size on disk in bytes, reported for binary files. A binary file over the
+   * backend's load limit comes back with `size` and `mimeType` but no
+   * `content` and no `error`: it exists, it was just not read into memory.
+   */
+  size?: number;
 }
 
 /**
