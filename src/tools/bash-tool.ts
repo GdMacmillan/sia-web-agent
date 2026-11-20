@@ -4,7 +4,7 @@
  * Executes each command as a discrete child process via the platform shell.
  * There is no persistent session: state (working directory, environment
  * variables) does not carry between calls — compose with `cd x && …` when a
- * command needs a specific directory. This keeps the tool simple, robust, and
+ * command needs a project subdirectory. This keeps the tool simple, robust, and
  * cross-platform (the shell is resolved per platform), and makes a
  * missing/broken shell fail fast instead of hanging.
  *
@@ -18,6 +18,7 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { spawn, type ChildProcess } from "child_process";
+import { tmpdir } from "node:os";
 
 /** Default command timeout (2 minutes). */
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -199,9 +200,16 @@ function runCommand(
  * process from the project root.
  *
  * @param projectRoot The project root directory (working directory for commands)
+ * @param tempDir The writable directory for scratch files, named in the
+ *   description. A confined process may be denied the system-wide temp
+ *   directory, and an agent that never reads the environment block (a
+ *   sub-agent) learns the usable one here.
  * @returns Configured bash tool
  */
-export function createBashTool(projectRoot: string): DynamicStructuredTool & {
+export function createBashTool(
+  projectRoot: string,
+  tempDir: string = tmpdir(),
+): DynamicStructuredTool & {
   cleanup?: () => void;
 } {
   const tool = new DynamicStructuredTool({
@@ -210,9 +218,10 @@ export function createBashTool(projectRoot: string): DynamicStructuredTool & {
 
 Use it for builds and tests, git inspection (status, diff, log), package management, and other commands that need a shell. To read, edit, write or search files, prefer read_file, edit_file, write_file, grep and search.
 
-Each call runs in a fresh shell (cmd.exe on Windows, sh elsewhere): the working directory and exported variables do not persist, so prefix 'cd <dir> && ...' when a command needs one. Chain dependent commands with &&. Output over 30,000 characters is truncated.
+Each call runs in a fresh shell (cmd.exe on Windows, sh elsewhere): the working directory and exported variables do not persist, so prefix 'cd <dir> && ...' when a command needs a project subdirectory. For a file anywhere else, pass its absolute path and stay where you are: a shell can write temporary files where it runs (a heredoc may), which fails in a read-only directory. Chain dependent commands with &&. Output over 30,000 characters is truncated.
 
-Working directory: ${projectRoot}`,
+Working directory: ${projectRoot}
+Temp directory (writable; put scratch files here, not in /tmp): ${tempDir}`,
 
     schema: z.object({
       command: z.string().describe("The command to run"),

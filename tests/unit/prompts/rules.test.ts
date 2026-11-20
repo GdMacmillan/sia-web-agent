@@ -40,6 +40,11 @@ describe("manager — files a person hands you", () => {
     expect(rules).toMatch(/Read an attached file in place/);
   });
 
+  it("keeps commands out of the read-only directory and names the temp directory", () => {
+    expect(rules).toMatch(/from your own working directory/);
+    expect(rules).toMatch(/Scratch files belong in the temp directory/);
+  });
+
   it("keeps a person's files out of the source tree", () => {
     expect(rules).toMatch(/MUST NOT copy a person's file into this source tree/);
     expect(rules).toMatch(/MUST NOT ask them to put one there/);

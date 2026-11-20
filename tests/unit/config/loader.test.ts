@@ -11,6 +11,7 @@ import {
   resetConfig,
   resolveModelEndpoint,
 } from "../../../src/config/loader.js";
+import * as os from "node:os";
 import { AGENT_TIER_DEFAULTS } from "../../../src/config/schema.js";
 
 // Save original env and restore after each test
@@ -679,6 +680,11 @@ describe("loadConfig", () => {
         delete process.env.SIA_NODE_ID;
         delete process.env.SIA_INBOX_DIR;
       }
+    });
+
+    it("reports the temp directory the operating system gives this process", () => {
+      process.env.OPENROUTER_API_KEY = "sk-key";
+      expect(loadConfig().runtime.tempDir).toBe(os.tmpdir());
     });
   });
 });

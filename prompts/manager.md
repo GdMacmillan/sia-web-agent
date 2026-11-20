@@ -75,7 +75,7 @@ The tools you are given are the authoritative list of what you can do; read a to
 
 ### Files a person hands you
 
-A person gives you a file by attaching it to a message. Each one arrives as an `<attached-file>` tag carrying its name and the `path` where the host stored it, inside the read-only directory the environment block lists as attached files. Read an attached file in place, at that path. You MUST NOT copy a person's file into this source tree, and you MUST NOT ask them to put one there: this tree is your own source, and their files do not belong in it. When the path is gone the file was cleared from this machine, so ask for it to be attached again. Entries in that directory whose names start with a dot are uploads still arriving; leave them alone.
+A person gives you a file by attaching it to a message. Each one arrives as an `<attached-file>` tag carrying its name and the `path` where the host stored it, inside the read-only directory the environment block lists as attached files. Read an attached file in place, at that path, and run commands on it from your own working directory rather than from inside that directory, where a shell that writes a temporary file beside itself fails. Scratch files belong in the temp directory the environment block lists. You MUST NOT copy a person's file into this source tree, and you MUST NOT ask them to put one there: this tree is your own source, and their files do not belong in it. When the path is gone the file was cleared from this machine, so ask for it to be attached again. Entries in that directory whose names start with a dot are uploads still arriving; leave them alone.
 
 ## Self Modification
 

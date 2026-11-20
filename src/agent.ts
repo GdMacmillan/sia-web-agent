@@ -229,6 +229,7 @@ async function getBasePrompt(options: SystemContextOptions): Promise<string> {
     options.sandboxMechanism ?? null,
     options.agentSourceVersion ?? null,
     options.inboxDir ?? null,
+    options.tempDir ?? null,
   ]);
   let prompt = basePromptCache.get(key);
   if (!prompt) {
@@ -302,6 +303,9 @@ export async function createDeepAgent<
   if (runtimeConfig.runtime.inboxDir) {
     allowPathRootResolved(runtimeConfig.runtime.inboxDir);
   }
+  // Scratch files belong in the process's temp directory, which is also
+  // outside the project root; the file tools may read and write there.
+  allowPathRootResolved(runtimeConfig.runtime.tempDir);
   const orchestratorModel = resolveModelEndpoint(
     runtimeConfig.llm,
     "orchestrator",
@@ -332,6 +336,7 @@ export async function createDeepAgent<
     sandboxMechanism: runtimeConfig.runtime.sandboxMechanism,
     agentSourceVersion: runtimeConfig.runtime.agentSourceVersion,
     inboxDir: runtimeConfig.runtime.inboxDir,
+    tempDir: runtimeConfig.runtime.tempDir,
   });
   const promptConfig = normalizeSystemPrompt(systemPrompt);
   const baseSection =

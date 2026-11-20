@@ -337,4 +337,12 @@ export interface RuntimeConfig {
    * root, and the environment block names it. Unset means no such directory.
    */
   inboxDir?: string;
+  /**
+   * The directory for scratch files, as the operating system reports it for
+   * this process (`TMPDIR` on POSIX, `TEMP`/`TMP` on Windows). A confined
+   * process may not be able to write to the system-wide temp directory, so
+   * the environment block and the shell tool name this one, and the file
+   * tools may reach it in addition to the project root.
+   */
+  tempDir: string;
 }

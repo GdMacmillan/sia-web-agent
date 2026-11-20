@@ -48,6 +48,8 @@ export interface SystemContextOptions {
   agentSourceVersion?: string;
   /** Directory holding files a user attached. Omitted when absent. */
   inboxDir?: string;
+  /** Writable directory for scratch files. Omitted when absent. */
+  tempDir?: string;
 }
 
 /**
@@ -171,6 +173,9 @@ function hostEnvLines(options: SystemContextOptions): string[] {
 
   const inboxDir = nonEmpty(options.inboxDir);
   if (inboxDir) lines.push(`Attached files (read-only): ${inboxDir}`);
+
+  const tempDir = nonEmpty(options.tempDir);
+  if (tempDir) lines.push(`Temp directory (writable): ${tempDir}`);
 
   const provider = nonEmpty(options.provider);
   if (provider) lines.push(`Model provider: ${provider}`);
