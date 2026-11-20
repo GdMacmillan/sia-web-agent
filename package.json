@@ -39,7 +39,7 @@
     "@tavily/core": "0.7.14",
     "@vscode/ripgrep": "1.18.0",
     "acorn": "^8.19.0",
-    "axios": "1.20.0",
+    "axios": "1.21.0",
     "dedent": "^1.7.1",
     "dotenv": "18.0.9",
     "estree-walker": "^3.0.3",
