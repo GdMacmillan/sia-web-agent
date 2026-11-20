@@ -43,6 +43,7 @@ const MAIN_BASELINE = [
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  "fileViewMiddleware",
   "situationContextMiddleware",
   "hostContextMiddleware",
   "systemPromptCacheMiddleware",
@@ -62,6 +63,7 @@ const SUBAGENT_BASELINE = [
   "SummarizationMiddleware",
   "patchToolCallsMiddleware",
   "PromptCachingMiddleware",
+  "fileViewMiddleware",
   "hostContextMiddleware",
   "systemPromptCacheMiddleware",
 ];

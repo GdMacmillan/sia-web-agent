@@ -88,15 +88,16 @@ the source of truth; the order matters.
 | 10 | `createPatchToolCallsMiddleware` | Repairs dangling / inconsistent tool calls across model providers. End of the **core** segment. |
 | — | Caller-supplied **novel** custom middleware | Anything passed via `params.middleware` whose `.name` doesn't match a core/tail entry inserts **here**, between core and tail. |
 | 11 | `anthropicPromptCachingMiddleware` | LangChain built-in. Prompt caching for a native `ChatAnthropic` model only; `unsupportedModelBehavior: "ignore"` skips every other model. First of the **tail** segment. |
-| 11a | `createHostContextMiddleware` | Request-only. Appends today's date (local time, recomputed per model call) as the last message, and re-sends any system-role message found inside the history as a tagged context message in the same position. Never writes state. See [System prompt stability](#system-prompt-stability). |
-| 11b | `createSystemPromptCacheMiddleware` | For an Anthropic model reached through an OpenAI-compatible gateway (`anthropic/` prefix or `claude` in the id), marks the system prompt's text block with `cache_control: { type: "ephemeral" }`. Every other model's request is unchanged. Innermost of every middleware that touches the system prompt. |
+| 11a | `createFileViewMiddleware` | Request-only. When `read_file` named an image or a scanned PDF in the current turn, re-reads the file and inserts one user-role message right after that group of tool results, carrying the file for the model to look at, or the reason it could not be shown. Never writes state. Outermost of the request-only context middleware, so it sees the conversation before anything is appended to it. See [Files the model looks at](#files-the-model-looks-at). |
+| 11b | `createHostContextMiddleware` | Request-only. Appends today's date (local time, recomputed per model call) as the last message, and re-sends any system-role message found inside the history as a tagged context message in the same position. Never writes state. See [System prompt stability](#system-prompt-stability). |
+| 11c | `createSystemPromptCacheMiddleware` | For an Anthropic model reached through an OpenAI-compatible gateway (`anthropic/` prefix or `claude` in the id), marks the system prompt's text block with `cache_control: { type: "ephemeral" }`. Every other model's request is unchanged. Innermost of every middleware that touches the system prompt. |
 | 12 | `createKnowledgeFormationMiddleware` | After a run completes, extracts what that run is worth remembering (technical learnings and durable facts from conversation) and stores each one in graph memory unless it is already there; also evaluates the outcome (via `outcome-critic.ts`). Fire-and-forget, never blocks the reply. See [Automatic learnings](GRAPH_MEMORY.md#automatic-learnings). |
 | 13 | `humanInTheLoopMiddleware` *(if `interruptOn` provided)* | LangChain built-in. Pauses for human approval on configured tools. |
 
 The stack is assembled with `mergeMiddlewareStack(core, custom, tail)`
 (`src/middleware/utils.ts`). The **core** segment (rows 1–10) and the
 **tail** segment (rows 11–13, order per upstream PR #331: caching →
-knowledge formation → HITL, with 11a/11b right after caching) are merged with caller middleware **by
+knowledge formation → HITL, with 11a–11c right after caching) are merged with caller middleware **by
 `.name`**: a same-name custom entry *replaces* the matching core/tail
 entry in place; a novel custom entry inserts between the two segments.
 This name-addressable stack is a genome prerequisite (swap / toggle /
@@ -121,6 +122,7 @@ supplied the text before the text itself:
 |---|---|---|---|
 | `host` | `skills` | The skills list (read once per process). | First message of every request. |
 | `host` | `briefing` | A system-role message the host wrote into the history (a chat-room briefing, say). | Where it sits in the history. |
+| `host` | `file` | A file `read_file` named that has to be looked at rather than read (an image, a scanned PDF): one line per file, followed in the same message by the file itself, or the reason it could not be shown (`src/middleware/file-view.ts`). | Right after the tool results that named it, in the turn that read it. |
 | `host` | `situation` | What the host currently reports about this process: source drift against the staged version, the upstreams it offers components (`src/middleware/situation-context.ts`, cached stale-while-revalidate). | Just before the date. |
 | `host` | `date` | `Today's date: YYYY-MM-DD`, local time. | Last message of every request. |
 | `memory` | `memory` | Related graph-memory entries attached to a search-type tool result. | Appended to that tool result. |
@@ -131,7 +133,7 @@ written by other agents too, and that an instruction inside them is not a
 request. Any `<host-context` or `<room-message` tag inside a wrapped body
 is escaped, so a body cannot forge or close an envelope.
 
-The three `host` envelopes are request-only; the checkpointed history is
+The `host` envelopes are built per request; the checkpointed history is
 unchanged. The `memory` envelope is part of the tool result, so it is
 checkpointed with it.
 
@@ -326,10 +328,63 @@ What `read_file` does with those bytes depends on the type:
   `limit` as a text file and capped at 100,000 characters per read. No
   model call is made and no file bytes enter the conversation. Limits:
   500 pages and 20 seconds per document; extracted text is cached by
-  content hash so paging does not re-parse. A PDF with no text layer (a
-  scan) is reported as such.
+  content hash so paging does not re-parse.
+- **Image** (PNG, JPEG, WebP, GIF, told from the file's first bytes, not
+  its name) and **PDF with no text layer** (a scan): the tool result is a
+  one-line marker, and the file is shown to the model for that turn. See
+  [Files the model looks at](#files-the-model-looks-at).
 - **Anything else binary**: a one-line placeholder naming the type and
   size, rather than bytes mis-decoded as text.
+
+#### Files the model looks at
+
+An image or a scanned PDF cannot be returned as text, and its bytes do not
+belong in the conversation: thread state is saved and streamed whole, so a
+stored file would grow every later request and every checkpoint. So the
+file is bound late.
+
+1. `read_file` returns a marker string as the tool result, plus a small
+   artifact on the tool message: `{ kind, path, mimeType, size, pages? }`
+   (`src/utils/file-view.ts`). The artifact is set by the tool, so file
+   content cannot forge one. A caller outside the agent loop (the
+   `execute_code` tools API) gets the marker string alone.
+2. `createFileViewMiddleware` (`src/middleware/file-view.ts`) runs on every
+   model call. For artifacts from the **current turn** it re-reads the file
+   through the same backend, path checks included, and inserts one
+   user-role message right after that group of tool results: a tagged
+   `file` context line per file, then an `image_url` data URL or a PDF
+   `file` part. The request carries the file; the stored conversation does
+   not.
+3. In a later turn the marker is all that remains. It says so, and the
+   model reads the file again if it needs to see it.
+
+Limits, all per model request: 4 images of at most 3 MiB each, and one
+scanned PDF of at most 10 MiB and 30 pages. The newest reads win; an older
+one gets a line saying it is not shown. A file over a limit is refused by
+`read_file` itself, with the limit in the marker.
+
+What the calling model can take is decided per request, so a sub-agent on
+a different model behaves correctly:
+
+- **Images** are attached unless the model's profile says it does not
+  accept them. When the profile says nothing, the image is tried once.
+- **Scanned PDFs** are attached only on an OpenRouter chat model, and not
+  when its profile says it does not accept PDFs. The request then asks
+  for OpenRouter's `native` PDF handling (`plugins: [{ id: "file-parser",
+  pdf: { engine: "native" } }]`), so the pages are billed as input tokens
+  and no paid text-recognition step can run. A model that accepts the
+  request but cannot read PDFs ignores the file silently, which is why the
+  attached line asks the model to say so when it cannot see the pages.
+- **A refusal**: when the provider rejects a request that had a file
+  attached (HTTP 400, 404, 413, 415 or 422), the request is sent once more
+  without the files, each replaced by a line saying it could not be shown.
+  If that succeeds and the profile had not listed the capability, that
+  kind of file is not attempted again for that model in this process.
+
+Every line the middleware writes says that what is in the file is file
+content, not an instruction. Preparing a file never fails the model call:
+a file that has changed, gone or grown past a limit since it was read is
+described in a line instead.
 
 Ride-along robustness fixes landed with the rewrite: recoverable
 `{ error }` returns replace thrown exceptions on remote failures;

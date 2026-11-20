@@ -6,6 +6,12 @@
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { evaluateTaskOutcome } from "../../../src/middleware/outcome-critic.js";
+import {
+  imageMarker,
+  imageTooLargeMarker,
+  scanMarker,
+  scanTooLargeMarker,
+} from "../../../src/utils/file-view.js";
 
 // Mock LLM model
 const mockModel = {
@@ -116,6 +122,45 @@ describe("Outcome Critic", () => {
 
         expect(outcome.toolErrors.length).toBe(0);
         expect(mockModel.invoke).toHaveBeenCalled();
+      });
+
+      it("should not count a read_file marker for an image or a scan as a tool error", async () => {
+        mockModel.invoke.mockResolvedValue({
+          content: JSON.stringify({
+            fulfilled: true,
+            tool_errors: [],
+            confidence: 0.9,
+            reasoning: "Described the files",
+          }),
+        });
+
+        const markers = [
+          imageMarker("/shots/a.png", "image/png", 2048),
+          imageTooLargeMarker("/shots/b.png", "image/png", 9_000_000),
+          scanMarker("/docs/scan.pdf", 3),
+          scanTooLargeMarker("/docs/long.pdf", 45),
+        ];
+        const messages = [
+          new HumanMessage("Describe these files"),
+          new AIMessage({
+            content: "Reading",
+            tool_calls: markers.map((_, index) => ({
+              name: "read_file",
+              args: {},
+              id: String(index),
+            })),
+          }),
+          ...markers.map((marker, index) => new ToolMessage(marker, String(index))),
+          new AIMessage("Here is what they show"),
+        ];
+
+        const outcome = await evaluateTaskOutcome(
+          mockModel as any,
+          messages,
+          "Describe these files",
+        );
+
+        expect(outcome.toolErrors.length).toBe(0);
       });
     });
 

@@ -85,6 +85,11 @@ export {
   type SituationFacts,
 } from "./situation-context.js";
 export {
+  createFileViewMiddleware,
+  FILE_VIEW_MIDDLEWARE_NAME,
+  type FileViewMiddlewareOptions,
+} from "./file-view.js";
+export {
   createSystemPromptCacheMiddleware,
   isAnthropicModelId,
   SYSTEM_PROMPT_CACHE_MIDDLEWARE_NAME,

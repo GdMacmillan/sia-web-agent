@@ -24,6 +24,17 @@ import {
   pdfTextWindow,
 } from "../utils/pdf-text.js";
 import {
+  IMAGE_MAX_BYTES,
+  SCAN_MAX_BYTES,
+  SCAN_MAX_PAGES,
+  imageMarker,
+  imageTooLargeMarker,
+  scanMarker,
+  scanTooLargeMarker,
+  sniffImageType,
+  type FileViewArtifact,
+} from "../utils/file-view.js";
+import {
   sanitizeToolCallId,
   formatContentWithLineNumbers,
 } from "../backends/utils.js";
@@ -316,7 +327,7 @@ like src/file.ts. Which of reading, writing and editing you may do is decided by
 // Tool descriptions
 export const LS_TOOL_DESCRIPTION = "List files and directories in a directory";
 export const READ_FILE_TOOL_DESCRIPTION =
-  "Read the contents of a file. A PDF is returned as its text, page by page; page through a long one with offset and limit";
+  "Read the contents of a file. A PDF is returned as its text, page by page; page through a long one with offset and limit. An image (PNG, JPEG, WebP, GIF) or a scanned PDF is shown to you right after the result";
 export const WRITE_FILE_TOOL_DESCRIPTION =
   "Write content to a new file. Returns an error if the file already exists";
 export const EDIT_FILE_TOOL_DESCRIPTION =
@@ -389,41 +400,104 @@ function createLsTool(
 }
 
 /**
- * Render a PDF's text layer for `read_file`: extracted on this machine,
- * paged by line like any text file, each page under its own separator.
+ * What `read_file` produces: the text the model reads, and, for a file that
+ * has to be looked at instead, a small artifact naming it. The artifact is
+ * set here and nowhere else, so nothing inside a file can produce one.
  */
-async function readPdfText(
+interface ReadFileOutcome {
+  text: string;
+  artifact?: FileViewArtifact;
+}
+
+/**
+ * Render a PDF for `read_file`. Its text layer is extracted on this machine
+ * and paged by line like any text file, each page under its own separator.
+ * A PDF with no text layer is a scan: it is named in an artifact so its
+ * pages can be shown to the model instead.
+ */
+async function readPdf(
   filePath: string,
   bytes: Uint8Array,
   offset: number,
   limit: number,
-): Promise<string> {
+): Promise<ReadFileOutcome> {
   const result = await extractPdfText(bytes);
   if (!result.ok) {
-    return `Error: Cannot read '${filePath}': ${result.error}`;
+    return { text: `Error: Cannot read '${filePath}': ${result.error}` };
   }
   const { text } = result;
   if (isSparsePdfText(text)) {
-    return `[PDF '${filePath}': ${text.totalPages} page(s) with no text layer (scanned images) — there is no text to extract]`;
+    const pages = text.totalPages;
+    if (pages > SCAN_MAX_PAGES || bytes.byteLength > SCAN_MAX_BYTES) {
+      return { text: scanTooLargeMarker(filePath, pages) };
+    }
+    return {
+      text: scanMarker(filePath, pages),
+      artifact: {
+        kind: "pdf-scan",
+        path: filePath,
+        mimeType: "application/pdf",
+        size: bytes.byteLength,
+        pages,
+      },
+    };
   }
 
   const lines = pdfTextLines(text);
   if (offset >= lines.length) {
-    return `Error: Line offset ${offset} exceeds file length (${lines.length} lines)`;
+    return {
+      text: `Error: Line offset ${offset} exceeds file length (${lines.length} lines)`,
+    };
   }
   const window = pdfTextWindow(lines, offset, limit);
   const body = formatContentWithLineNumbers(window.lines, window.start + 1);
 
   if (window.end < window.total) {
-    return `${body}\n\n[PDF text, lines ${window.start + 1}-${window.end} of ${window.total}. Continue with offset=${window.end}.]`;
+    return {
+      text: `${body}\n\n[PDF text, lines ${window.start + 1}-${window.end} of ${window.total}. Continue with offset=${window.end}.]`,
+    };
   }
   if (text.partial === "page-limit") {
-    return `${body}\n\n[Only the first ${text.pages.length} of ${text.totalPages} pages were extracted.]`;
+    return {
+      text: `${body}\n\n[Only the first ${text.pages.length} of ${text.totalPages} pages were extracted.]`,
+    };
   }
   if (text.partial === "deadline") {
-    return `${body}\n\n[Extraction ran out of time after ${text.pages.length} of ${text.totalPages} pages.]`;
+    return {
+      text: `${body}\n\n[Extraction ran out of time after ${text.pages.length} of ${text.totalPages} pages.]`,
+    };
   }
-  return body;
+  return { text: body };
+}
+
+/**
+ * Render an image for `read_file`. The type comes from the bytes, not the
+ * file name. A viewable image within the size limit is named in an artifact
+ * so it can be shown to the model; anything else gets a placeholder.
+ */
+function readImage(
+  filePath: string,
+  bytes: Uint8Array,
+  namedType: string,
+): ReadFileOutcome {
+  const mimeType = sniffImageType(bytes);
+  if (!mimeType) {
+    return {
+      text: `[binary file '${filePath}': ${namedType}, ${bytes.byteLength} bytes — not shown as text]`,
+    };
+  }
+  if (bytes.byteLength > IMAGE_MAX_BYTES) {
+    return { text: imageTooLargeMarker(filePath, mimeType, bytes.byteLength) };
+  }
+  return {
+    text: imageMarker(filePath, mimeType, bytes.byteLength),
+    artifact: {
+      kind: "image",
+      path: filePath,
+      mimeType,
+      size: bytes.byteLength,
+    },
+  };
 }
 
 /**
@@ -437,46 +511,66 @@ function createReadFileTool(
   },
 ) {
   const { customDescription, permissions = [] } = options;
-  return tool(
-    async (input, config) => {
-      try {
-        const { file_path, offset = 0, limit = 2000 } = input;
-        // Deny before touching state/backend so a rejected path never reaches
-        // the filesystem (matches upstream ordering).
-        const permissionError = checkPermission(permissions, "read", file_path);
-        if (permissionError) {
-          return permissionError;
-        }
-        const stateAndStore = tryGetStateAndStore(config);
-        const resolvedBackend = getBackend(backend, stateAndStore);
-        const result = await resolvedBackend.read(file_path, offset, limit);
-        if (result.error) {
-          return `Error: ${result.error}`;
-        }
-        if (typeof result.content === "string") {
-          return result.content;
-        }
-        const mimeType = result.mimeType ?? "application/octet-stream";
-        if (result.content === undefined) {
-          // The backend declined to load it: report it, do not pretend to
-          // have read it.
-          return `[binary file '${file_path}': ${mimeType}, ${result.size ?? 0} bytes — too large to read]`;
-        }
-        if (mimeType === "application/pdf") {
-          return await readPdfText(file_path, result.content, offset, limit);
-        }
-        // Any other binary: a safe, informative note, so the model knows the
-        // file is binary rather than mis-reading bytes as text.
-        return `[binary file '${file_path}': ${mimeType}, ${result.content.byteLength} bytes — not shown as text]`;
-      } catch (error) {
-        // Return errors as messages so the agent can recover
-        const message = error instanceof Error ? error.message : String(error);
-        return `Error: ${message}`;
+
+  const readFile = async (
+    input: { file_path: string; offset?: number; limit?: number },
+    config: unknown,
+  ): Promise<ReadFileOutcome> => {
+    try {
+      const { file_path, offset = 0, limit = 2000 } = input;
+      // Deny before touching state/backend so a rejected path never reaches
+      // the filesystem (matches upstream ordering).
+      const permissionError = checkPermission(permissions, "read", file_path);
+      if (permissionError) {
+        return { text: permissionError };
       }
+      const stateAndStore = tryGetStateAndStore(config);
+      const resolvedBackend = getBackend(backend, stateAndStore);
+      const result = await resolvedBackend.read(file_path, offset, limit);
+      if (result.error) {
+        return { text: `Error: ${result.error}` };
+      }
+      if (typeof result.content === "string") {
+        return { text: result.content };
+      }
+      const mimeType = result.mimeType ?? "application/octet-stream";
+      if (result.content === undefined) {
+        // The backend declined to load it: report it, do not pretend to
+        // have read it.
+        return {
+          text: `[binary file '${file_path}': ${mimeType}, ${result.size ?? 0} bytes — too large to read]`,
+        };
+      }
+      if (mimeType === "application/pdf") {
+        return await readPdf(file_path, result.content, offset, limit);
+      }
+      if (mimeType.startsWith("image/")) {
+        return readImage(file_path, result.content, mimeType);
+      }
+      // Any other binary: a safe, informative note, so the model knows the
+      // file is binary rather than mis-reading bytes as text.
+      return {
+        text: `[binary file '${file_path}': ${mimeType}, ${result.content.byteLength} bytes — not shown as text]`,
+      };
+    } catch (error) {
+      // Return errors as messages so the agent can recover
+      const message = error instanceof Error ? error.message : String(error);
+      return { text: `Error: ${message}` };
+    }
+  };
+
+  return tool(
+    // The result is always text. A file that has to be looked at also
+    // carries an artifact, which stays on the tool message and never reaches
+    // a caller that invokes the tool directly: that caller gets the string.
+    async (input, config): Promise<[string, FileViewArtifact | undefined]> => {
+      const outcome = await readFile(input, config);
+      return [outcome.text, outcome.artifact];
     },
     {
       name: "read_file",
       description: customDescription || READ_FILE_TOOL_DESCRIPTION,
+      responseFormat: "content_and_artifact",
       schema: z.object({
         file_path: z.string().describe("Absolute path to the file to read"),
         offset: z

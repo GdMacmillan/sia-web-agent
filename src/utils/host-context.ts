@@ -36,8 +36,17 @@ export type HostContextSource = "host" | "memory";
  * - `situation`: what the host currently reports about the agent's own
  *   process (source drift, the upstreams it offers), refreshed in the
  *   background and appended to each request.
+ * - `file`: a file `read_file` named that has to be looked at rather than
+ *   read (an image, a scanned PDF), attached to the request after the tool
+ *   results that named it, or the reason it could not be.
  */
-export type HostContextKind = "skills" | "date" | "briefing" | "memory" | "situation";
+export type HostContextKind =
+  | "skills"
+  | "date"
+  | "briefing"
+  | "memory"
+  | "situation"
+  | "file";
 
 /** The tag that delimits host context. */
 export const HOST_CONTEXT_TAG = "host-context";
