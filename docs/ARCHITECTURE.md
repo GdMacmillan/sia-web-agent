@@ -303,7 +303,7 @@ returns a structured Result carrying either data or a recoverable
 | Method | Returns | Notes |
 |---|---|---|
 | `ls(path)` | `LsResult` `{ files? , error? }` | renamed from `lsInfo` |
-| `read(path, offset?, limit?)` | `ReadResult` `{ content?, mimeType?, error? }` | `content` is a `string` (text) or `Uint8Array` (binary) |
+| `read(path, offset?, limit?)` | `ReadResult` `{ content?, mimeType?, size?, error? }` | `content` is a `string` (text) or `Uint8Array` (binary); a binary file over 25 MiB comes back with `size` and no `content` |
 | `readRaw(path)` | `ReadRawResult` `{ data?, error? }` | |
 | `grep(pattern, path?, glob?)` | `GrepResult` `{ matches?, error? }` | renamed from `grepRaw` |
 | `glob(pattern, path?)` | `GlobResult` `{ files?, error? }` | renamed from `globInfo` |
@@ -315,8 +315,21 @@ is what state/store persist and the LangGraph state schema validates; v2
 (`content: string | Uint8Array` + `mimeType`) carries binary reads. The
 `FilesystemBackend.read` **multimodal path** returns raw bytes + MIME
 type for non-text files (see `getMimeType`/`isTextMimeType` in
-`backends/utils.ts`); the `read_file` tool surfaces binary safely rather
-than mis-decoding bytes as text.
+`backends/utils.ts`), with a size check before the file is opened: a
+binary over 25 MiB is reported by size and type and never loaded.
+
+What `read_file` does with those bytes depends on the type:
+
+- **PDF**: the text layer is extracted on this machine
+  (`src/utils/pdf-text.ts`, using `unpdf`) and returned as text, one
+  `--- page N of M ---` separator per page, paged with the same `offset` /
+  `limit` as a text file and capped at 100,000 characters per read. No
+  model call is made and no file bytes enter the conversation. Limits:
+  500 pages and 20 seconds per document; extracted text is cached by
+  content hash so paging does not re-parse. A PDF with no text layer (a
+  scan) is reported as such.
+- **Anything else binary**: a one-line placeholder naming the type and
+  size, rather than bytes mis-decoded as text.
 
 Ride-along robustness fixes landed with the rewrite: recoverable
 `{ error }` returns replace thrown exceptions on remote failures;

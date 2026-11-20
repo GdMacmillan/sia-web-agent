@@ -11,7 +11,10 @@ import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
-import { FilesystemBackend } from "../../../src/backends/filesystem.js";
+import {
+  FilesystemBackend,
+  MAX_BINARY_READ_BYTES,
+} from "../../../src/backends/filesystem.js";
 import { StateBackend } from "../../../src/backends/state.js";
 
 describe("BackendProtocol v2 result shapes (FilesystemBackend)", () => {
@@ -53,6 +56,20 @@ describe("BackendProtocol v2 result shapes (FilesystemBackend)", () => {
       expect(result.mimeType).toBe("image/png");
       expect(result.content).toBeInstanceOf(Uint8Array);
       expect((result.content as Uint8Array).byteLength).toBe(bytes.byteLength);
+      expect(result.size).toBe(bytes.byteLength);
+    });
+
+    it("reports a binary file over the load limit by size, without its bytes", async () => {
+      const file = path.join(testDir, "movie.mp4");
+      await fs.writeFile(file, "");
+      // Sparse: the size is what matters, not the content.
+      await fs.truncate(file, MAX_BINARY_READ_BYTES + 1);
+
+      const result = await backend.read("/movie.mp4");
+      expect(result.error).toBeUndefined();
+      expect(result.content).toBeUndefined();
+      expect(result.mimeType).toBe("video/mp4");
+      expect(result.size).toBe(MAX_BINARY_READ_BYTES + 1);
     });
   });
 

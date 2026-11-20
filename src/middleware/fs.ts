@@ -18,6 +18,12 @@ import type {
 } from "../backends/protocol.js";
 import { StateBackend } from "../backends/state.js";
 import {
+  extractPdfText,
+  isSparsePdfText,
+  pdfTextLines,
+  pdfTextWindow,
+} from "../utils/pdf-text.js";
+import {
   sanitizeToolCallId,
   formatContentWithLineNumbers,
 } from "../backends/utils.js";
@@ -309,7 +315,8 @@ like src/file.ts. Which of reading, writing and editing you may do is decided by
 
 // Tool descriptions
 export const LS_TOOL_DESCRIPTION = "List files and directories in a directory";
-export const READ_FILE_TOOL_DESCRIPTION = "Read the contents of a file";
+export const READ_FILE_TOOL_DESCRIPTION =
+  "Read the contents of a file. A PDF is returned as its text, page by page; page through a long one with offset and limit";
 export const WRITE_FILE_TOOL_DESCRIPTION =
   "Write content to a new file. Returns an error if the file already exists";
 export const EDIT_FILE_TOOL_DESCRIPTION =
@@ -382,6 +389,44 @@ function createLsTool(
 }
 
 /**
+ * Render a PDF's text layer for `read_file`: extracted on this machine,
+ * paged by line like any text file, each page under its own separator.
+ */
+async function readPdfText(
+  filePath: string,
+  bytes: Uint8Array,
+  offset: number,
+  limit: number,
+): Promise<string> {
+  const result = await extractPdfText(bytes);
+  if (!result.ok) {
+    return `Error: Cannot read '${filePath}': ${result.error}`;
+  }
+  const { text } = result;
+  if (isSparsePdfText(text)) {
+    return `[PDF '${filePath}': ${text.totalPages} page(s) with no text layer (scanned images) — there is no text to extract]`;
+  }
+
+  const lines = pdfTextLines(text);
+  if (offset >= lines.length) {
+    return `Error: Line offset ${offset} exceeds file length (${lines.length} lines)`;
+  }
+  const window = pdfTextWindow(lines, offset, limit);
+  const body = formatContentWithLineNumbers(window.lines, window.start + 1);
+
+  if (window.end < window.total) {
+    return `${body}\n\n[PDF text, lines ${window.start + 1}-${window.end} of ${window.total}. Continue with offset=${window.end}.]`;
+  }
+  if (text.partial === "page-limit") {
+    return `${body}\n\n[Only the first ${text.pages.length} of ${text.totalPages} pages were extracted.]`;
+  }
+  if (text.partial === "deadline") {
+    return `${body}\n\n[Extraction ran out of time after ${text.pages.length} of ${text.totalPages} pages.]`;
+  }
+  return body;
+}
+
+/**
  * Create read_file tool using backend.
  */
 function createReadFileTool(
@@ -411,12 +456,18 @@ function createReadFileTool(
         if (typeof result.content === "string") {
           return result.content;
         }
-        // Binary content (Uint8Array). Full multimodal block rendering would
-        // need provider-specific plumbing; surface a safe, informative note so
-        // the model knows the file is binary rather than mis-reading bytes as
-        // text.
-        const byteLength = result.content?.byteLength ?? 0;
-        return `[binary file '${file_path}': ${result.mimeType ?? "application/octet-stream"}, ${byteLength} bytes — not shown as text]`;
+        const mimeType = result.mimeType ?? "application/octet-stream";
+        if (result.content === undefined) {
+          // The backend declined to load it: report it, do not pretend to
+          // have read it.
+          return `[binary file '${file_path}': ${mimeType}, ${result.size ?? 0} bytes — too large to read]`;
+        }
+        if (mimeType === "application/pdf") {
+          return await readPdfText(file_path, result.content, offset, limit);
+        }
+        // Any other binary: a safe, informative note, so the model knows the
+        // file is binary rather than mis-reading bytes as text.
+        return `[binary file '${file_path}': ${mimeType}, ${result.content.byteLength} bytes — not shown as text]`;
       } catch (error) {
         // Return errors as messages so the agent can recover
         const message = error instanceof Error ? error.message : String(error);
