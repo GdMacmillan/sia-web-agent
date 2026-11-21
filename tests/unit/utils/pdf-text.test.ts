@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import {
   PDF_MAX_BYTES,
+  cleanPdfText,
   clearPdfTextCache,
   extractPdfText,
   isSparsePdfText,
@@ -222,5 +223,64 @@ describe("pdfTextWindow", () => {
     const window = pdfTextWindow(["x".repeat(50), "next"], 0, 10, 10);
     expect(window.lines).toEqual([`${"x".repeat(10)} [line clipped]`]);
     expect(window.end).toBe(1);
+  });
+});
+
+describe("cleanPdfText", () => {
+  const NUL = String.fromCharCode(0);
+
+  it("drops NUL and the other non-printing controls, keeping tab and line ends", () => {
+    expect(cleanPdfText(`a${NUL}b\u0001c\u001fd\u007fe`)).toBe("abcde");
+    expect(cleanPdfText("col\tcol\r\nnext\n")).toBe("col\tcol\r\nnext\n");
+  });
+
+  it("replaces a lone surrogate and keeps a well-formed pair", () => {
+    const high = String.fromCharCode(0xd83d);
+    const low = String.fromCharCode(0xde00);
+    expect(cleanPdfText(`x${high}y${low}z\u{1F600}`)).toBe(
+      "x\ufffdy\ufffdz\u{1F600}",
+    );
+  });
+
+  it("leaves ordinary text, accents and the typed text \\u0000 alone", () => {
+    const plain = "Quote — café, \\u0000 as written";
+    expect(cleanPdfText(plain)).toBe(plain);
+  });
+});
+
+describe("extractPdfText cleans what the parser returns", () => {
+  beforeEach(() => clearPdfTextCache());
+  afterEach(() => clearPdfTextCache());
+
+  it("returns pages with no NUL, and counts only what is left", async () => {
+    const NUL = String.fromCharCode(0);
+    const result = await extractPdfText(
+      fakePdf([`Total${NUL}${NUL} 42\nnext${NUL}line`]),
+      { loader: fakeLoader() },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.text.pages).toEqual(["Total 42\nnextline"]);
+    expect(result.text.textLength).toBe("Total42nextline".length);
+  });
+
+  it("replaces a lone surrogate the parser hands back", async () => {
+    const lone = String.fromCharCode(0xd835);
+    const loader = async () => ({
+      async getDocumentProxy() {
+        return {
+          numPages: 1,
+          async getPage() {
+            return {
+              async getTextContent() {
+                return { items: [{ str: `x${lone}y` }] };
+              },
+            };
+          },
+        };
+      },
+    });
+    const result = await extractPdfText(fakePdf(["unused"]), { loader });
+    expect(result.ok && result.text.pages).toEqual(["x\ufffdy"]);
   });
 });
