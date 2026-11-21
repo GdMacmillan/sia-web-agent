@@ -128,11 +128,30 @@ function within<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Characters a text layer can hold that are not text: the C0 controls other
+ * than tab, line feed and carriage return, and DEL. A glyph with no Unicode
+ * mapping often comes out as U+0000. They are dropped, so what the model reads
+ * is printable and can be stored anywhere it is copied to; some stores (a
+ * Postgres `jsonb` column, for one) reject U+0000 outright.
+ */
+// eslint-disable-next-line no-control-regex
+const NON_PRINTING = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+/** Half of a surrogate pair with no other half: not a character at all. */
+const LONE_SURROGATE =
+  /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/** `raw` with non-printing characters dropped and broken pairs replaced. */
+export function cleanPdfText(raw: string): string {
+  return raw.replace(NON_PRINTING, "").replace(LONE_SURROGATE, "\ufffd");
+}
+
 function pageText(items: PdfTextItem[]): string {
   let text = "";
   for (const item of items) {
     if (typeof item.str !== "string") continue;
-    text += item.hasEOL ? `${item.str}\n` : item.str;
+    const str = cleanPdfText(item.str);
+    text += item.hasEOL ? `${str}\n` : str;
   }
   return text;
 }
